@@ -1,0 +1,50 @@
+# ..pre-commit-config.yaml
+repos:
+  - repo: https://github.com/pycqa/autoflake
+    rev: v2.3.1
+    hooks:
+      - id: autoflake
+        args: [
+          --in-place,
+          --remove-all-unused-imports,
+          --remove-unused-variables,
+          --recursive
+        ]
+        exclude: '^(docs/|.*\.md$)'
+
+  - repo: https://github.com/pycqa/isort
+    rev: 6.0.1
+    hooks:
+      - id: isort
+        args: [
+          --profile,
+          black,
+          --atomic]
+        additional_dependencies: ["isort[pyproject]"]
+
+  - repo: https://github.com/psf/black
+    rev: 25.1.0
+    hooks:
+      - id: black
+        args: [
+          --line-length=120,
+          --target-version=py310,
+          --safe
+        ]
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.18.1
+    hooks:
+      - id: mypy
+        name: Type checking
+        entry: mypy
+        args: [
+          "--ignore-missing-imports",
+          "--explicit-package-bases",
+          "--show-error-codes",
+        ]
+        additional_dependencies: [
+          "types-requests"
+        ]
+        language: python
+        types: [ python ]

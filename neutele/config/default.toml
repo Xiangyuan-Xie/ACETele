@@ -1,0 +1,8 @@
+[basic]
+station_type = "flying_hand"
+
+[linker.single]
+port = "COM5"
+home_pose = []
+joint_ids = [1]
+joint_signs = [1]
