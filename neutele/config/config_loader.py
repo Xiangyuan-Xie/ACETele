@@ -14,5 +14,4 @@ class ConfigLoader:
             self.config = tomllib.load(f)
 
     def get_station_info(self) -> Tuple[str, str]:
-        print(self.config)
         return STATION_MAP[self.config["basic"]["station_type"]]

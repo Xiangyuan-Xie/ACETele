@@ -73,26 +73,38 @@ class FeeTechDriver:
 
         self._groupSyncReadHandler.clearParam()
 
-    def calibrate(self, ids: Sequence[int], home_poses: Sequence[int]):
+    def calibrate(self, ids: Sequence[int], home_poses: Sequence[int]) -> bool:
         assert len(ids) == len(home_poses), "ids and home_poses must have the same length."
         assert all(ft_id in self._ids for ft_id in ids), "some ids are not registered in FeeTechDriver."
+        self.close()
         for ft_id, pose in zip(ids, home_poses):
             comm_result, error = self._packetHandler.reOfsCal(ft_id, pose)
             if comm_result != COMM_SUCCESS:
                 logger.error(self._packetHandler.getTxRxResult(comm_result))
-                continue
+                return False
             if error != 0:
                 logger.error(self._packetHandler.getRxPacketError(error))
-                continue
+                return False
+        self.open()
+        time.sleep(0.5)
+        return True
 
     def get_pos_and_vel(self) -> Tuple[Dict[int, int], Dict[int, int]]:
-        with self._lock:
-            return self._position, self._velocity
+        while True:
+            with self._lock:
+                if self._position and self._velocity:
+                    return self._position, self._velocity
+            time.sleep(0.01)
 
     def get_frequency(self) -> float:
         if len(self._time_windows) == 0:
             return 0.0
         return 1.0 / np.mean(self._time_windows)
+
+    def open(self):
+        self._stop_flag.clear()
+        self._comm_thread = Thread(target=self._comm_worker, daemon=True)
+        self._comm_thread.start()
 
     def close(self):
         self._stop_flag.set()
@@ -100,7 +112,7 @@ class FeeTechDriver:
 
 
 if __name__ == "__main__":
-    driver = FeeTechDriver([1], "COM5")
+    driver = FeeTechDriver([0, 1, 2, 3], "COM5")
     while True:
         print(driver.get_pos_and_vel())
         # print(driver.get_frequency())

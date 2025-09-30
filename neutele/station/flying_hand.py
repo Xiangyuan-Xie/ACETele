@@ -12,3 +12,6 @@ class FlyingHandStation(BaseStation):
 
     def act(self) -> Sequence[float]:
         return self._equipments["feetech_arm"].act()
+
+    def calibrate(self) -> bool:
+        return self._equipments["feetech_arm"].calibrate()

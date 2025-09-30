@@ -14,6 +14,9 @@ class BaseStation(ABC):
     def act(self):
         pass
 
+    def calibrate(self):
+        pass
+
     def close(self):
         for equipment in self._equipments.values():
             equipment.close()

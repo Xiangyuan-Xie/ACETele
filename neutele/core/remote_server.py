@@ -1,9 +1,12 @@
 import importlib
-import time
 from typing import Optional, Sequence
 
+import msgpack_numpy as m
+import zerorpc
 from config.config_loader import ConfigLoader
 from station.base_station import BaseStation
+
+m.patch()
 
 
 class TeleCore:
@@ -18,8 +21,12 @@ class TeleCore:
         return self._station.act()
 
 
+def run_server(host: str = "0.0.0.0", port: int = 4242):
+    s = zerorpc.Server(TeleCore())
+    s.bind(f"tcp://{host}:{port}")
+    print(f"ZeroRPC server running on tcp://{host}:{port}")
+    s.run()
+
+
 if __name__ == "__main__":
-    tele_core = TeleCore()
-    while True:
-        print(tele_core.act())
-        time.sleep(0.05)
+    run_server()
