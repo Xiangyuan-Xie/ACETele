@@ -2,8 +2,10 @@ import importlib
 import time
 from typing import Optional, Sequence
 
-from config.config_loader import ConfigLoader
-from station.base_station import BaseStation
+import numpy as np
+
+from neutele.config.config_loader import ConfigLoader
+from neutele.station.base_station import BaseStation
 
 
 class TeleCore:
@@ -17,9 +19,6 @@ class TeleCore:
     def act(self) -> Sequence[float]:
         return self._station.act()
 
-    def calibrate(self) -> bool:
-        return self._station.calibrate()
-
     def close(self):
         self._station.close()
 
@@ -28,5 +27,5 @@ if __name__ == "__main__":
     tele_core = TeleCore()
     while True:
         # tele_core.act()
-        print(tele_core.act())
+        print(np.around(tele_core.act(), 4))
         time.sleep(0.05)

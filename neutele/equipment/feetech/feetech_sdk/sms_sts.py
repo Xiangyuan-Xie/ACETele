@@ -45,9 +45,9 @@ SMS_STS_GOAL_SPEED_H = 47
 SMS_STS_LOCK = 55
 
 # -------SRAM(只读)--------
-SMS_STS_PRESENT_POSITION_L = 56
+HLS_PRESENT_POSITION_L = 56
 SMS_STS_PRESENT_POSITION_H = 57
-SMS_STS_PRESENT_SPEED_L = 58
+HLS_PRESENT_SPEED_L = 58
 SMS_STS_PRESENT_SPEED_H = 59
 SMS_STS_PRESENT_LOAD_L = 60
 SMS_STS_PRESENT_LOAD_H = 61
@@ -77,15 +77,15 @@ class sms_sts(protocol_packet_handler):
         return self.writeTxRx(scs_id, SMS_STS_ACC, len(txpacket), txpacket)
 
     def ReadPos(self, scs_id):
-        scs_present_position, scs_comm_result, scs_error = self.read2ByteTxRx(scs_id, SMS_STS_PRESENT_POSITION_L)
+        scs_present_position, scs_comm_result, scs_error = self.read2ByteTxRx(scs_id, HLS_PRESENT_POSITION_L)
         return self.scs_tohost(scs_present_position, 15), scs_comm_result, scs_error
 
     def ReadSpeed(self, scs_id):
-        scs_present_speed, scs_comm_result, scs_error = self.read2ByteTxRx(scs_id, SMS_STS_PRESENT_SPEED_L)
+        scs_present_speed, scs_comm_result, scs_error = self.read2ByteTxRx(scs_id, HLS_PRESENT_SPEED_L)
         return self.scs_tohost(scs_present_speed, 15), scs_comm_result, scs_error
 
     def ReadPosSpeed(self, scs_id):
-        scs_present_position_speed, scs_comm_result, scs_error = self.read4ByteTxRx(scs_id, SMS_STS_PRESENT_POSITION_L)
+        scs_present_position_speed, scs_comm_result, scs_error = self.read4ByteTxRx(scs_id, HLS_PRESENT_POSITION_L)
         scs_present_position = self.scs_loword(scs_present_position_speed)
         scs_present_speed = self.scs_hiword(scs_present_position_speed)
         return (

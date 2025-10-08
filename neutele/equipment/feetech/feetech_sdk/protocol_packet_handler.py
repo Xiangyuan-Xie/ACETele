@@ -36,9 +36,16 @@ class protocol_packet_handler(object):
 
     def scs_tohost(self, a, b):
         if a & (1 << b):
-            return -(a & ~(1 << b))
+            val = -(a & ~(1 << b))
         else:
-            return a
+            val = a
+        if val & 0x8000:
+            val = 32768 - val
+        return val
+        # if a & (1 << b):
+        #     return -(a & ~(1 << b))
+        # else:
+        #     return a
 
     def scs_toscs(self, a, b):
         if a < 0:

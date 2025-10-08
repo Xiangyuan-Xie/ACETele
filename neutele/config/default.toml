@@ -4,5 +4,7 @@ station_type = "flying_hand"
 [linker.single]
 port = "COM5"
 joint_ids = [0, 1, 2, 3]
-joint_signs = [-1, 1, 1, -1]
+joint_signs = [-1, 1, 1, 1]
 home_poses = [0.0, 0.0, 1.5708, 0.0]
+dynamic_enable = true
+servo_types = ["HL3930", "HL3950", "HL3930", "HL3915"]

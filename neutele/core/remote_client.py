@@ -5,9 +5,15 @@ import zerorpc
 
 m.patch()
 
-tele_core = zerorpc.Client()
-tele_core.connect("tcp://127.0.0.1:4242")
 
-while True:
-    print(tele_core.act())
-    time.sleep(0.1)
+class TeleCore(zerorpc.Client):
+    def __init__(self, host: str = "127.0.0.1", port: int = 4242):
+        super().__init__(self)
+        self.connect(f"tcp://{host}:{port}")
+
+
+if __name__ == "__main__":
+    tele_core = TeleCore()
+    while True:
+        print(tele_core.act())
+        time.sleep(0.1)

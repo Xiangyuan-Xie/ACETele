@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Optional, Tuple, Union
 
 STATION_MAP = {
-    "flying_hand": ("station.flying_hand", "FlyingHandStation"),
+    "flying_hand": ("neutele.station.flying_hand.flying_hand", "FlyingHandStation"),
 }
 
 

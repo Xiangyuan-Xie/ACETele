@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+from threading import Condition, Event
 
 from .scservo_def import *
 
@@ -12,6 +13,10 @@ class GroupSyncWrite:
         self.is_param_changed = False
         self.param = []
         self.data_dict = {}
+
+        self.avail_flag = Event()
+        self.avail_flag.set()
+        self.avail_condition = Condition()
 
         self.clearParam()
 
@@ -62,6 +67,9 @@ class GroupSyncWrite:
 
     def clearParam(self):
         self.data_dict.clear()
+        self.avail_flag.set()
+        with self.avail_condition:
+            self.avail_condition.notify_all()
 
     def txPacket(self):
         if len(self.data_dict.keys()) == 0:

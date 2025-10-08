@@ -9,8 +9,5 @@ class BaseEquipment(ABC):
     def act(self):
         pass
 
-    def calibrate(self):
-        pass
-
     def close(self):
         pass
