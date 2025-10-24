@@ -7,6 +7,8 @@ import numpy as np
 from neutele.config.config_loader import ConfigLoader
 from neutele.station.base_station import BaseStation
 
+np.set_printoptions(suppress=True)
+
 
 class TeleCore:
     def __init__(self, config_path: Optional[str] = None):
@@ -21,6 +23,9 @@ class TeleCore:
 
     def close(self):
         self._station.close()
+
+    def apply_torque_feedback(self, external_torque: Sequence[float]):
+        self._station.apply_torque_feedback(external_torque)
 
 
 if __name__ == "__main__":

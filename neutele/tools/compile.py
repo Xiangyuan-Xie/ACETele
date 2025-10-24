@@ -108,7 +108,7 @@ def compile_urdf(urdf_path: str, xml_path: str):
 
 
 if __name__ == "__main__":
-    target_name = "flying_hand_leader"
-    urdf_path = os.path.expanduser(f"G://NEU_Tele/neutele/station/flying_hand/urdf/{target_name}.urdf")
-    xml_path = os.path.expanduser(f"G://NEU_Tele/neutele/station/flying_hand/urdf/{target_name}.xml")
+    target_name = "flying_hand_follower"
+    urdf_path = os.path.expanduser(f"G://NEU_Tele/neutele/station/flying_hand/urdf/follower/{target_name}.urdf")
+    xml_path = os.path.expanduser(f"G://NEU_Tele/neutele/station/flying_hand/urdf/follower/{target_name}.xml")
     compile_urdf(urdf_path, xml_path)

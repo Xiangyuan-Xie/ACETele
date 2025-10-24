@@ -1,6 +1,6 @@
 import os
 import time
-from threading import Event, Thread
+from threading import Event, Lock, Thread
 from typing import Any, Dict, Optional, Sequence, Tuple
 
 import numpy as np
@@ -35,8 +35,10 @@ class Linker(BaseEquipment):
                 [-1.0 / 0.0981 / KT_MAPPING[servo] * 1000.0 / 6.5 for servo in self._servo_types]
             )
 
+            self._external_torque = np.zeros_like(self._dof)
+
             urdf_model_path = os.path.abspath(
-                "G:\\NEU_Tele\\neutele\\station\\flying_hand\\urdf\\flying_hand_leader_tmp.urdf"
+                "G:\\NEU_Tele\\neutele\\station\\flying_hand\\urdf\\leader\\flying_hand_leader_tmp.urdf"
             )
             urdf_model_dir = os.path.dirname(urdf_model_path)
             self.pin_model, _, _ = pin.buildModelsFromUrdf(filename=urdf_model_path, package_dirs=urdf_model_dir)
@@ -53,6 +55,10 @@ class Linker(BaseEquipment):
             # self.stiction_comp_gain = 0.6
             self.stiction_comp_gain = np.array([1.0, 0.6, 1.0, 0.6, 0.6])
 
+            self.torque_feedback_scalar = 0.05
+            self.torque_feedback_damping = 0.0
+
+            self._lock = Lock()
             self._stop_flag = Event()
             self._control_thread = Thread(target=self._control_worker, daemon=True)
             self._control_thread.start()
@@ -81,6 +87,10 @@ class Linker(BaseEquipment):
         time.sleep(0.1)
         self._driver.close()
 
+    def apply_torque_feedback(self, external_torque: Sequence[float]):
+        with self._lock:
+            self._external_torque = external_torque
+
     def _control_worker(self):
         while not self._stop_flag.is_set():
             pos, vel = self.act()
@@ -90,7 +100,8 @@ class Linker(BaseEquipment):
             tau_n = self._null_space_regulation(pos, vel)  # 零空间投影
             tau_g = self._gravity_compensation(pos, vel)  # 重力补偿
             tau_ss = self._friction_compensation(tau_g, vel)  # 摩擦力补偿
-            torque_arm = tau_n + tau_g + tau_ss
+            tau_fb = self._torque_feedback(vel)
+            torque_arm = tau_n + tau_g + tau_ss + tau_fb
             self.set_torque(self._ids, torque_arm[:4])
 
             time.sleep(0.01)
@@ -118,6 +129,11 @@ class Linker(BaseEquipment):
                     tau_ss[i] -= self.stiction_comp_gain[i] * abs(tau_g[i])
                 self.stiction_dither_flag[i] = ~self.stiction_dither_flag[i]
         return tau_ss
+
+    def _torque_feedback(self, arm_joint_vel):
+        tau_fb = self.torque_feedback_scalar * self._external_torque
+        tau_fb -= self.torque_feedback_damping * arm_joint_vel
+        return tau_fb
 
 
 if __name__ == "__main__":

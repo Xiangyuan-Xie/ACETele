@@ -80,9 +80,9 @@ class FeeTechDriver:
             if not self._groupSyncReadHandler.addParam(ft_id):
                 logger.error(f"[ID:{ft_id}] groupSyncRead addparam failed")
 
-        comm_result = self._groupSyncReadHandler.txRxPacket()
-        if comm_result != COMM_SUCCESS:
-            logger.error(self._packetHandler.getTxRxResult(comm_result))
+        self._groupSyncReadHandler.txRxPacket()
+        # if comm_result != COMM_SUCCESS:
+        #     logger.error(self._packetHandler.getTxRxResult(comm_result))
 
         for ft_id in self._ids:
             data_result, error = self._groupSyncReadHandler.isAvailable(ft_id, HLS_PRESENT_POSITION_L, 4)

@@ -15,3 +15,6 @@ class FlyingHandStation(BaseStation):
     def act(self) -> Sequence[float]:
         pos, _ = self._equipments["feetech_arm"].act()
         return pos
+
+    def apply_torque_feedback(self, external_torque: Sequence[float]):
+        self._equipments["feetech_arm"].apply_torque_feedback(external_torque)
