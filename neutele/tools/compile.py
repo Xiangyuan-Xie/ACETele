@@ -16,11 +16,15 @@ XML_INSERT_WORLD = """
 
 XML_INSERT_AFTER_WORLD = """
     <actuator>
-      <motor name="motor1" joint="joint_1" gear="1"/>
-      <motor name="motor2" joint="joint_2" gear="1"/>
-      <motor name="motor3" joint="joint_3" gear="1"/>
-      <motor name="motor4" joint="joint_4" gear="1"/>
-      <motor name="motor5" joint="joint_5" gear="1"/>
+      <velocity name="rotor1" joint="rotor_joint_1" gear="1" />
+      <velocity name="rotor2" joint="rotor_joint_2" gear="1" />
+      <velocity name="rotor3" joint="rotor_joint_3" gear="1" />
+      <velocity name="rotor4" joint="rotor_joint_4" gear="1" />
+      <position name="motor1" joint="joint_1" gear="1" kp="50" dampratio="1" />
+      <position name="motor2" joint="joint_2" gear="1" kp="50" dampratio="1" />
+      <position name="motor3" joint="joint_3" gear="1" kp="50" dampratio="1" />
+      <position name="motor4" joint="joint_4" gear="1" kp="1" dampratio="1"/>
+      <position name="motor5" joint="joint_5" gear="1" kp="1" dampratio="1" />
     </actuator>
 """
 
@@ -108,7 +112,7 @@ def compile_urdf(urdf_path: str, xml_path: str):
 
 
 if __name__ == "__main__":
-    target_name = "flying_hand_follower"
-    urdf_path = os.path.expanduser(f"G://NEU_Tele/neutele/station/flying_hand/urdf/follower/{target_name}.urdf")
-    xml_path = os.path.expanduser(f"G://NEU_Tele/neutele/station/flying_hand/urdf/follower/{target_name}.xml")
+    target_name = "x500_arm"
+    urdf_path = os.path.expanduser(f"G://NEU_Tele/neutele/station/flying_hand/urdf/x500_arm/{target_name}.urdf")
+    xml_path = os.path.expanduser(f"G://NEU_Tele/neutele/station/flying_hand/urdf/x500_arm/{target_name}.xml")
     compile_urdf(urdf_path, xml_path)
