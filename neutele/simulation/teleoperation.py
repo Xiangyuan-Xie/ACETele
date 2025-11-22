@@ -46,7 +46,7 @@ class MujocoBase:
 
 
 if __name__ == "__main__":
-    agent = MujocoBase("G:\\NEU_Tele\\neutele\\station\\flying_hand\\urdf\\follower\\flying_hand_follower.xml")
+    agent = MujocoBase("/station/flying_hand/urdf/follower/flying_hand_follower.xml")
     try:
         agent.run()
     except Exception as e:

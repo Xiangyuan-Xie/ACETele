@@ -14,9 +14,7 @@ class MujocoBase:
 
         self.dof = 5
 
-        urdf_model_path = os.path.abspath(
-            "G:\\NEU_Tele\\neutele\\station\\flying_hand\\urdf\\follower\\flying_hand_follower_tmp.urdf"
-        )
+        urdf_model_path = os.path.abspath("/station/flying_hand/urdf/follower/flying_hand_follower_tmp.urdf")
         urdf_model_dir = os.path.dirname(urdf_model_path)
         self.pin_model, _, _ = pin.buildModelsFromUrdf(filename=urdf_model_path, package_dirs=urdf_model_dir)
         self.pin_data = self.pin_model.createData()
@@ -32,8 +30,8 @@ class MujocoBase:
         self.stiction_comp_enable_speed = 0.9
         self.stiction_comp_gain = 0.6
 
-        self._data.ctrl = self.null_space_joint_target
-        # self._data.qvel = np.zeros_like(self._data.qpos)
+        self._data.qpos = self.null_space_joint_target
+        self._data.qvel = np.zeros_like(self._data.qpos)
 
     def control(self):
         pos = self._data.qpos
@@ -49,7 +47,7 @@ class MujocoBase:
     def run(self):
         with mujoco.viewer.launch_passive(self._model, self._data) as viewer:
             while viewer.is_running():
-                # self.control()
+                self.control()
                 mujoco.mj_step(self._model, self._data)
                 viewer.sync()
 
@@ -79,5 +77,5 @@ class MujocoBase:
 
 
 if __name__ == "__main__":
-    base = MujocoBase("G:\\NEU_Tele\\neutele\\station\\flying_hand\\urdf\\follower\\flying_hand_follower.xml")
+    base = MujocoBase("/station/flying_hand/urdf/follower/flying_hand_follower.xml")
     base.run()

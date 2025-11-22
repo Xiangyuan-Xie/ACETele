@@ -72,8 +72,8 @@ class Linker(BaseEquipment):
     def set_torque(self, ids: Sequence[int], torques: Sequence[float]):
         assert len(ids) == len(torques), "ids and torques must have the same length."
         currents = np.around(torques * self._torque_current_mapping * self._signs[:4]).astype(int)
-        ids = ids[1:3]
-        currents = currents[1:3]
+        ids = ids[:3]
+        currents = currents[:3]
         self._driver.set_current(ids, currents)
 
     def get_frequency(self) -> float:
