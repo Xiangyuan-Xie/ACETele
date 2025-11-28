@@ -4,6 +4,7 @@ from typing import Dict, Tuple, Union
 
 import numpy as np
 import pygame
+from equipment.base_equipment import BaseEquipment
 
 # Mapping of axis indices to human-readable names
 AXIS_MAP = {
@@ -130,7 +131,7 @@ def comm_worker(stop_flag, data_queue, control_queue):
         pygame.quit()
 
 
-class Xbox360Driver:
+class Xbox360Driver(BaseEquipment):
     """
     Xbox 360 controller driver using multiprocessing to avoid GIL limitations.
 
@@ -140,6 +141,7 @@ class Xbox360Driver:
 
     def __init__(self):
         """Initialize the Xbox 360 driver with multiprocessing."""
+        super().__init__()
         # Create queues for inter-process communication
         self._data_queue = Queue()  # For joystick data
         self._control_queue = Queue()  # For control commands

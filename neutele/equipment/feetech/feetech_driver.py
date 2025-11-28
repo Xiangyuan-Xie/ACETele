@@ -101,6 +101,8 @@ class FeeTechDriver:
             self._position = position
             self._velocity = velocity
 
+        time.sleep(0.0005)
+
         self._groupSyncReadHandler.clearParam()
 
     def calibrate(self, ids: Sequence[int], home_poses: Sequence[int]) -> bool:

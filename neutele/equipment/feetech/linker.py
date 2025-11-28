@@ -11,7 +11,7 @@ from neutele.equipment.base_equipment import BaseEquipment
 from neutele.equipment.feetech.feetech_driver import FeeTechDriver, TorqueEnable
 
 KT_MAPPING = {
-    "HL3950": 0.15 * 20.8,
+    "HL3950": 0.3 * 20.8,
     "HL3930": 0.65 * 12.5,
     "HL3915": 9.3,
     "HL3612": 9.2,
