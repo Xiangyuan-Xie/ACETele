@@ -3,27 +3,22 @@
      Commit Version: 1.6.0-4-g7f85cfe  Build Version: 1.6.7995.38578
      For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
 <robot
-  name="flying_hand_leader">
-
-  <mujoco>
-    <compiler meshdir="meshes/" balanceinertia="true" discardvisual="false"/>
-  </mujoco>
-
+  name="leader">
   <link
     name="base_link">
     <inertial>
       <origin
-        xyz="0 -0.0073271 0.027922"
+        xyz="0.0032052 -0.0011829 0.029085"
         rpy="0 0 0" />
       <mass
-        value="0.13025" />
+        value="0.1139" />
       <inertia
-        ixx="6.958E-05"
-        ixy="0"
-        ixz="0"
-        iyy="5.706E-05"
-        iyz="-6.69E-06"
-        izz="5.852E-05" />
+        ixx="6.491E-05"
+        ixy="1.1E-07"
+        ixz="-2.14E-06"
+        iyy="5.834E-05"
+        iyz="1.58E-06"
+        izz="5.176E-05" />
     </inertial>
     <visual>
       <origin
@@ -53,17 +48,17 @@
     name="link_1">
     <inertial>
       <origin
-        xyz="0 -0.00156867 0.03460183"
+        xyz="-0.023682 0.16131 -0.00087342"
         rpy="0 0 0" />
       <mass
-        value="0.08581" />
+        value="0.1468" />
       <inertia
-        ixx="3.717E-05"
-        ixy="0"
-        ixz="0"
-        iyy="3.006E-05"
-        iyz="9E-07"
-        izz="1.849E-05" />
+        ixx="0.0009994"
+        ixy="0.00019641"
+        ixz="-2.22E-06"
+        iyy="8.828E-05"
+        iyz="8.03E-06"
+        izz="0.0010447" />
     </inertial>
     <visual>
       <origin
@@ -93,8 +88,8 @@
     name="joint_1"
     type="revolute">
     <origin
-      xyz="0 0 0.0528"
-      rpy="0 0 0" />
+      xyz="0.004 -0.0005 0.04811"
+      rpy="1.5708 0 3.1416" />
     <parent
       link="base_link" />
     <child
@@ -102,26 +97,29 @@
     <axis
       xyz="0 0 1" />
     <limit
-      lower="-2.8973"
-      upper="2.8973"
-      effort="3.43"
-      velocity="4.72" />
+      lower="-2.6485"
+      upper="2.6485"
+      effort="4.9008"
+      velocity="8.95" />
+    <dynamics
+      damping="0.62275"
+      friction="0.098067" />
   </joint>
   <link
     name="link_2">
     <inertial>
       <origin
-        xyz="-0.0260946 0.13096995 -0.00115046"
+        xyz="0.037783 0.16226 -0.00087726"
         rpy="0 0 0" />
       <mass
-        value="0.11524" />
+        value="0.1467" />
       <inertia
-        ixx="0.00023289"
-        ixy="6.19E-05"
-        ixz="-1.32E-06"
-        iyy="6.035E-05"
-        iyz="2.87E-06"
-        izz="0.00025434" />
+        ixx="0.0014513"
+        ixy="-7.609E-05"
+        ixz="4.1E-07"
+        iyy="4.144E-05"
+        iyz="1.015E-05"
+        izz="0.0014495" />
     </inertial>
     <visual>
       <origin
@@ -134,7 +132,7 @@
       <material
         name="">
         <color
-          rgba="0.79216 0.81961 0.93333 1" />
+          rgba="1 1 1 1" />
       </material>
     </visual>
     <collision>
@@ -151,8 +149,8 @@
     name="joint_2"
     type="revolute">
     <origin
-      xyz="0 0 0.0486100000000001"
-      rpy="1.5707963267949 0 3.14159265358979" />
+      xyz="-0.04098 0.2314 -0.0005"
+      rpy="0 0 0" />
     <parent
       link="link_1" />
     <child
@@ -160,26 +158,29 @@
     <axis
       xyz="0 0 1" />
     <limit
-      lower="-1.7628"
-      upper="1.7628"
-      effort="4.903"
-      velocity="8.95" />
+      lower="0"
+      upper="3.4907"
+      effort="3.4305"
+      velocity="4.72" />
+    <dynamics
+      damping="0.72763"
+      friction="0.068647" />
   </joint>
   <link
     name="link_3">
     <inertial>
       <origin
-        xyz="0.03950206 0.10829022 -0.00063991"
+        xyz="-0.0040244 0.039487 -4.87E-06"
         rpy="0 0 0" />
       <mass
-        value="0.0848" />
+        value="0.0618" />
       <inertia
-        ixx="0.00051159"
-        ixy="-2.503E-05"
-        ixz="2E-08"
-        iyy="2.009E-05"
-        iyz="5.6E-07"
-        izz="0.00051731" />
+        ixx="2.639E-05"
+        ixy="2.57E-06"
+        ixz="0"
+        iyy="1.354E-05"
+        iyz="0"
+        izz="2.514E-05" />
     </inertial>
     <visual>
       <origin
@@ -209,7 +210,7 @@
     name="joint_3"
     type="revolute">
     <origin
-      xyz="-0.0381400000000001 0.1640000018731 -0.000200000000001629"
+      xyz="0.04098 0.24861 -0.0005"
       rpy="0 0 0" />
     <parent
       link="link_2" />
@@ -218,26 +219,29 @@
     <axis
       xyz="0 0 1" />
     <limit
-      lower="0"
-      upper="1.7628"
-      effort="3.43"
+      lower="-2.6485"
+      upper="2.6485"
+      effort="3.4305"
       velocity="4.72" />
+    <dynamics
+      damping="0.72763"
+      friction="0.068647" />
   </joint>
   <link
     name="link_4">
     <inertial>
       <origin
-        xyz="0.01371397 0.00802015 0.02165848"
+        xyz="0.0030101 0.015906 -0.020967"
         rpy="0 0 0" />
       <mass
-        value="0.0542" />
+        value="0.0518" />
       <inertia
-        ixx="1.239E-05"
-        ixy="3.84E-06"
-        ixz="6.81E-06"
-        iyy="5.49E-05"
-        iyz="-1.18E-06"
-        izz="5.212E-05" />
+        ixx="5.62E-05"
+        ixy="1.2E-07"
+        ixz="2.3E-07"
+        iyy="9.38E-06"
+        iyz="-6.78E-06"
+        izz="5.274E-05" />
     </inertial>
     <visual>
       <origin
@@ -267,35 +271,38 @@
     name="joint_4"
     type="revolute">
     <origin
-      xyz="0.03582 0.1935 -0.00077"
-      rpy="1.5708 0 -3.1416" />
+      xyz="0 0.0639 0"
+      rpy="1.5708 -1.5708 0" />
     <parent
       link="link_3" />
     <child
       link="link_4" />
     <axis
-      xyz="0 0 -1" />
+      xyz="0 0 1" />
     <limit
-      lower="-2.8973"
-      upper="2.8973"
-      effort="1.39"
+      lower="-3.1416"
+      upper="3.1416"
+      effort="1.3918"
       velocity="10.47" />
+    <dynamics
+      damping="0.13298"
+      friction="0.027851" />
   </joint>
   <link
     name="link_5">
     <inertial>
       <origin
-        xyz="0.022967 0.0098954 -0.00083577"
+        xyz="-0.02125 -0.0081009 0.0036198"
         rpy="0 0 0" />
       <mass
         value="0.0036" />
       <inertia
-        ixx="3.9E-07"
-        ixy="-4.8E-07"
-        ixz="-2E-08"
-        iyy="1.62E-06"
-        iyz="-1E-08"
-        izz="1.99E-06" />
+        ixx="4E-07"
+        ixy="5E-07"
+        ixz="-1E-08"
+        iyy="1.64E-06"
+        iyz="0"
+        izz="2.02E-06" />
     </inertial>
     <visual>
       <origin
@@ -325,18 +332,21 @@
     name="joint_5"
     type="revolute">
     <origin
-      xyz="0 0.02485 0.03"
-      rpy="1.5708 0 0" />
+      xyz="0.01315 0.0005 -0.047756"
+      rpy="-1.5708 0 -1.5708" />
     <parent
       link="link_4" />
     <child
       link="link_5" />
     <axis
-      xyz="0 0 -1" />
+      xyz="0 0 1" />
     <limit
-      lower="-2.8973"
-      upper="2.8973"
-      effort="1.471"
-      velocity="7.12" />
+      lower="-1.7628"
+      upper="0"
+      effort="1.3918"
+      velocity="10.47" />
+    <dynamics
+      damping="0.13298"
+      friction="0.027851" />
   </joint>
 </robot>
