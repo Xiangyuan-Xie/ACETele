@@ -60,8 +60,10 @@ class FeeTechDriver:
         self._comm_thread = Thread(target=self._comm_worker, daemon=True)
         self._comm_thread.start()
 
-        self.set_torque_enable(self._ids, [TorqueEnable.Disable] * len(self._ids))
-        self.set_mode(self._ids, [Mode.Position for _ in self._ids])
+        for _ in range(10):
+            self.get_pos_and_vel()
+        # self.set_torque_enable(self._ids, [TorqueEnable.Disable] * len(self._ids))
+        # self.set_mode(self._ids, [Mode.Position for _ in self._ids])
 
     def _comm_worker(self):
         while not self._stop_flag.is_set():
@@ -71,6 +73,7 @@ class FeeTechDriver:
                 self._comm_task_queue.get()()
             end_time = time.perf_counter()
             self._time_windows.append(end_time - start_time)
+            time.sleep(0.001)
 
     def _read_pos_and_vel(self):
         position = {}
@@ -88,7 +91,7 @@ class FeeTechDriver:
             data_result, error = self._groupSyncReadHandler.isAvailable(ft_id, HLS_PRESENT_POSITION_L, 4)
             if not data_result:
                 logger.error(f"[ID:{ft_id}] groupSyncRead getdata failed")
-                continue
+                # continue
             if error != 0:
                 logger.error(self._packetHandler.getRxPacketError(error))
                 continue
@@ -100,8 +103,6 @@ class FeeTechDriver:
         with self._lock:
             self._position = position
             self._velocity = velocity
-
-        time.sleep(0.0005)
 
         self._groupSyncReadHandler.clearParam()
 
@@ -243,7 +244,7 @@ class FeeTechDriver:
 
 
 if __name__ == "__main__":
-    driver = FeeTechDriver([0, 1, 2, 3], "COM5")
+    driver = FeeTechDriver([0, 1, 2, 3, 4], "COM5")
     while True:
         print(driver.get_pos_and_vel())
         # print(driver.get_frequency())

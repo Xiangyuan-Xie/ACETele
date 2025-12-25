@@ -47,7 +47,6 @@ class GroupSyncRead:
 
     def txPacket(self):
         if len(self.data_dict.keys()) == 0:
-
             return COMM_NOT_AVAILABLE
 
         if self.is_param_changed is True or not self.param:

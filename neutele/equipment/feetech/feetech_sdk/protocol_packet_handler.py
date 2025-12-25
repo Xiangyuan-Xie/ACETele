@@ -153,7 +153,7 @@ class protocol_packet_handler(object):
 
         txpacket[total_packet_length - 1] = ~checksum & 0xFF
 
-        # print "[TxPacket] %r" % txpacket
+        # print("[TxPacket] %r" % txpacket)
 
         # tx packet
         self.portHandler.clearPort()
