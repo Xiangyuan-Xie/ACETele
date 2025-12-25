@@ -1,3 +1,5 @@
+import time
+
 import numpy as np
 import onnxruntime as ort
 
@@ -71,3 +73,77 @@ class Policy:
         # Output is always returned on CPU by ONNX Runtime
         # No need for explicit GPU->CPU transfer
         return y
+
+
+def benchmark_fps(policy, warmup=1000, test_iterations=10000):
+    """
+    Perform FPS (Frames Per Second) benchmark test for inference performance.
+
+    This function measures the inference speed of the policy by running
+    multiple iterations and calculating average FPS, throughput, and latency.
+
+    Args:
+        policy: Initialized Policy object for inference
+        warmup: Number of warmup iterations to avoid cold start effects
+        test_iterations: Number of test iterations for benchmarking
+
+    Returns:
+        float: Frames per second (FPS) achieved during the test
+    """
+    # Generate random input data with shape (42,) to match model input requirements
+    obs = np.random.randn(42).astype(np.float32)
+
+    # Print test configuration
+    print(f"Starting FPS benchmark...")
+    print(f"Device: {'GPU' if policy.use_gpu else 'CPU'}")
+    print(f"Warmup iterations: {warmup}")
+    print(f"Test iterations: {test_iterations}")
+    print("-" * 40)
+
+    # 1. Warmup phase: Run initial inferences to avoid cold start latency
+    print("Warmup phase...")
+    for _ in range(warmup):
+        _ = policy.action(obs)
+
+    # 2. Test phase: Measure inference performance over multiple iterations
+    print("Test phase...")
+    start_time = time.time()
+
+    for _ in range(test_iterations):
+        _ = policy.action(obs)
+
+    # If using GPU, synchronize to ensure all operations are completed
+    if policy.use_gpu:
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+        except ImportError:
+            # Fallback if torch is not available
+            pass
+
+    end_time = time.time()
+
+    # 3. Calculate performance metrics
+    total_time = end_time - start_time
+    fps = test_iterations / total_time
+    throughput = fps
+    avg_latency_ms = (total_time / test_iterations) * 1000
+
+    # 4. Print formatted results
+    print("-" * 40)
+    print(f"Benchmark Results:")
+    print(f"Total inferences: {test_iterations}")
+    print(f"Total time: {total_time:.3f}s")
+    print(f"FPS (Frames Per Second): {fps:.2f} Hz")
+    print(f"Throughput: {throughput:.2f} Hz")
+    print(f"Average latency: {avg_latency_ms:.3f}ms")
+    print("-" * 40)
+
+    return fps
+
+
+if "__main__" == __name__:
+    policy = Policy(model_path="weight/policy2.onnx", use_gpu=False)
+    benchmark_fps(policy)
