@@ -91,7 +91,7 @@ class FeeTechDriver:
             data_result, error = self._groupSyncReadHandler.isAvailable(ft_id, HLS_PRESENT_POSITION_L, 4)
             if not data_result:
                 logger.error(f"[ID:{ft_id}] groupSyncRead getdata failed")
-                # continue
+                continue
             if error != 0:
                 logger.error(self._packetHandler.getRxPacketError(error))
                 continue
