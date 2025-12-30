@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "neutele"
 version = "0.1.0"
 description = "A real-time remote teleoperation system for controlling robotic platforms."
-readme = "README.md"
+readme = { file = "README.md", content-type = "text/markdown" }
 authors = [
     { name = "Shane Xie", email = "dragonboat_xxy@163.com" }
 ]
@@ -19,3 +19,6 @@ requires-python = ">=3.9"
 dependencies = [
     "numpy",
 ]
+
+[tool.setuptools.packages.find]
+where = ["."]

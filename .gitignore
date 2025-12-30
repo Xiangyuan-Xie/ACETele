@@ -175,3 +175,10 @@ cython_debug/
 
 # Mujoco
 MUJOCO_LOG.TXT
+
+# Log
+data/
+
+# Video
+image/
+*.mp4
