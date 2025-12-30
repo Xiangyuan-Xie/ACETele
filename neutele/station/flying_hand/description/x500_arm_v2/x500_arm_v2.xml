@@ -1,0 +1,261 @@
+<mujoco model="x500_arm_v2">
+    <compiler angle="radian" meshdir="meshes/" />
+    <option timestep="0.002" integrator="implicit" density="1.225" viscosity="1.8e-5" cone="elliptic" impratio="10" />
+    <size njmax="500" nconmax="100" />
+    <asset>
+        <texture name="grid" type="2d" builtin="checker" width="512" height="512" rgb1=".1 .2 .3" rgb2=".2 .3 .4"/>
+        <material name="grid" texture="grid" texrepeat="1 1" texuniform="true" reflectance="0.2" specular="1.0" shininess="0.5"/>
+        <mesh name="base_link" file="base_link.STL" />
+        <mesh name="rotor_1" file="rotor_1.STL" />
+        <mesh name="rotor_2" file="rotor_2.STL" />
+        <mesh name="rotor_3" file="rotor_3.STL" />
+        <mesh name="rotor_4" file="rotor_4.STL" />
+        <mesh name="link_1" file="link_1.STL" />
+        <mesh name="link_2" file="link_2.STL" />
+        <mesh name="link_3" file="link_3.STL" />
+        <mesh name="link_4" file="link_4.STL" />
+        <mesh name="link_5" file="link_5.STL" />
+        <mesh name="link_gripper_left" file="link_gripper_left.STL" />
+        <mesh name="link_gripper_right" file="link_gripper_right.STL" />
+        <mesh name="base_link_0" file="base_link_0.stl"/>
+        <mesh name="base_link_1" file="base_link_1.stl"/>
+        <mesh name="base_link_2" file="base_link_2.stl"/>
+        <mesh name="base_link_3" file="base_link_3.stl"/>
+        <mesh name="base_link_4" file="base_link_4.stl"/>
+        <mesh name="base_link_5" file="base_link_5.stl"/>
+        <mesh name="base_link_6" file="base_link_6.stl"/>
+        <mesh name="base_link_7" file="base_link_7.stl"/>
+        <mesh name="base_link_8" file="base_link_8.stl"/>
+        <mesh name="base_link_9" file="base_link_9.stl"/>
+        <mesh name="base_link_10" file="base_link_10.stl"/>
+        <mesh name="base_link_11" file="base_link_11.stl"/>
+        <mesh name="base_link_12" file="base_link_12.stl"/>
+        <mesh name="base_link_13" file="base_link_13.stl"/>
+        <mesh name="rotor_1_0" file="rotor_1_0.stl"/>
+        <mesh name="rotor_2_0" file="rotor_2_0.stl"/>
+        <mesh name="rotor_3_0" file="rotor_3_0.stl"/>
+        <mesh name="rotor_4_0" file="rotor_4_0.stl"/>
+        <mesh name="link_1_0" file="link_1_0.stl"/>
+        <mesh name="link_1_1" file="link_1_1.stl"/>
+        <mesh name="link_2_0" file="link_2_0.stl"/>
+        <mesh name="link_2_1" file="link_2_1.stl"/>
+        <mesh name="link_3_0" file="link_3_0.stl"/>
+        <mesh name="link_3_1" file="link_3_1.stl"/>
+        <mesh name="link_3_2" file="link_3_2.stl"/>
+        <mesh name="link_3_3" file="link_3_3.stl"/>
+        <mesh name="link_3_4" file="link_3_4.stl"/>
+        <mesh name="link_4_0" file="link_4_0.stl"/>
+        <mesh name="link_4_1" file="link_4_1.stl"/>
+        <mesh name="link_4_2" file="link_4_2.stl"/>
+        <mesh name="link_4_3" file="link_4_3.stl"/>
+        <mesh name="link_4_4" file="link_4_4.stl"/>
+        <mesh name="link_4_5" file="link_4_5.stl"/>
+        <mesh name="link_4_6" file="link_4_6.stl"/>
+        <mesh name="link_5_0" file="link_5_0.stl"/>
+        <mesh name="link_5_1" file="link_5_1.stl"/>
+        <mesh name="link_5_2" file="link_5_2.stl"/>
+        <mesh name="link_gripper_left_0" file="link_gripper_left_0.stl"/>
+        <mesh name="link_gripper_left_1" file="link_gripper_left_1.stl"/>
+        <mesh name="link_gripper_left_2" file="link_gripper_left_2.stl"/>
+        <mesh name="link_gripper_left_3" file="link_gripper_left_3.stl"/>
+        <mesh name="link_gripper_right_0" file="link_gripper_right_0.stl"/>
+        <mesh name="link_gripper_right_1" file="link_gripper_right_1.stl"/>
+        <mesh name="link_gripper_right_2" file="link_gripper_right_2.stl"/>
+        <mesh name="straight_pipe" file="straight_pipe.stl"/>
+    </asset>
+    <default>
+        <default class="gripper_collision">
+            <geom condim="6" friction="1 5e-3 5e-4" solref="0.01 1" priority="1" />
+        </default>
+        <default class="pipe_collision">
+            <geom friction="0.9 0.02 0.001" solref="0.004 1" solimp="0.9 0.95 0.002" />
+        </default>
+    </default>
+    <worldbody>
+        <light directional="true" diffuse=".8 .8 .8" specular=".5 .5 .5" pos="0 0 5" dir="0 0 -1" castshadow="true" />
+        <geom name="floor" type="plane" pos="0 0 0" size="0 0 0.1" contype="1" conaffinity="1" material="grid" />
+        <body name="base_link" pos="0 0 1">
+<!--            <inertial pos="0.01148 0.00041582 -0.038774" quat="0.006551 0.709582 -0.00615128 0.704565" mass="0.76555" diaginertia="0.0169142 0.0133061 0.0128386" />-->
+            <inertial pos="0.01148 0.00041582 -0.038774" quat="0.006551 0.709582 -0.00615128 0.704565" mass="1.148325" diaginertia="0.0169142 0.0133061 0.0128386" />
+            <joint name="floating_base_joint" type="free" />
+            <geom type="mesh" contype="0" conaffinity="0" group="1" rgba="1 1 1 1" mesh="base_link" />
+            <geom type="mesh" contype="1" conaffinity="1" group="3" rgba="1 0 0 1" mesh="base_link_0"/>
+            <geom type="mesh" contype="1" conaffinity="1" group="3" rgba="1 0 0 1" mesh="base_link_1"/>
+            <geom type="mesh" contype="1" conaffinity="1" group="3" rgba="1 0 0 1" mesh="base_link_2"/>
+            <geom type="mesh" contype="1" conaffinity="1" group="3" rgba="1 0 0 1" mesh="base_link_3"/>
+            <geom type="mesh" contype="1" conaffinity="1" group="3" rgba="1 0 0 1" mesh="base_link_4"/>
+            <geom type="mesh" contype="1" conaffinity="1" group="3" rgba="1 0 0 1" mesh="base_link_5"/>
+            <geom type="mesh" contype="1" conaffinity="1" group="3" rgba="1 0 0 1" mesh="base_link_6"/>
+            <geom type="mesh" contype="1" conaffinity="1" group="3" rgba="1 0 0 1" mesh="base_link_7"/>
+            <geom type="mesh" contype="1" conaffinity="1" group="3" rgba="1 0 0 1" mesh="base_link_8"/>
+            <geom type="mesh" contype="1" conaffinity="1" group="3" rgba="1 0 0 1" mesh="base_link_9"/>
+            <geom type="mesh" contype="1" conaffinity="1" group="3" rgba="1 0 0 1" mesh="base_link_10"/>
+            <geom type="mesh" contype="1" conaffinity="1" group="3" rgba="1 0 0 1" mesh="base_link_11"/>
+            <geom type="mesh" contype="1" conaffinity="1" group="3" rgba="1 0 0 1" mesh="base_link_12"/>
+            <geom type="mesh" contype="1" conaffinity="1" group="3" rgba="1 0 0 1" mesh="base_link_13"/>
+            <site name="base_link_origin" type="sphere" size="0.01" rgba="1 0 0 0.5" pos="0 0 0"/>
+            <camera name="front_camera" pos="0.13593 0 -0.0347" quat="0.5 0.5 -0.5 -0.5" />
+            <body name="rotor_1" pos="0.17688 -0.17688 0.066">
+                <inertial pos="0 0 -0.0062143" quat="0.0103827 0.707031 -0.0103827 0.707031" mass="0.012" diaginertia="5.789e-05 5.76494e-05 4.10648e-07" />
+                <joint name="rotor_joint_1" pos="0 0 0" axis="0 0 1" />
+                <geom type="mesh" contype="0" conaffinity="1" group="1" rgba="1 1 1 1" mesh="rotor_1" />
+                <geom type="mesh" contype="1" conaffinity="1" group="3" rgba="1 0 0 1" mesh="rotor_1_0"/>
+                <site name="rotor_joint_thrust1" type="cylinder" size="0.01 0.005" pos="0 0 0" rgba="1 0 0 0.5"/>
+            </body>
+            <body name="rotor_2" pos="0.17688 0.17688 0.066">
+                <inertial pos="0 0 -0.0062122" quat="-0.0104388 0.70703 0.0104388 0.70703" mass="0.012" diaginertia="5.793e-05 5.76799e-05 4.10086e-07" />
+                <joint name="rotor_joint_2" pos="0 0 0" axis="0 0 1" />
+                <geom type="mesh" contype="0" conaffinity="1" group="1" rgba="1 1 1 1" mesh="rotor_2" />
+                <geom type="mesh" contype="1" conaffinity="1" group="3" rgba="1 0 0 1" mesh="rotor_2_0"/>
+                <site name="rotor_joint_thrust2" type="cylinder" size="0.01 0.005" pos="0 0 0" rgba="1 0 0 0.5"/>
+            </body>
+            <body name="rotor_3" pos="-0.17688 0.17688 0.066">
+                <inertial pos="0 0 -0.0037857" quat="-0.0103827 0.707031 0.0103827 0.707031" mass="0.012" diaginertia="5.789e-05 5.76494e-05 4.10648e-07" />
+                <joint name="rotor_joint_3" pos="0 0 0" axis="0 0 1" />
+                <geom type="mesh" contype="0" conaffinity="1" group="1" rgba="1 1 1 1" mesh="rotor_3" />
+                <geom type="mesh" contype="1" conaffinity="1" group="3" rgba="1 0 0 1" mesh="rotor_3_0"/>
+                <site name="rotor_joint_thrust3" type="cylinder" size="0.01 0.005" pos="0 0 0" rgba="1 0 0 0.5"/>
+            </body>
+            <body name="rotor_4" pos="-0.17688 -0.17688 0.066">
+                <inertial pos="0 0 -0.0037878" quat="0.0104388 0.70703 -0.0104388 0.70703" mass="0.012" diaginertia="5.793e-05 5.76799e-05 4.10086e-07" />
+                <joint name="rotor_joint_4" pos="0 0 0" axis="0 0 1" />
+                <geom type="mesh" contype="0" conaffinity="1" group="1" rgba="1 1 1 1" mesh="rotor_4" />
+                <geom type="mesh" contype="1" conaffinity="1" group="3" rgba="1 0 0 1" mesh="rotor_4_0"/>
+                <site name="rotor_joint_thrust4" type="cylinder" size="0.01 0.005" pos="0 0 0" rgba="1 0 0 0.5"/>
+            </body>
+            <body name="link_1" pos="0 0.0005 -0.098625" quat="0.707105 0.707108 0 0">
+                <inertial pos="0.023682 -0.16131 -0.00087342" quat="0.474639 0.574751 -0.416929 0.520143" mass="0.1468" diaginertia="0.00104483 0.00103987 4.76741e-05" />
+                <joint name="joint_1" pos="0 0 0" axis="0 0 1" limited="true" range="-2.6485 2.6485" />
+                <geom type="mesh" contype="0" conaffinity="0" group="1" rgba="1 1 1 1" mesh="link_1" />
+                <geom type="mesh" contype="1" conaffinity="1" group="3" rgba="1 0 0 1" mesh="link_1_0"/>
+                <geom type="mesh" contype="1" conaffinity="1" group="3" rgba="1 0 0 1" mesh="link_1_1"/>
+                <body name="link_2" pos="0.04098 -0.2314 -0.0005">
+                    <inertial pos="-0.037783 -0.16226 -0.00087726" quat="0.704478 0.709118 -0.0273526 -0.0107146" mass="0.1467" diaginertia="0.0014554 0.00144957 3.72723e-05" />
+                    <joint name="joint_2" pos="0 0 0" axis="0 0 1" limited="true" range="0 3.4907" />
+                    <geom type="mesh" contype="0" conaffinity="0" group="1" rgba="1 1 1 1" mesh="link_2" />
+                    <geom type="mesh" contype="1" conaffinity="1" group="3" rgba="1 0 0 1" mesh="link_2_0"/>
+                    <geom type="mesh" contype="1" conaffinity="1" group="3" rgba="1 0 0 1" mesh="link_2_1"/>
+                    <body name="link_3" pos="-0.04098 -0.24861 -0.0005">
+                        <inertial pos="0 -0.017321 0" mass="0.019" diaginertia="6.84e-06 6.18e-06 2.16e-06" />
+                        <joint name="joint_3" pos="0 0 0" axis="0 0 1" limited="true" range="-2.6485 2.6485" />
+                        <geom type="mesh" contype="0" conaffinity="0" group="1" rgba="1 1 1 1" mesh="link_3" />
+                        <geom type="mesh" contype="1" conaffinity="1" group="3" rgba="1 0 0 1" mesh="link_3_0"/>
+                        <geom type="mesh" contype="1" conaffinity="1" group="3" rgba="1 0 0 1" mesh="link_3_1"/>
+                        <geom type="mesh" contype="1" conaffinity="1" group="3" rgba="1 0 0 1" mesh="link_3_2"/>
+                        <geom type="mesh" contype="1" conaffinity="1" group="3" rgba="1 0 0 1" mesh="link_3_3"/>
+                        <geom type="mesh" contype="1" conaffinity="1" group="3" rgba="1 0 0 1" mesh="link_3_4"/>
+                        <body name="link_4" pos="0 -0.0259 0" quat="0.499998 0.5 0.5 -0.500002">
+                            <inertial pos="1.188e-05 0.019271 0.054255" quat="0.394945 0.58667 -0.586986 0.39406" mass="0.29148" diaginertia="0.000731517 0.00058159 0.000488143" />
+                            <joint name="joint_4" pos="0 0 0" axis="0 0 1" limited="true" range="-3.1416 3.1416" />
+                            <geom type="mesh" contype="0" conaffinity="0" group="1" rgba="1 1 1 1" mesh="link_4" />
+                            <geom type="mesh" contype="1" conaffinity="1" group="3" rgba="1 0 0 1" mesh="link_4_0"/>
+                            <geom type="mesh" contype="1" conaffinity="1" group="3" rgba="1 0 0 1" mesh="link_4_1"/>
+                            <geom type="mesh" contype="1" conaffinity="1" group="3" rgba="1 0 0 1" mesh="link_4_2"/>
+                            <geom type="mesh" contype="1" conaffinity="1" group="3" rgba="1 0 0 1" mesh="link_4_3"/>
+                            <geom type="mesh" contype="1" conaffinity="1" group="3" rgba="1 0 0 1" mesh="link_4_4"/>
+                            <geom type="mesh" contype="1" conaffinity="1" group="3" rgba="1 0 0 1" mesh="link_4_5"/>
+                            <geom type="mesh" contype="1" conaffinity="1" group="3" rgba="1 0 0 1" mesh="link_4_6"/>
+                            <camera name="wrist_camera" pos="0 0.06388 0.0767" quat="0 0 0.966 0.259" />
+                            <body name="link_5" pos="0 0 0.0687">
+                                <inertial pos="0 0 0.0070928" quat="0.102073 0.699701 -0.102073 0.699701" mass="0.00636" diaginertia="8.22e-06 7.72131e-06 5.98694e-07" />
+                                <joint name="joint_5" pos="0 0 0" axis="0 0 -1" limited="true" range="-1.723 0" />
+                                <geom type="mesh" contype="0" conaffinity="0" group="1" rgba="1 1 1 1" mesh="link_5" />
+                                <geom type="mesh" contype="1" conaffinity="1" group="3" rgba="1 0 0 1" mesh="link_5_0"/>
+                                <geom type="mesh" contype="1" conaffinity="1" group="3" rgba="1 0 0 1" mesh="link_5_1"/>
+                                <geom type="mesh" contype="1" conaffinity="1" group="3" rgba="1 0 0 1" mesh="link_5_2"/>
+                            </body>
+                            <body name="link_gripper_left" pos="0.061275 0 0.1047" quat="0.499998 -0.5 0.500002 -0.5">
+                                <inertial pos="-3.32e-06 -0.0056525 -0.010126" quat="0.476004 0.525438 -0.50645 0.490758" mass="0.02272" diaginertia="1.36612e-05 1.08577e-05 3.9611e-06" />
+                                <joint name="joint_gripper_left" pos="0 0 0" axis="0 0 -1" type="slide" limited="true" range="0 0.04225" armature="0.243" damping="40" />
+                                <geom type="mesh" contype="0" conaffinity="0" group="1" rgba="1 1 1 1" mesh="link_gripper_left" />
+                                <geom type="mesh" contype="1" conaffinity="1" group="3" rgba="1 0 0 1" mesh="link_gripper_left_0" class="gripper_collision" />
+                                <geom type="mesh" contype="1" conaffinity="1" group="3" rgba="1 0 0 1" mesh="link_gripper_left_1" class="gripper_collision" />
+                                <geom type="mesh" contype="1" conaffinity="1" group="3" rgba="1 0 0 1" mesh="link_gripper_left_2" class="gripper_collision" />
+                                <geom type="mesh" contype="1" conaffinity="1" group="3" rgba="1 0 0 1" mesh="link_gripper_left_3" class="gripper_collision" />
+                            </body>
+                            <body name="link_gripper_right" pos="-0.042225 0 0.1047" quat="0.499998 -0.5 -0.500002 0.5">
+                                <inertial pos="3.32e-06 -0.0056525 0.0089238" quat="0.490758 0.50645 -0.525438 0.476004" mass="0.02272" diaginertia="1.36612e-05 1.08577e-05 3.9611e-06" />
+                                <joint name="joint_gripper_right" pos="0 0 0" axis="0 0 1" type="slide" limited="true" range="-0.04225 0" armature="0.243" damping="40" />
+                                <geom type="mesh" contype="0" conaffinity="0" group="1" rgba="1 1 1 1" mesh="link_gripper_right" />
+                                <geom type="mesh" contype="1" conaffinity="1" group="3" rgba="1 0 0 1" mesh="link_gripper_right_0" class="gripper_collision" />
+                                <geom type="mesh" contype="1" conaffinity="1" group="3" rgba="1 0 0 1" mesh="link_gripper_right_1" class="gripper_collision" />
+                                <geom type="mesh" contype="1" conaffinity="1" group="3" rgba="1 0 0 1" mesh="link_gripper_right_2" class="gripper_collision" />
+                            </body>
+                        </body>
+                    </body>
+                </body>
+            </body>
+        </body>
+        <body name="hollow_pipe" pos="0 0 0.1">
+            <joint type="free"/>
+            <inertial pos="0 0 0" mass="0.1" diaginertia="0.0005 0.0005 0.00025"/>
+            <geom type="mesh" contype="0" conaffinity="0" group="1" rgba="1 1 1 1" mesh="straight_pipe" pos="-0.0575 -0.0575 0"/>
+            <geom type="cylinder" fromto=" 0.050  0.000 0   0.050  0.000 0.2" size="0.005" group="3" class="pipe_collision"/>
+            <geom type="cylinder" fromto=" 0.047  0.017 0   0.047  0.017 0.2" size="0.005" group="3" class="pipe_collision"/>
+            <geom type="cylinder" fromto=" 0.042  0.027 0   0.042  0.027 0.2" size="0.005" group="3" class="pipe_collision"/>
+            <geom type="cylinder" fromto=" 0.035  0.035 0   0.035  0.035 0.2" size="0.005" group="3" class="pipe_collision"/>
+            <geom type="cylinder" fromto=" 0.027  0.042 0   0.027  0.042 0.2" size="0.005" group="3" class="pipe_collision"/>
+            <geom type="cylinder" fromto=" 0.017  0.047 0   0.017  0.047 0.2" size="0.005" group="3" class="pipe_collision"/>
+            <geom type="cylinder" fromto=" 0.000  0.050 0   0.000  0.050 0.2" size="0.005" group="3" class="pipe_collision"/>
+            <geom type="cylinder" fromto="-0.017  0.047 0  -0.017  0.047 0.2" size="0.005" group="3" class="pipe_collision"/>
+            <geom type="cylinder" fromto="-0.027  0.042 0  -0.027  0.042 0.2" size="0.005" group="3" class="pipe_collision"/>
+            <geom type="cylinder" fromto="-0.035  0.035 0  -0.035  0.035 0.2" size="0.005" group="3" class="pipe_collision"/>
+            <geom type="cylinder" fromto="-0.042  0.027 0  -0.042  0.027 0.2" size="0.005" group="3" class="pipe_collision"/>
+            <geom type="cylinder" fromto="-0.047  0.017 0  -0.047  0.017 0.2" size="0.005" group="3" class="pipe_collision"/>
+            <geom type="cylinder" fromto="-0.050  0.000 0  -0.050  0.000 0.2" size="0.005" group="3" class="pipe_collision"/>
+            <geom type="cylinder" fromto="-0.047 -0.017 0  -0.047 -0.017 0.2" size="0.005" group="3" class="pipe_collision"/>
+            <geom type="cylinder" fromto="-0.042 -0.027 0  -0.042 -0.027 0.2" size="0.005" group="3" class="pipe_collision"/>
+            <geom type="cylinder" fromto="-0.035 -0.035 0  -0.035 -0.035 0.2" size="0.005" group="3" class="pipe_collision"/>
+            <geom type="cylinder" fromto="-0.027 -0.042 0  -0.027 -0.042 0.2" size="0.005" group="3" class="pipe_collision"/>
+            <geom type="cylinder" fromto="-0.017 -0.047 0  -0.017 -0.047 0.2" size="0.005" group="3" class="pipe_collision"/>
+            <geom type="cylinder" fromto=" 0.000 -0.050 0   0.000 -0.050 0.2" size="0.005" group="3" class="pipe_collision"/>
+            <geom type="cylinder" fromto=" 0.017 -0.047 0   0.017 -0.047 0.2" size="0.005" group="3" class="pipe_collision"/>
+            <geom type="cylinder" fromto=" 0.027 -0.042 0   0.027 -0.042 0.2" size="0.005" group="3" class="pipe_collision"/>
+            <geom type="cylinder" fromto=" 0.035 -0.035 0   0.035 -0.035 0.2" size="0.005" group="3" class="pipe_collision"/>
+            <geom type="cylinder" fromto=" 0.042 -0.027 0   0.042 -0.027 0.2" size="0.005" group="3" class="pipe_collision"/>
+            <geom type="cylinder" fromto=" 0.047 -0.017 0   0.047 -0.017 0.2" size="0.005" group="3" class="pipe_collision"/>
+        </body>
+        <body name="pipe_holder" pos="3 0 0.25">
+            <geom type="box" size="0.15 0.25 0.25" pos="0 0 0" rgba="0.6 0.6 0.6 1" class="pipe_collision" />
+<!--            <geom type="cylinder" fromto="0.00 0.00 0.05 0.20 0.00 0.05" size="0.06" rgba="0.7 0.7 0.7 1"/>-->
+            <geom type="box" size="0.15 0.01 0.075" pos="0 0.1 0.325" rgba="0.5 0.5 0.5 1" class="pipe_collision" />
+            <geom type="box" size="0.15 0.01 0.075" pos="0 -0.1 0.325" rgba="0.5 0.5 0.5 1" class="pipe_collision" />
+<!--            <geom type="box" size="0.1 0.1 0.01" pos="0 0 0.4" rgba="0.5 0.5 0.5 1"/>-->
+        </body>
+    </worldbody>
+    <actuator>
+        <motor name="rotor_joint_1" joint="rotor_joint_1" />
+        <motor name="rotor_joint_2" joint="rotor_joint_2" />
+        <motor name="rotor_joint_3" joint="rotor_joint_3" />
+        <motor name="rotor_joint_4" joint="rotor_joint_4" />
+        <motor name="rotor_joint_thrust1" site="rotor_joint_thrust1" gear="0 0 1 0 0 -0.016" />
+        <motor name="rotor_joint_thrust2" site="rotor_joint_thrust2" gear="0 0 1 0 0 0.016" />
+        <motor name="rotor_joint_thrust3" site="rotor_joint_thrust3" gear="0 0 1 0 0 -0.016" />
+        <motor name="rotor_joint_thrust4" site="rotor_joint_thrust4" gear="0 0 1 0 0 0.016" />
+        <position name="joint_1" joint="joint_1" kp="748.6" kv="0.547" forcerange="-4.905 4.905" ctrlrange="-2.6485 2.6485" />
+        <position name="joint_2" joint="joint_2" kp="524.0" kv="0.727" forcerange="-3.43 3.43" ctrlrange="0 3.4907" />
+        <position name="joint_3" joint="joint_3" kp="524.0" kv="0.727" forcerange="-3.43 3.43" ctrlrange="-2.6485 2.6485" />
+        <position name="joint_4" joint="joint_4" kp="524.0" kv="0.727" forcerange="-3.43 3.43" ctrlrange="-3.1416 3.1416" />
+        <position name="joint_5" joint="joint_5" kp="212.6" kv="0.133" forcerange="-1.3916 1.3916" ctrlrange="-1.723 0" />
+        <position name="joint_gripper_left" joint="joint_gripper_left" kp="2000.0" kv="124.0" forcerange="-49.06 49.06" ctrlrange="0 0.04225" />
+        <position name="joint_gripper_right" joint="joint_gripper_right" kp="2000.0" kv="124.0" forcerange="-49.06 49.06" ctrlrange="-0.04225 0"/>
+    </actuator>
+    <sensor>
+        <framepos name="framepos" objtype="site" objname="base_link_origin" />
+        <framequat name="framequat" objtype="site" objname="base_link_origin" />
+        <velocimeter name="velocimeter" site="base_link_origin" />
+        <gyro name="gyro" site="base_link_origin" />
+    </sensor>
+    <contact>
+        <exclude body1="base_link" body2="link_1"/>
+        <exclude body1="link_1" body2="link_2"/>
+        <exclude body1="link_2" body2="link_3"/>
+        <exclude body1="link_3" body2="link_4"/>
+        <exclude body1="link_4" body2="link_5"/>
+        <exclude body1="link_4" body2="link_gripper_left"/>
+        <exclude body1="link_4" body2="link_gripper_right"/>
+        <exclude body1="link_5" body2="link_gripper_left"/>
+        <exclude body1="link_5" body2="link_gripper_right"/>
+        <exclude body1="link_gripper_left" body2="link_gripper_right"/>
+    </contact>
+</mujoco>

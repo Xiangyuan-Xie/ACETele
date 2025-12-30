@@ -1,0 +1,91 @@
+<mujoco model="x500_arm_v1">
+    <compiler angle="radian" meshdir="meshes/" />
+    <option timestep="0.005" integrator="implicit" density="1.225" viscosity="1.8e-5"/>
+    <size njmax="500" nconmax="100" />
+    <asset>
+        <texture name="grid" type="2d" builtin="checker" width="512" height="512" rgb1=".1 .2 .3" rgb2=".2 .3 .4"/>
+        <material name="grid" texture="grid" texrepeat="1 1" texuniform="true" reflectance="0.2" specular="1.0" shininess="0.5"/>
+        <mesh name="base_link" file="base_link.STL" />
+        <mesh name="rotor_1" file="rotor_1.STL" />
+        <mesh name="rotor_2" file="rotor_2.STL" />
+        <mesh name="rotor_3" file="rotor_3.STL" />
+        <mesh name="rotor_4" file="rotor_4.STL" />
+        <mesh name="link_1" file="link_1.STL" />
+        <mesh name="link_2" file="link_2.STL" />
+        <mesh name="link_3" file="link_3.STL" />
+        <mesh name="link_4" file="link_4.STL" />
+        <mesh name="link_5" file="link_5.STL" />
+    </asset>
+    <worldbody>
+        <geom name="floor" type="plane" pos="0 0 0" size="0 0 0.1" contype="1" conaffinity="1" material="grid"/>
+        <light directional="true" diffuse=".8 .8 .8" specular=".5 .5 .5" pos="0 0 5" dir="0 0 -1" castshadow="true"/>
+        <body name="base_link" pos="0 0 1">
+            <inertial pos="0.0165436 0.00023483 -0.0394339" quat="0.00462653 0.709778 -0.0056507 0.704387" mass="0.781896" diaginertia="0.016914 0.0133249 0.0128457" />
+            <joint name="floating_base_joint" type="free" />
+            <geom type="mesh" contype="1" conaffinity="1" group="1" rgba="1 1 1 1" mesh="base_link" />
+            <site name="base_link_origin" type="sphere" size="0.01" rgba="1 0 0 0.5" pos="0 0 0"/>
+            <body name="rotor_1" pos="0.18164 -0.17688 0.056">
+                <inertial pos="0 0 0.0062143" quat="-0.0103827 0.707031 0.0103827 0.707031" mass="0.012" diaginertia="5.789e-05 5.76494e-05 4.10648e-07" />
+                <joint name="rotor_joint_1" pos="0 0 0" axis="0 0 1" />
+                <geom type="mesh" contype="1" conaffinity="1" group="1" rgba="0.25098 0.25098 0.25098 1" mesh="rotor_1" />
+                <site name="rotor_joint_thrust1" type="cylinder" size="0.01 0.005" pos="0 0 0" rgba="1 0 0 0.5"/>
+            </body>
+            <body name="rotor_2" pos="0.18164 0.17688 0.056">
+                <inertial pos="0 0 0.0062122" quat="0.0104388 0.70703 -0.0104388 0.70703" mass="0.012" diaginertia="5.793e-05 5.76799e-05 4.10086e-07" />
+                <joint name="rotor_joint_2" pos="0 0 0" axis="0 0 1" />
+                <geom type="mesh" contype="1" conaffinity="1" group="1" rgba="0.25098 0.25098 0.25098 1" mesh="rotor_2" />
+                <site name="rotor_joint_thrust2" type="cylinder" size="0.01 0.005" pos="0 0 0" rgba="1 0 0 0.5"/>
+            </body>
+            <body name="rotor_3" pos="-0.17212 0.17688 0.056">
+                <inertial pos="0 0 0.0062143" quat="-0.0103827 0.707031 0.0103827 0.707031" mass="0.012" diaginertia="5.789e-05 5.76494e-05 4.10648e-07" />
+                <joint name="rotor_joint_3" pos="0 0 0" axis="0 0 1" />
+                <geom type="mesh" contype="1" conaffinity="1" group="1" rgba="0.25098 0.25098 0.25098 1" mesh="rotor_3" />
+                <site name="rotor_joint_thrust3" type="cylinder" size="0.01 0.005" pos="0 0 0" rgba="1 0 0 0.5"/>
+            </body>
+            <body name="rotor_4" pos="-0.17212 -0.17688 0.056">
+                <inertial pos="0 0 0.00621224" quat="0.0104388 0.70703 -0.0104388 0.70703" mass="0.012" diaginertia="5.793e-05 5.76799e-05 4.10086e-07" />
+                <joint name="rotor_joint_4" pos="0 0 0" axis="0 0 1" />
+                <geom type="mesh" contype="1" conaffinity="1" group="1" rgba="0.25098 0.25098 0.25098 1" mesh="rotor_4" />
+                <site name="rotor_joint_thrust4" type="cylinder" size="0.01 0.005" pos="0 0 0" rgba="1 0 0 0.5"/>
+            </body>
+            <body name="link_1" pos="0 0 -0.10331">
+                <inertial pos="0 0.0015687 -0.034602" quat="0.999256 0.0385748 0 0" mass="0.08581" diaginertia="3.717e-05 3.01296e-05 1.84204e-05" />
+                <joint name="joint_1" pos="0 0 0" axis="0 0 1" limited="true" range="-2.8973 2.8973" damping="0.72763" frictionloss="0.068647" />
+                <geom type="mesh" contype="1" conaffinity="1" group="1" rgba="1 1 1 1" mesh="link_1" />
+                <body name="link_2" pos="0 0 -0.04861" quat="-2.59734e-06 -2.59735e-06 0.707108 0.707105">
+                    <inertial pos="-0.0260946 -0.13097 0.00115046" quat="0.618576 0.473741 -0.51792 0.353118" mass="0.11524" diaginertia="0.000254471 0.000252713 4.03853e-05" />
+                    <joint name="joint_2" pos="0 0 0" axis="0 0 1" limited="true" range="-1.7628 1.7628" damping="0.62275" frictionloss="0.098067" />
+                    <geom type="mesh" contype="1" conaffinity="1" group="1" rgba="0.79216 0.81961 0.93333 1" mesh="link_2" />
+                    <body name="link_3" pos="-0.03814 -0.164 0.0002">
+                        <inertial pos="0.0395021 -0.10829 0.00063991" quat="0.488487 0.513244 -0.485818 0.511803" mass="0.0848" diaginertia="0.000517311 0.000512861 1.8818e-05" />
+                        <joint name="joint_3" pos="0 0 0" axis="0 0 1" limited="true" range="0 3.5186" damping="0.72763" frictionloss="0.068647" />
+                        <geom type="mesh" contype="1" conaffinity="1" group="1" rgba="1 1 1 1" mesh="link_3" />
+                        <body name="link_4" pos="0.03582 -0.1935 0.00077" quat="-2.59734e-06 2.59735e-06 0.707108 -0.707105">
+                            <inertial pos="-0.0181121 -5.48e-06 0.0317442" quat="0.703728 -0.063696 -0.0627467 0.704821" mass="0.01547" diaginertia="1.17e-05 1.06262e-05 3.49374e-06" />
+                            <joint name="joint_4" pos="0 0 0" axis="0 0 1" limited="true" range="-2.8973 2.8973" damping="0.13298" frictionloss="0.027851" />
+                            <geom type="mesh" contype="1" conaffinity="1" group="1" rgba="1 1 1 1" mesh="link_4" />
+                            <body name="link_5" pos="0.0044 0 0.02243" quat="0.707105 0.707108 0 0">
+                                <inertial pos="-0.0015718 0.0322801 -0.00038534" quat="0.694561 0.718322 0.0332439 0.0222174" mass="0.00926" diaginertia="4.4213e-06 3.8733e-06 9.55405e-07" />
+                                <joint name="joint_5" pos="0 0 0" axis="0 0 1" limited="true" range="0 1.7628" damping="0.13298" frictionloss="0.027851" />
+                                <geom type="mesh" contype="1" conaffinity="1" group="1" rgba="1 1 1 1" mesh="link_5" />
+                            </body>
+                        </body>
+                    </body>
+                </body>
+            </body>
+        </body>
+    </worldbody>
+    <actuator>
+        <position name="joint_1" joint="joint_1" kp="748.6" kv="0.547" forcerange="-4.905 4.905" ctrlrange="-2.6485 2.6485" />
+        <position name="joint_2" joint="joint_2" kp="524.0" kv="0.727" forcerange="-3.43 3.43" ctrlrange="0 3.4907" />
+        <position name="joint_3" joint="joint_3" kp="524.0" kv="0.727" forcerange="-3.43 3.43" ctrlrange="-2.6485 2.6485" />
+        <position name="joint_4" joint="joint_4" kp="212.6" kv="0.133" forcerange="-1.3916 1.3916" ctrlrange="-3.1416 3.1416" />
+        <position name="joint_5" joint="joint_5" kp="212.6" kv="0.133" forcerange="-1.3916 1.3916" ctrlrange="-1.7628 0.175" />
+    </actuator>
+    <sensor>
+        <framepos name="framepos" objtype="site" objname="base_link_origin" />
+        <framequat name="framequat" objtype="site" objname="base_link_origin" />
+        <velocimeter name="velocimeter" site="base_link_origin" />
+        <gyro name="gyro" site="base_link_origin" />
+    </sensor>
+</mujoco>

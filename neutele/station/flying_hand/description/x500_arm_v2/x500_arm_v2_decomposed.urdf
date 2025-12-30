@@ -1,0 +1,283 @@
+<robot name="x500_arm_v2" version="1.0">
+  <link name="world" />
+  <joint name="floating_base_joint" type="floating">
+    <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" />
+    <parent link="world" />
+    <child link="base_link" />
+  </joint>
+  <link name="base_link">
+    <inertial>
+      <origin xyz="0.01148 0.00041582 -0.038774" rpy="0.0 0.0 0.0" />
+      <mass value="0.76555" />
+      <inertia ixx="0.012839" ixy="8.41e-06" ixz="2.893e-05" iyy="0.013306" iyz="1.75e-06" izz="0.016914" />
+    </inertial>
+    <visual>
+      <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" />
+      <geometry>
+        <mesh filename="package://x500_arm_v2/meshes/base_link.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="1.0 1.0 1.0 1.0" />
+      </material>
+    </visual>
+    <collision><origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" /><geometry><mesh filename="file://G:\NEU_Tele\neutele\station\flying_hand\description\x500_arm_v2\meshes\base_link_0.stl" /></geometry></collision><collision><origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" /><geometry><mesh filename="file://G:\NEU_Tele\neutele\station\flying_hand\description\x500_arm_v2\meshes\base_link_1.stl" /></geometry></collision><collision><origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" /><geometry><mesh filename="file://G:\NEU_Tele\neutele\station\flying_hand\description\x500_arm_v2\meshes\base_link_2.stl" /></geometry></collision><collision><origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" /><geometry><mesh filename="file://G:\NEU_Tele\neutele\station\flying_hand\description\x500_arm_v2\meshes\base_link_3.stl" /></geometry></collision><collision><origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" /><geometry><mesh filename="file://G:\NEU_Tele\neutele\station\flying_hand\description\x500_arm_v2\meshes\base_link_4.stl" /></geometry></collision><collision><origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" /><geometry><mesh filename="file://G:\NEU_Tele\neutele\station\flying_hand\description\x500_arm_v2\meshes\base_link_5.stl" /></geometry></collision><collision><origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" /><geometry><mesh filename="file://G:\NEU_Tele\neutele\station\flying_hand\description\x500_arm_v2\meshes\base_link_6.stl" /></geometry></collision><collision><origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" /><geometry><mesh filename="file://G:\NEU_Tele\neutele\station\flying_hand\description\x500_arm_v2\meshes\base_link_7.stl" /></geometry></collision><collision><origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" /><geometry><mesh filename="file://G:\NEU_Tele\neutele\station\flying_hand\description\x500_arm_v2\meshes\base_link_8.stl" /></geometry></collision><collision><origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" /><geometry><mesh filename="file://G:\NEU_Tele\neutele\station\flying_hand\description\x500_arm_v2\meshes\base_link_9.stl" /></geometry></collision><collision><origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" /><geometry><mesh filename="file://G:\NEU_Tele\neutele\station\flying_hand\description\x500_arm_v2\meshes\base_link_10.stl" /></geometry></collision><collision><origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" /><geometry><mesh filename="file://G:\NEU_Tele\neutele\station\flying_hand\description\x500_arm_v2\meshes\base_link_11.stl" /></geometry></collision><collision><origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" /><geometry><mesh filename="file://G:\NEU_Tele\neutele\station\flying_hand\description\x500_arm_v2\meshes\base_link_12.stl" /></geometry></collision><collision><origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" /><geometry><mesh filename="file://G:\NEU_Tele\neutele\station\flying_hand\description\x500_arm_v2\meshes\base_link_13.stl" /></geometry></collision></link>
+  <link name="rotor_1">
+    <inertial>
+      <origin xyz="0.0 0.0 -0.0062143" rpy="0.0 0.0 0.0" />
+      <mass value="0.012" />
+      <inertia ixx="4.6e-07" ixy="1.68e-06" ixz="0.0" iyy="5.76e-05" iyz="0.0" izz="5.789e-05" />
+    </inertial>
+    <visual>
+      <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" />
+      <geometry>
+        <mesh filename="package://x500_arm_v2/meshes/rotor_1.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="1.0 1.0 1.0 1.0" />
+      </material>
+    </visual>
+    <collision><origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" /><geometry><mesh filename="file://G:\NEU_Tele\neutele\station\flying_hand\description\x500_arm_v2\meshes\rotor_1_0.stl" /></geometry></collision></link>
+  <joint name="rotor_joint_1" type="continuous">
+    <origin xyz="0.17688 -0.17688 0.066" rpy="0.0 0.0 0.0" />
+    <axis xyz="0.0 0.0 1.0" />
+    <parent link="base_link" />
+    <child link="rotor_1" />
+    <limit effort="0.18" lower="0" upper="0" velocity="1032.2" />
+  </joint>
+  <link name="rotor_2">
+    <inertial>
+      <origin xyz="0.0 0.0 -0.0062122" rpy="0.0 0.0 0.0" />
+      <mass value="0.012" />
+      <inertia ixx="4.6e-07" ixy="-1.69e-06" ixz="0.0" iyy="5.763e-05" iyz="0.0" izz="5.793e-05" />
+    </inertial>
+    <visual>
+      <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" />
+      <geometry>
+        <mesh filename="package://x500_arm_v2/meshes/rotor_2.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="1.0 1.0 1.0 1.0" />
+      </material>
+    </visual>
+    <collision><origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" /><geometry><mesh filename="file://G:\NEU_Tele\neutele\station\flying_hand\description\x500_arm_v2\meshes\rotor_2_0.stl" /></geometry></collision></link>
+  <joint name="rotor_joint_2" type="continuous">
+    <origin xyz="0.17688 0.17688 0.066" rpy="0.0 0.0 0.0" />
+    <axis xyz="0.0 0.0 1.0" />
+    <parent link="base_link" />
+    <child link="rotor_2" />
+    <limit effort="0.18" lower="0" upper="0" velocity="1032.2" />
+  </joint>
+  <link name="rotor_3">
+    <inertial>
+      <origin xyz="0.0 0.0 -0.0037857" rpy="0.0 0.0 0.0" />
+      <mass value="0.012" />
+      <inertia ixx="4.6e-07" ixy="-1.68e-06" ixz="0.0" iyy="5.76e-05" iyz="0.0" izz="5.789e-05" />
+    </inertial>
+    <visual>
+      <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" />
+      <geometry>
+        <mesh filename="package://x500_arm_v2/meshes/rotor_3.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="1.0 1.0 1.0 1.0" />
+      </material>
+    </visual>
+    <collision><origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" /><geometry><mesh filename="file://G:\NEU_Tele\neutele\station\flying_hand\description\x500_arm_v2\meshes\rotor_3_0.stl" /></geometry></collision></link>
+  <joint name="rotor_joint_3" type="continuous">
+    <origin xyz="-0.17688 0.17688 0.066" rpy="0.0 0.0 0.0" />
+    <axis xyz="0.0 0.0 1.0" />
+    <parent link="base_link" />
+    <child link="rotor_3" />
+    <limit effort="0.18" lower="0" upper="0" velocity="1032.2" />
+  </joint>
+  <link name="rotor_4">
+    <inertial>
+      <origin xyz="0.0 0.0 -0.0037878" rpy="0.0 0.0 0.0" />
+      <mass value="0.012" />
+      <inertia ixx="4.6e-07" ixy="1.69e-06" ixz="0.0" iyy="5.763e-05" iyz="0.0" izz="5.793e-05" />
+    </inertial>
+    <visual>
+      <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" />
+      <geometry>
+        <mesh filename="package://x500_arm_v2/meshes/rotor_4.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="1.0 1.0 1.0 1.0" />
+      </material>
+    </visual>
+    <collision><origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" /><geometry><mesh filename="file://G:\NEU_Tele\neutele\station\flying_hand\description\x500_arm_v2\meshes\rotor_4_0.stl" /></geometry></collision></link>
+  <joint name="rotor_joint_4" type="continuous">
+    <origin xyz="-0.17688 -0.17688 0.066" rpy="0.0 0.0 0.0" />
+    <axis xyz="0.0 0.0 1.0" />
+    <parent link="base_link" />
+    <child link="rotor_4" />
+    <limit effort="0.18" lower="0" upper="0" velocity="1032.2" />
+  </joint>
+  <link name="link_1">
+    <inertial>
+      <origin xyz="0.023682 -0.16131 -0.00087342" rpy="0.0 0.0 0.0" />
+      <mass value="0.1468" />
+      <inertia ixx="0.0009994" ixy="0.00019641" ixz="2.22e-06" iyy="8.828e-05" iyz="-8.03e-06" izz="0.0010447" />
+    </inertial>
+    <visual>
+      <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" />
+      <geometry>
+        <mesh filename="package://x500_arm_v2/meshes/link_1.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="1.0 1.0 1.0 1.0" />
+      </material>
+    </visual>
+    <collision><origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" /><geometry><mesh filename="file://G:\NEU_Tele\neutele\station\flying_hand\description\x500_arm_v2\meshes\link_1_0.stl" /></geometry></collision><collision><origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" /><geometry><mesh filename="file://G:\NEU_Tele\neutele\station\flying_hand\description\x500_arm_v2\meshes\link_1_1.stl" /></geometry></collision></link>
+  <joint name="joint_1" type="revolute">
+    <origin xyz="0.0 0.0005 -0.098625" rpy="1.5708 0.0 0.0" />
+    <axis xyz="0.0 0.0 1.0" />
+    <parent link="base_link" />
+    <child link="link_1" />
+    <limit effort="4.9008" lower="-2.6485" upper="2.6485" velocity="8.95" />
+    <dynamics damping="0.62275" friction="0.67385" />
+  </joint>
+  <link name="link_2">
+    <inertial>
+      <origin xyz="-0.037783 -0.16226 -0.00087726" rpy="0.0 0.0 0.0" />
+      <mass value="0.1467" />
+      <inertia ixx="0.0014513" ixy="-7.609e-05" ixz="-4.1e-07" iyy="4.144e-05" iyz="-1.015e-05" izz="0.0014495" />
+    </inertial>
+    <visual>
+      <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" />
+      <geometry>
+        <mesh filename="package://x500_arm_v2/meshes/link_2.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="1.0 1.0 1.0 1.0" />
+      </material>
+    </visual>
+    <collision><origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" /><geometry><mesh filename="file://G:\NEU_Tele\neutele\station\flying_hand\description\x500_arm_v2\meshes\link_2_0.stl" /></geometry></collision><collision><origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" /><geometry><mesh filename="file://G:\NEU_Tele\neutele\station\flying_hand\description\x500_arm_v2\meshes\link_2_1.stl" /></geometry></collision></link>
+  <joint name="joint_2" type="revolute">
+    <origin xyz="0.04098 -0.2314 -0.0005" rpy="0.0 0.0 0.0" />
+    <axis xyz="0.0 0.0 1.0" />
+    <parent link="link_1" />
+    <child link="link_2" />
+    <limit effort="3.4305" lower="0.0" upper="3.4907" velocity="4.72" />
+    <dynamics damping="0.72763" friction="0.17591" />
+  </joint>
+  <link name="link_3">
+    <inertial>
+      <origin xyz="0.0 -0.017321 0.0" rpy="0.0 0.0 0.0" />
+      <mass value="0.019" />
+      <inertia ixx="6.84e-06" ixy="0.0" ixz="0.0" iyy="6.18e-06" iyz="0.0" izz="2.16e-06" />
+    </inertial>
+    <visual>
+      <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" />
+      <geometry>
+        <mesh filename="package://x500_arm_v2/meshes/link_3.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="1.0 1.0 1.0 1.0" />
+      </material>
+    </visual>
+    <collision><origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" /><geometry><mesh filename="file://G:\NEU_Tele\neutele\station\flying_hand\description\x500_arm_v2\meshes\link_3_0.stl" /></geometry></collision><collision><origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" /><geometry><mesh filename="file://G:\NEU_Tele\neutele\station\flying_hand\description\x500_arm_v2\meshes\link_3_1.stl" /></geometry></collision><collision><origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" /><geometry><mesh filename="file://G:\NEU_Tele\neutele\station\flying_hand\description\x500_arm_v2\meshes\link_3_2.stl" /></geometry></collision><collision><origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" /><geometry><mesh filename="file://G:\NEU_Tele\neutele\station\flying_hand\description\x500_arm_v2\meshes\link_3_3.stl" /></geometry></collision><collision><origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" /><geometry><mesh filename="file://G:\NEU_Tele\neutele\station\flying_hand\description\x500_arm_v2\meshes\link_3_4.stl" /></geometry></collision></link>
+  <joint name="joint_3" type="revolute">
+    <origin xyz="-0.04098 -0.24861 -0.0005" rpy="0.0 0.0 0.0" />
+    <axis xyz="0.0 0.0 1.0" />
+    <parent link="link_2" />
+    <child link="link_3" />
+    <limit effort="3.4305" lower="-2.6485" upper="2.6485" velocity="4.72" />
+    <dynamics damping="0.72763" friction="0.17591" />
+  </joint>
+  <link name="link_4">
+    <inertial>
+      <origin xyz="1.188e-05 0.019271 0.054255" rpy="0.0 0.0 0.0" />
+      <mass value="0.29148" />
+      <inertia ixx="0.00058159" ixy="-1.3e-07" ixz="0.0" iyy="0.00052282" iyz="-8.507e-05" izz="0.00069684" />
+    </inertial>
+    <visual>
+      <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" />
+      <geometry>
+        <mesh filename="package://x500_arm_v2/meshes/link_4.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="1.0 1.0 1.0 1.0" />
+      </material>
+    </visual>
+    <collision><origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" /><geometry><mesh filename="file://G:\NEU_Tele\neutele\station\flying_hand\description\x500_arm_v2\meshes\link_4_0.stl" /></geometry></collision><collision><origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" /><geometry><mesh filename="file://G:\NEU_Tele\neutele\station\flying_hand\description\x500_arm_v2\meshes\link_4_1.stl" /></geometry></collision><collision><origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" /><geometry><mesh filename="file://G:\NEU_Tele\neutele\station\flying_hand\description\x500_arm_v2\meshes\link_4_2.stl" /></geometry></collision><collision><origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" /><geometry><mesh filename="file://G:\NEU_Tele\neutele\station\flying_hand\description\x500_arm_v2\meshes\link_4_3.stl" /></geometry></collision><collision><origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" /><geometry><mesh filename="file://G:\NEU_Tele\neutele\station\flying_hand\description\x500_arm_v2\meshes\link_4_4.stl" /></geometry></collision><collision><origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" /><geometry><mesh filename="file://G:\NEU_Tele\neutele\station\flying_hand\description\x500_arm_v2\meshes\link_4_5.stl" /></geometry></collision><collision><origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" /><geometry><mesh filename="file://G:\NEU_Tele\neutele\station\flying_hand\description\x500_arm_v2\meshes\link_4_6.stl" /></geometry></collision></link>
+  <joint name="joint_4" type="revolute">
+    <origin xyz="0.0 -0.0259 0.0" rpy="1.5708 1.5708 0.0" />
+    <axis xyz="0.0 0.0 1.0" />
+    <parent link="link_3" />
+    <child link="link_4" />
+    <limit effort="3.4305" lower="-3.1416" upper="3.1416" velocity="4.72" />
+    <dynamics damping="0.72763" friction="0.17591" />
+  </joint>
+  <link name="link_5">
+    <inertial>
+      <origin xyz="0.0 0.0 0.0070928" rpy="0.0 0.0 0.0" />
+      <mass value="0.00636" />
+      <inertia ixx="1.18e-06" ixy="1.95e-06" ixz="0.0" iyy="7.14e-06" iyz="0.0" izz="8.22e-06" />
+    </inertial>
+    <visual>
+      <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" />
+      <geometry>
+        <mesh filename="package://x500_arm_v2/meshes/link_5.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="1.0 1.0 1.0 1.0" />
+      </material>
+    </visual>
+    <collision><origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" /><geometry><mesh filename="file://G:\NEU_Tele\neutele\station\flying_hand\description\x500_arm_v2\meshes\link_5_0.stl" /></geometry></collision><collision><origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" /><geometry><mesh filename="file://G:\NEU_Tele\neutele\station\flying_hand\description\x500_arm_v2\meshes\link_5_1.stl" /></geometry></collision><collision><origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" /><geometry><mesh filename="file://G:\NEU_Tele\neutele\station\flying_hand\description\x500_arm_v2\meshes\link_5_2.stl" /></geometry></collision></link>
+  <joint name="joint_5" type="revolute">
+    <origin xyz="0.0 0.0 0.0687" rpy="0.0 0.0 0.0" />
+    <axis xyz="0.0 0.0 -1.0" />
+    <parent link="link_4" />
+    <child link="link_5" />
+    <limit effort="1.3918" lower="-1.723" upper="0.0" velocity="10.47" />
+    <dynamics damping="0.13298" friction="0.23599" />
+  </joint>
+  <link name="link_gripper_left">
+    <inertial>
+      <origin xyz="-3.32e-06 -0.0056525 -0.010126" rpy="0.0 0.0 0.0" />
+      <mass value="0.02272" />
+      <inertia ixx="1.085e-05" ixy="2.3e-07" ixz="3e-08" iyy="4.01e-06" iyz="-6.3e-07" izz="1.362e-05" />
+    </inertial>
+    <visual>
+      <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" />
+      <geometry>
+        <mesh filename="package://x500_arm_v2/meshes/link_gripper_left.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="1.0 1.0 1.0 1.0" />
+      </material>
+    </visual>
+    <collision><origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" /><geometry><mesh filename="file://G:\NEU_Tele\neutele\station\flying_hand\description\x500_arm_v2\meshes\link_gripper_left_0.stl" /></geometry></collision><collision><origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" /><geometry><mesh filename="file://G:\NEU_Tele\neutele\station\flying_hand\description\x500_arm_v2\meshes\link_gripper_left_1.stl" /></geometry></collision><collision><origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" /><geometry><mesh filename="file://G:\NEU_Tele\neutele\station\flying_hand\description\x500_arm_v2\meshes\link_gripper_left_2.stl" /></geometry></collision><collision><origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" /><geometry><mesh filename="file://G:\NEU_Tele\neutele\station\flying_hand\description\x500_arm_v2\meshes\link_gripper_left_3.stl" /></geometry></collision></link>
+  <joint name="joint_gripper_left" type="prismatic">
+    <origin xyz="0.061275 0.0 0.1047" rpy="-1.5708 0.0 -1.5708" />
+    <axis xyz="0.0 0.0 -1.0" />
+    <parent link="link_4" />
+    <child link="link_gripper_left" />
+    <limit effort="49.06" lower="0.0" upper="0.04225" velocity="0.0297" />
+  </joint>
+  <link name="link_gripper_right">
+    <inertial>
+      <origin xyz="3.32e-06 -0.0056525 0.0089238" rpy="0.0 0.0 0.0" />
+      <mass value="0.02272" />
+      <inertia ixx="1.085e-05" ixy="-2.3e-07" ixz="-3e-08" iyy="4.01e-06" iyz="-6.3e-07" izz="1.362e-05" />
+    </inertial>
+    <visual>
+      <origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" />
+      <geometry>
+        <mesh filename="package://x500_arm_v2/meshes/link_gripper_right.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="1.0 1.0 1.0 1.0" />
+      </material>
+    </visual>
+    <collision><origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" /><geometry><mesh filename="file://G:\NEU_Tele\neutele\station\flying_hand\description\x500_arm_v2\meshes\link_gripper_right_0.stl" /></geometry></collision><collision><origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" /><geometry><mesh filename="file://G:\NEU_Tele\neutele\station\flying_hand\description\x500_arm_v2\meshes\link_gripper_right_1.stl" /></geometry></collision><collision><origin xyz="0.0 0.0 0.0" rpy="0.0 0.0 0.0" /><geometry><mesh filename="file://G:\NEU_Tele\neutele\station\flying_hand\description\x500_arm_v2\meshes\link_gripper_right_2.stl" /></geometry></collision></link>
+  <joint name="joint_gripper_right" type="prismatic">
+    <origin xyz="-0.042225 0.0 0.1047" rpy="-1.5708 0.0 1.5708" />
+    <axis xyz="0.0 0.0 1.0" />
+    <parent link="link_4" />
+    <child link="link_gripper_right" />
+    <limit effort="49.06" lower="-0.04225" upper="0.0" velocity="0.0297" />
+    <mimic joint="joint_gripper_left" multiplier="-1.0" offset="0.0" />
+  </joint>
+</robot>
