@@ -11,7 +11,7 @@ MUJOCO_INSERT = """
 
 # Option settings to be inserted after XML generation
 XML_INSERT_OPTION = """
-    <option timestep="0.005" integrator="implicit" density="1.225" viscosity="1.8e-5"/>
+    <option timestep="0.002" integrator="implicit" density="1.225" viscosity="1.8e-5" cone="elliptic" impratio="10" />
 """
 
 # Asset definitions including meshes and materials
@@ -40,9 +40,10 @@ XML_INSERT_AFTER_WORLD = """
         <position name="joint_1" joint="joint_1" kp="748.6" kv="0.547" forcerange="-4.905 4.905" ctrlrange="-2.6485 2.6485" />
         <position name="joint_2" joint="joint_2" kp="524.0" kv="0.727" forcerange="-3.43 3.43" ctrlrange="0 3.4907" />
         <position name="joint_3" joint="joint_3" kp="524.0" kv="0.727" forcerange="-3.43 3.43" ctrlrange="-2.6485 2.6485" />
-        <position name="joint_4" joint="joint_4" kp="212.6" kv="0.133" forcerange="-1.3916 1.3916" ctrlrange="-3.1416 3.1416" />
-        <position name="joint_5_left" joint="joint_5_left" kp="212.6" kv="0.133" forcerange="-1.3916 1.3916" ctrlrange="0 34.365" />
-        <position name="joint_5_right" joint="joint_5_right" kp="212.6" kv="0.133" forcerange="-1.3916 1.3916" ctrlrange="-34.365 0"/>
+        <position name="joint_4" joint="joint_4" kp="524.0" kv="0.727" forcerange="-3.43 3.43" ctrlrange="-3.1416 3.1416" />
+        <position name="joint_5" joint="joint_5" kp="212.6" kv="0.133" forcerange="-1.3916 1.3916" ctrlrange="-1.723 0" />
+        <position name="joint_gripper_left" joint="joint_gripper_left" kp="2000.0" kv="124.0" forcerange="-49.06 49.06" ctrlrange="0 0.04225" />
+        <position name="joint_gripper_right" joint="joint_gripper_right" kp="2000.0" kv="124.0" forcerange="-49.06 49.06" ctrlrange="-0.04225 0"/>
     </actuator>
     <sensor>
         <framepos name="framepos" objtype="site" objname="base_link_origin" />
@@ -245,9 +246,9 @@ if __name__ == "__main__":
     """
     Main execution block for URDF to MuJoCo XML conversion.
     """
-    target_name = "follower"
+    target_name = "x500_arm_v2"
 
-    urdf_path = f"G://NEU_Tele/neutele/station/flying_hand/urdf/{target_name}/{target_name}.urdf"
-    xml_path = f"G://NEU_Tele/neutele/station/flying_hand/urdf/{target_name}/{target_name}.xml"
+    urdf_path = f"../station/flying_hand/description/{target_name}/{target_name}.urdf"
+    xml_path = f"../station/flying_hand/description/{target_name}/{target_name}.xml"
 
     compile_urdf(urdf_path, xml_path)
