@@ -7,10 +7,12 @@ from typing import Callable, Deque, Dict, Sequence, Tuple
 
 import numpy as np
 from loguru import logger
+from tqdm import tqdm
 
 from neutele.equipment.feetech.feetech_sdk.group_sync_read import GroupSyncRead
 from neutele.equipment.feetech.feetech_sdk.group_sync_write import GroupSyncWrite
 from neutele.equipment.feetech.feetech_sdk.hls import (
+    HLS_GOAL_POSITION_L,
     HLS_GOAL_TORQUE_L,
     HLS_MODE,
     HLS_PRESENT_POSITION_L,
@@ -45,6 +47,8 @@ class FeeTechDriver:
         self._groupSyncWriteModeHandler = GroupSyncWrite(self._packetHandler, HLS_MODE, 1)
         self._groupSyncWriteTorqueEnableHandler = GroupSyncWrite(self._packetHandler, HLS_TORQUE_ENABLE, 1)
         self._groupSyncWriteGoalCurrentHandler = GroupSyncWrite(self._packetHandler, HLS_GOAL_TORQUE_L, 2)
+        self._groupSyncWriteGoalPositionHandler = GroupSyncWrite(self._packetHandler, HLS_GOAL_POSITION_L, 2)
+        self._groupSyncWriteGoalPositionAndCurrentHandler = GroupSyncWrite(self._packetHandler, HLS_GOAL_POSITION_L, 4)
 
         self._position: Dict[int, int] = {}
         self._velocity: Dict[int, int] = {}
@@ -60,10 +64,11 @@ class FeeTechDriver:
         self._comm_thread = Thread(target=self._comm_worker, daemon=True)
         self._comm_thread.start()
 
-        for _ in range(10):
+        print("FeeTechDriver warmup...")
+        for _ in tqdm(range(10)):
             self.get_pos_and_vel()
-        # self.set_torque_enable(self._ids, [TorqueEnable.Disable] * len(self._ids))
-        # self.set_mode(self._ids, [Mode.Position for _ in self._ids])
+        self.set_torque_enable(self._ids, [TorqueEnable.Disable] * len(self._ids))
+        self.set_mode(self._ids, [Mode.Position for _ in self._ids])
 
     def _comm_worker(self):
         while not self._stop_flag.is_set():
@@ -221,6 +226,90 @@ class FeeTechDriver:
 
         self._comm_task_queue.put(task)
 
+    def set_position(self, ids: Sequence[int], goal_positions: Sequence[int]):
+        assert len(ids) == len(goal_positions), "ids and positions must have the same length."
+
+        set_mode_waiting_list = []
+        for ft_id in ids:
+            if self._mode[ft_id] != Mode.Torque:
+                set_mode_waiting_list.append(ft_id)
+        self.set_mode(set_mode_waiting_list, [Mode.Position] * len(set_mode_waiting_list))
+
+        set_torque_enable_waiting_list = []
+        for ft_id in ids:
+            if not self._torque_enable[ft_id] == TorqueEnable.Enable:
+                set_torque_enable_waiting_list.append(ft_id)
+        self.set_torque_enable(
+            set_torque_enable_waiting_list, [TorqueEnable.Enable] * len(set_torque_enable_waiting_list)
+        )
+
+        if not self._groupSyncWriteGoalPositionHandler.avail_flag.is_set():
+            with self._groupSyncWriteGoalPositionHandler.avail_condition:
+                self._groupSyncWriteGoalPositionHandler.avail_condition.wait()
+
+        self._groupSyncWriteGoalPositionHandler.avail_flag.clear()
+        for ft_id, position in zip(ids, goal_positions):
+            position = self._packetHandler.scs_toscs(position, 15)
+            if not self._groupSyncWriteGoalPositionHandler.addParam(
+                ft_id, [self._packetHandler.scs_lobyte(position), self._packetHandler.scs_hibyte(position)]
+            ):
+                logger.error(f"[ID:{ft_id}] groupSyncWriteGoalPosition addparam failed")
+
+        def task():
+            self._groupSyncWriteGoalPositionHandler.txPacket()
+            # if comm_result != COMM_SUCCESS:
+            #     logger.error(self._packetHandler.getTxRxResult(comm_result))
+            self._groupSyncWriteGoalPositionHandler.clearParam()
+
+        self._comm_task_queue.put(task)
+
+    def set_position_and_current(self, ids: Sequence[int], goal_positions: Sequence[int], goal_currents: Sequence[int]):
+        assert (
+            len(ids) == len(goal_positions) == len(goal_currents)
+        ), "ids, positions, and currents must have the same length."
+
+        # print(goal_positions - np.array(list(self._position.values())))
+
+        set_mode_waiting_list = []
+        for ft_id in ids:
+            if self._mode[ft_id] != Mode.Torque:
+                set_mode_waiting_list.append(ft_id)
+        self.set_mode(set_mode_waiting_list, [Mode.Position] * len(set_mode_waiting_list))
+
+        set_torque_enable_waiting_list = []
+        for ft_id in ids:
+            if not self._torque_enable[ft_id] == TorqueEnable.Enable:
+                set_torque_enable_waiting_list.append(ft_id)
+        self.set_torque_enable(
+            set_torque_enable_waiting_list, [TorqueEnable.Enable] * len(set_torque_enable_waiting_list)
+        )
+
+        if not self._groupSyncWriteGoalPositionAndCurrentHandler.avail_flag.is_set():
+            with self._groupSyncWriteGoalPositionAndCurrentHandler.avail_condition:
+                self._groupSyncWriteGoalPositionAndCurrentHandler.avail_condition.wait()
+
+        self._groupSyncWriteGoalPositionAndCurrentHandler.avail_flag.clear()
+        for ft_id, position, current in zip(ids, goal_positions, goal_currents):
+            position = self._packetHandler.scs_toscs(position, 15)
+            if not self._groupSyncWriteGoalPositionAndCurrentHandler.addParam(
+                ft_id,
+                [
+                    self._packetHandler.scs_lobyte(position),
+                    self._packetHandler.scs_hibyte(position),
+                    self._packetHandler.scs_lobyte(current),
+                    self._packetHandler.scs_hibyte(current),
+                ],
+            ):
+                logger.error(f"[ID:{ft_id}] groupSyncWriteGoalPositionAndCurrent addparam failed")
+
+        def task():
+            self._groupSyncWriteGoalPositionAndCurrentHandler.txPacket()
+            # if comm_result != COMM_SUCCESS:
+            #     logger.error(self._packetHandler.getTxRxResult(comm_result))
+            self._groupSyncWriteGoalPositionAndCurrentHandler.clearParam()
+
+        self._comm_task_queue.put(task)
+
     def get_pos_and_vel(self) -> Tuple[Dict[int, int], Dict[int, int]]:
         while True:
             with self._lock:
@@ -244,7 +333,7 @@ class FeeTechDriver:
 
 
 if __name__ == "__main__":
-    driver = FeeTechDriver([0, 1, 2, 3, 4], "COM5")
+    driver = FeeTechDriver([0, 1, 2, 3, 4], "COM6")
     while True:
         print(driver.get_pos_and_vel())
         # print(driver.get_frequency())
