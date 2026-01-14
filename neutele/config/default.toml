@@ -1,11 +1,11 @@
 [basic]
-station_type = "flying_hand"
+station_type = "leader"
 
 [linker.single]
-port = "COM5"
+port = "COM6"
 joint_ids = [0, 1, 2, 3, 4]
-joint_signs = [1, 1, 1, 1, 1]
-home_poses = [0.0, 1.5708, 0.0, 0.0, 0.0]
-dynamic_enable = false
-servo_types = ["HL3950", "HL3930", "HL3930", "HL3915", "HL3915"]
 gripper_ids = [4]
+joint_signs = [1, 1, -1, -1, 1]
+home_poses = [0.0, 0.0, 0.0, 0.0, 0.0]
+dynamic_enable = true
+servo_types = ["HL3915", "HL3915", "HL3915", "HL3915", "HL3915"]
