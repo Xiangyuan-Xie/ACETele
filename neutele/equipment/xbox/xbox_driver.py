@@ -4,7 +4,8 @@ from typing import Dict, Tuple, Union
 
 import numpy as np
 import pygame
-from equipment.base_equipment import BaseEquipment
+
+from neutele.equipment.base_equipment import BaseEquipment
 
 # Mapping of axis indices to human-readable names
 AXIS_MAP = {
