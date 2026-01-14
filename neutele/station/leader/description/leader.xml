@@ -1,0 +1,52 @@
+<mujoco model="leader">
+    <compiler angle="radian" meshdir="meshes/" />
+    <option timestep="0.002" integrator="implicit" density="1.225" viscosity="1.8e-5" cone="elliptic" impratio="10" />
+    <size njmax="500" nconmax="100" />
+    <asset>
+        <texture name="grid" type="2d" builtin="checker" width="512" height="512" rgb1=".1 .2 .3" rgb2=".2 .3 .4"/>
+        <material name="grid" texture="grid" texrepeat="1 1" texuniform="true" reflectance="0.2" specular="1.0" shininess="0.5"/>
+        <mesh name="base_link" file="base_link.STL" />
+        <mesh name="link_1" file="link_1.STL" />
+        <mesh name="link_2" file="link_2.STL" />
+        <mesh name="link_3" file="link_3.STL" />
+        <mesh name="link_4" file="link_4.STL" />
+        <mesh name="link_5" file="link_5.STL" />
+    </asset>
+    <worldbody>
+        <light directional="true" diffuse=".8 .8 .8" specular=".5 .5 .5" pos="0 0 5" dir="0 0 -1" castshadow="true"/>
+        <geom name="floor" type="plane" pos="0 0 0" size="0 0 0.1" contype="1" conaffinity="1" material="grid"/>
+        <geom type="mesh" contype="0" conaffinity="0" group="1" rgba="1 1 1 1" mesh="base_link" />
+        <body name="link_1" pos="-0.00015 0.00015 0.4085" quat="0.707105 0.707108 0 0">
+            <inertial pos="0.015781 -0.095412 -0.0010384" quat="0.685996 0.713848 0.0437486 0.133856" mass="0.05836" diaginertia="5.01659e-05 4.95414e-05 7.72278e-06" />
+            <joint name="joint_1" pos="0 0 0" axis="0 0 1" limited="true" range="-2.6485 2.6485" />
+            <geom type="mesh" contype="0" conaffinity="0" group="1" rgba="1 1 1 1" mesh="link_1" />
+            <body name="link_2" pos="0.02064 -0.1157 -0.00015">
+                <inertial pos="-0.0220268 -0.091935 -0.00115526" quat="0.701324 0.712142 0.0213354 0.0233169" mass="0.05486" diaginertia="0.000118014 0.000116695 6.5904e-06" />
+                <joint name="joint_2" pos="0 0 0" axis="0 0 1" limited="true" range="0 3.4907" />
+                <geom type="mesh" contype="0" conaffinity="0" group="1" rgba="1 1 1 1" mesh="link_2" />
+                <body name="link_3" pos="-0.02034 -0.12431 -0.00015">
+                    <inertial pos="-0.00568309 -0.0286847 -0.00011448" quat="-0.178772 0.684411 0.172009 0.685592" mass="0.04246" diaginertia="9.54019e-06 7.55844e-06 7.13136e-06" />
+                    <joint name="joint_3" pos="0 0 0" axis="0 0 1" limited="true" range="-2.6485 2.6485" />
+                    <geom type="mesh" contype="0" conaffinity="0" group="1" rgba="1 1 1 1" mesh="link_3" />
+                    <body name="link_4" pos="0.00015 -0.044 -0.00015" quat="-2.59734e-06 2.59735e-06 -0.707108 0.707105">
+                        <inertial pos="0.0188368 0.00278372 0.0201721" quat="0.490248 0.500611 0.566471 0.433768" mass="0.0544" diaginertia="6.57005e-05 6.30006e-05 8.70884e-06" />
+                        <joint name="joint_4" pos="0 0 0" axis="0 0 1" limited="true" range="-3.1416 3.1416" />
+                        <geom type="mesh" contype="0" conaffinity="0" group="1" rgba="1 1 1 1" mesh="link_4" />
+                        <body name="link_5" pos="0.0005 0.02005 0.0305" quat="0.707105 -0.707108 0 0">
+                            <inertial pos="0.019361 -0.0083417 -0.0030896" quat="0.121047 0.701759 -0.120671 0.691607" mass="0.0045" diaginertia="2.51045e-06 2.27896e-06 2.60596e-07" />
+                            <joint name="joint_5" pos="0 0 0" axis="0 0 1" limited="true" range="-3.1416 0" />
+                            <geom type="mesh" contype="0" conaffinity="0" group="1" rgba="1 1 1 1" mesh="link_5" />
+                        </body>
+                    </body>
+                </body>
+            </body>
+        </body>
+    </worldbody>
+    <actuator>
+        <motor name="joint_1" joint="joint_1" ctrlrange="-4.905 4.905" />
+        <motor name="joint_2" joint="joint_2" ctrlrange="-3.43 3.43" />
+        <motor name="joint_3" joint="joint_3" ctrlrange="-3.43 3.43" />
+        <motor name="joint_4" joint="joint_4" ctrlrange="-3.43 3.43" />
+        <motor name="joint_5" joint="joint_5" ctrlrange="-3.43 3.43" />
+    </actuator>
+</mujoco>
