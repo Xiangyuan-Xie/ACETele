@@ -182,3 +182,6 @@ data/
 # Video
 image/
 *.mp4
+
+# vscode
+.vscode/
