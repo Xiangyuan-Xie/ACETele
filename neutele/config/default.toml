@@ -1,11 +1,41 @@
+# [basic]
+# station_type = "leader"
+
+# [linker.single]
+# port = "/dev/ttyUSB0"
+# joint_ids = [0, 1, 2, 3, 4]
+# gripper_ids = [4]
+# joint_signs = [1, 1, -1, -1, 1]
+# home_poses = [0.0, 0.0, 0.0, 0.0, 0.0]
+# enable_dynamic = true
+# use_thread_backend = false
+# servo_types = ["HL3915", "HL3915", "HL3915", "HL3915", "HL3915"]
+
+
+# [basic]
+# station_type = "follower"
+
+# [linker.single]
+# port = "/dev/ttyUSB0"
+# joint_ids = [0, 1, 2, 3, 4]
+# gripper_ids = [4]
+# joint_signs = [-1, 1, -1, -1, 1]
+# home_poses = [0.0, 0.0, 0.0, 0.0, 0.0]
+# enable_dynamic = false
+# use_thread_backend = false
+# servo_types = ["HL3915", "HL3915", "HL3915", "HL3915", "HL3915"]
+
+
 [basic]
 station_type = "leader"
 
 [linker.single]
-port = "COM6"
+port = "/dev/ttyUSB0"
 joint_ids = [0, 1, 2, 3, 4]
-gripper_ids = [4]
 joint_signs = [1, 1, -1, -1, 1]
 home_poses = [0.0, 0.0, 0.0, 0.0, 0.0]
-dynamic_enable = true
-servo_types = ["HL3915", "HL3915", "HL3915", "HL3915", "HL3915"]
+gripper_id = 4
+gripper_type = "lite"
+enable_dynamic = false
+use_thread_backend = false
+servo_types = ["HL3950", "HL3930", "HL3915", "HL3915", "HL3915"]

@@ -28,7 +28,7 @@ class LeaderStation(BaseStation):
         )
 
     def act(self) -> Sequence[float]:
-        pos, _ = self._equipments.single_arm.act()
+        pos, _, _ = self._equipments.single_arm.act()
         # pos = np.array([0.0, 0.0, 0.0, 0.0, 1.0])
         # pos = np.array([-1.5708, 3.1416, 0.0, 0.0, 0.0])  # v2
         # pos = np.array([0.0, -0.785, -0.785, 0.0, 0.0])  # v1

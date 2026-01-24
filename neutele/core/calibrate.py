@@ -17,7 +17,7 @@ class Calibration:
             home_poses = (np.array(linker_config["home_poses"]) * 2048.0 / np.pi).astype(int)
             result = driver.calibrate(ids, home_poses)
             if result:
-                pos, _ = driver.get_pos_and_vel()
+                pos, _, _ = driver.get_state()
                 pos = np.array(list(pos.values()))
                 print(f"{linker_name}臂标定完成，当前姿态：{pos}.")
             else:

@@ -18,8 +18,17 @@ KT_MAPPING = {
 }
 
 NO_LOAD_CURRENT = {
+    "HL3950": 330,
+    "HL3930": 150,
     "HL3915": 260,
 }
+
+GRIPPER_ENCODING_SCALE = {
+    "leader": np.pi / 4.0,
+    "lite": 81.0 / 180.0 * np.pi,
+    "nano": np.pi / 2.0,
+}
+GRIPPER_DECODING_SCALE = {k: 1.0 / v for k, v in GRIPPER_ENCODING_SCALE.items()}
 
 
 class Linker(BaseEquipment):
@@ -27,33 +36,38 @@ class Linker(BaseEquipment):
         super().__init__()
         self._ids = np.array(config["joint_ids"])
         self._dof = len(self._ids)
-        self._gripper_ids = np.array(config["gripper_ids"])
+
         self._signs = np.array(config["joint_signs"])
         self._home_poses = np.array(config["home_poses"])
-        self._dynamic_enable = config["dynamic_enable"]
+        self._enable_dynamic = config["enable_dynamic"]
+        self._use_thread_backend = config["use_thread_backend"]
         self._driver = driver if driver is not None else FeeTechDriver(self._ids, config["port"])
 
-        if self._dynamic_enable:
-            self._servo_types = np.array(config["servo_types"])
-            self._torque_current_mapping = np.array([KT_MAPPING[servo] * 1000.0 for servo in self._servo_types])
-            self._no_load_current = np.array([NO_LOAD_CURRENT[servo] for servo in self._servo_types])
+        self._gripper_id = config["gripper_id"]
+        if self._gripper_id >= 0:
+            self._gripper_type = config["gripper_type"]
+            self._gripper_encoding_scale = GRIPPER_ENCODING_SCALE[self._gripper_type]
+            self._gripper_decoding_scale = GRIPPER_DECODING_SCALE[self._gripper_type]
 
-            self._external_torque = np.zeros_like(self._dof)
+        self._servo_types = np.array(config["servo_types"])
+        self._torque_current_mapping = np.array([KT_MAPPING[servo] * 1000.0 for servo in self._servo_types])
+        self._no_load_current = np.array([NO_LOAD_CURRENT[servo] for servo in self._servo_types])
 
-            urdf_model_path = str(
-                (
-                    Path(__file__).resolve().parent.parent
-                    / ".."
-                    / "station"
-                    / station_type
-                    / "description"
-                    / f"{station_type}.urdf"
-                )
+        urdf_model_path = str(
+            (
+                Path(__file__).resolve().parent.parent
+                / ".."
+                / "station"
+                / station_type
+                / "description"
+                / f"{station_type}.urdf"
             )
-            urdf_model_dir = os.path.dirname(urdf_model_path)
-            self.pin_model, _, _ = pin.buildModelsFromUrdf(filename=urdf_model_path, package_dirs=urdf_model_dir)
-            self.pin_data = self.pin_model.createData()
+        )
+        urdf_model_dir = os.path.dirname(urdf_model_path)
+        self.pin_model, _, _ = pin.buildModelsFromUrdf(filename=urdf_model_path, package_dirs=urdf_model_dir)
+        self.pin_data = self.pin_model.createData()
 
+        if self._enable_dynamic:
             self.null_space_joint_target = self._home_poses
             self.null_space_kp = 0.1
             self.null_space_kd = 0.01
@@ -64,27 +78,54 @@ class Linker(BaseEquipment):
             self.stiction_comp_enable_speed = 0.9
             self.stiction_comp_gain = 0.6
 
+            self._feedback_external_torque = np.zeros_like(self._dof)
             self.torque_feedback_scalar = 0.05
             self.torque_feedback_damping = 0.0
 
-            self._lock = Lock()
-            self._stop_flag = Event()
-            self._control_thread = Thread(target=self._control_loop, daemon=True)
-            self._control_thread.start()
+            if self._use_thread_backend:
+                self._lock = Lock()
+                self._stop_flag = Event()
+                self._control_thread = Thread(target=self._control_loop, daemon=True)
+                self._control_thread.start()
 
-    def act(self, encode_gripper: bool = True) -> Tuple[np.ndarray[float], np.ndarray[float]]:
-        encoded_pos, encoded_vel = self._driver.get_pos_and_vel()
+            self.K = np.eye(self._dof) * 15.0  # Observer gain
+            self.p_hat = np.zeros(self._dof)  # Estimated momentum
+            self.ee_frame_id = self.pin_model.getFrameId("link_5")  # End-effector frame ID
+            self.viscous_friction_gain = 0.02
+
+    def act(
+        self, encode_gripper: bool = True, cal_torque_sign: bool = False
+    ) -> Tuple[Sequence[float], Sequence[float], Sequence[float]]:
+        encoded_pos, encoded_vel, encoded_current = self._driver.get_state()
 
         positions = np.array(list(encoded_pos.values())) * self._signs * np.pi / 2048.0
-        positions[positions > np.pi] -= 2 * np.pi
-        positions[positions < -np.pi] += 2 * np.pi
         if encode_gripper:
-            gripper_mask = np.isin(self._ids, self._gripper_ids)
-            positions[gripper_mask] = 1.0 - np.clip(positions[gripper_mask] / (np.pi / 4.0), 0.0, 1.0)
+            positions = self._encode_gripper(positions)
 
         velocities = np.array(list(encoded_vel.values())) * self._signs * 0.732 * np.pi / 30
 
-        return positions, velocities
+        currents = np.array(list(encoded_current.values())) * 6.5
+        torques_kgcmf_mag = np.maximum(np.abs(currents) - self._no_load_current, 0.0) / self._torque_current_mapping
+        torques_Nm_mag = torques_kgcmf_mag * 0.0981
+
+        if cal_torque_sign:
+            if not self._enable_dynamic:
+                pin.rnea(self.pin_model, self.pin_data, positions, velocities, np.zeros_like(velocities))
+            torques_Nm = torques_Nm_mag * np.sign(self.pin_data.tau) * -self._signs
+            return positions, velocities, torques_Nm
+        else:
+            return positions, velocities, torques_Nm_mag
+
+    def _encode_gripper(self, positions: Sequence[float]):
+        if self._gripper_id >= 0:
+            positions_array = np.asarray(positions)
+            gripper = positions_array[-1] % (2 * np.pi)
+            if gripper > np.pi:
+                gripper -= 2 * np.pi
+            elif gripper <= -np.pi:
+                gripper += 2 * np.pi
+            positions_array[-1] = np.clip(gripper * self._gripper_encoding_scale, 0.0, 1.0)
+        return positions_array
 
     def set_torque(self, torques: Sequence[float], ids: Optional[Sequence[int]] = None):
         if ids is None:
@@ -111,13 +152,10 @@ class Linker(BaseEquipment):
         assert np.all(np.isin(ids, self._ids)), "ids is illegal."
 
         positions_array = np.asarray(positions)
-        if encode_gripper:
-            gripper_mask = np.isin(ids, self._gripper_ids)
-            assert 0.0 <= positions_array[gripper_mask] <= 1.0, "gripper id out of range."
-            positions_array[gripper_mask] *= np.pi / 4.0 * self._signs[gripper_mask]
-        encoded_positions = np.around(
-            positions_array * self._signs[np.searchsorted(ids, self._ids)] * 2048.0 / np.pi
-        ).astype(int)
+        signs = self._signs[np.searchsorted(self._ids, ids)]
+        if encode_gripper and self._gripper_id >= 0 and self._gripper_id in ids:
+            positions_array[-1] *= self._gripper_decoding_scale * signs[-1]
+        encoded_positions = np.around(positions_array * signs * 2048.0 / np.pi).astype(int)
         self._driver.set_position(ids, encoded_positions)
 
     def set_position_and_torque(
@@ -134,13 +172,14 @@ class Linker(BaseEquipment):
         assert np.all(np.isin(ids, self._ids)), "ids is illegal."
 
         positions_array = np.asarray(positions)
-        if encode_gripper:
-            gripper_mask = np.isin(ids, self._gripper_ids)
-            assert 0.0 <= positions_array[gripper_mask] <= 1.0, "gripper id out of range."
-            positions_array[gripper_mask] *= np.pi / 4.0 * self._signs[gripper_mask]
-        encoded_positions = np.around(
-            positions_array * self._signs[np.searchsorted(ids, self._ids)] * 2048.0 / np.pi
-        ).astype(int)
+        signs = self._signs[np.searchsorted(self._ids, ids)]
+        if encode_gripper and self._gripper_id >= 0 and self._gripper_id in ids:
+            positions_array[-1] *= self._gripper_decoding_scale * signs[-1]
+        encoded_positions = np.around(positions_array * signs * 2048.0 / np.pi).astype(int)
+
+        current_positions_dict, _, _ = self._driver.get_state()
+        current_positions_array = np.array([current_positions_dict[ft_id] for ft_id in ids])
+        encoded_positions += np.round((current_positions_array - encoded_positions) / 4096.0).astype(int) * 4096
 
         torques_Nm = np.asarray(torques)
         torques_kgcmf = torques_Nm / 0.0981
@@ -153,18 +192,18 @@ class Linker(BaseEquipment):
         self,
         positions: Sequence[float],
         ids: Optional[Sequence[int]] = None,
-        step_size: float = 0.02,
+        step_size: float = 0.01,
         min_steps: int = 2,
         max_steps: int = 100,
     ) -> float:
         if ids is None:
             ids = self._ids
 
+        current_pos, _, _ = self.act()
         target_pos = np.asarray(positions)
-        current_pos, _ = self.act()
-        errors = np.abs(target_pos - current_pos)
+        errors = (target_pos - current_pos + np.pi / 2) % (2 * np.pi) - np.pi / 2
 
-        max_error = np.max(errors)
+        max_error = np.max(np.abs(errors))
         if max_error < 0.001:
             self.set_position(ids=ids, positions=positions)
             return 1
@@ -174,7 +213,7 @@ class Linker(BaseEquipment):
 
         for i in range(num_steps + 1):
             t = i / num_steps
-            interp_pos = current_pos + (target_pos - current_pos) * t
+            interp_pos = current_pos + errors * t
             self.set_position(ids=ids, positions=interp_pos)
 
         return num_steps
@@ -183,7 +222,7 @@ class Linker(BaseEquipment):
         return self._driver.get_frequency()
 
     def close(self):
-        if self._dynamic_enable:
+        if self._enable_dynamic and self._use_thread_backend:
             self._stop_flag.set()
             self._control_thread.join()
             # self._driver.set_torque_enable(self._ids, [TorqueEnable.Disable] * len(self._ids))
@@ -193,50 +232,98 @@ class Linker(BaseEquipment):
 
     def apply_torque_feedback(self, external_torque: Sequence[float]):
         with self._lock:
-            self._external_torque = external_torque
+            self._feedback_external_torque = external_torque
 
     def _control_loop(self):
         while not self._stop_flag.is_set():
-            pos, vel = self.act(encode_gripper=False)
+            joint_pos, joint_vel, _ = self.act(encode_gripper=False)
 
-            tau_n = self._null_space_regulation(pos, vel)  # 零空间投影
-            tau_g = self._gravity_compensation(pos, vel)  # 重力补偿
-            tau_ss = self._friction_compensation(tau_g, vel)  # 摩擦力补偿
-            tau_fb = self._torque_feedback(vel)  # 力反馈
+            tau_n = self._null_space_regulation(joint_pos, joint_vel)  # 零空间投影
+            tau_g = self._gravity_compensation(joint_pos, joint_vel)  # 重力补偿
+            tau_ss = self._friction_compensation(tau_g, joint_vel)  # 摩擦力补偿
+            tau_fb = self._torque_feedback(joint_vel)  # 力反馈
             tau = tau_n + tau_g + tau_ss + tau_fb
             self.set_torque(tau)
             # self.set_position_and_torque(positions=pos, torques=tau, encode_gripper=False)
 
             time.sleep(0.01)
 
-    def _null_space_regulation(self, arm_joint_pos, arm_joint_vel):
-        J = pin.computeJointJacobian(self.pin_model, self.pin_data, arm_joint_pos, self._dof)
+    def _null_space_regulation(self, joint_pos, joint_vel):
+        J = pin.computeJointJacobian(self.pin_model, self.pin_data, joint_pos, self._dof)
         J_dagger = np.linalg.pinv(J)
         null_space_projector = np.eye(self._dof) - J_dagger @ J
-        q_error = arm_joint_pos - self.null_space_joint_target
-        tau_n = null_space_projector @ (-self.null_space_kp * q_error - self.null_space_kd * arm_joint_vel)
+        q_error = joint_pos - self.null_space_joint_target
+        tau_n = null_space_projector @ (-self.null_space_kp * q_error - self.null_space_kd * joint_vel)
         return tau_n
 
-    def _gravity_compensation(self, arm_joint_pos, arm_joint_vel):
-        tau_g = pin.rnea(self.pin_model, self.pin_data, arm_joint_pos, arm_joint_vel, np.zeros_like(arm_joint_vel))
+    def _gravity_compensation(self, joint_pos, joint_vel):
+        tau_g = pin.rnea(self.pin_model, self.pin_data, joint_pos, joint_vel, np.zeros_like(joint_vel))
         tau_g *= self.gravity_comp_modifier
         return tau_g
 
-    def _friction_compensation(self, tau_g, arm_joint_vel):
+    def _friction_compensation(self, tau_g, joint_vel):
         tau_ss = np.zeros(self._dof)
+
+        kv = self.pin_model.damping
+        kc = self.pin_model.friction
+
         for i in range(self._dof):
-            if abs(arm_joint_vel[i]) < self.stiction_comp_enable_speed:
+            if abs(joint_vel[i]) < self.stiction_comp_enable_speed:
                 if self.stiction_dither_flag[i]:
                     tau_ss[i] += self.stiction_comp_gain * abs(tau_g[i])
                 else:
                     tau_ss[i] -= self.stiction_comp_gain * abs(tau_g[i])
                 self.stiction_dither_flag[i] = ~self.stiction_dither_flag[i]
+            else:
+                tau_ss[i] = kc[i] * np.sign(joint_vel[i]) + kv[i] * joint_vel[i]
         return tau_ss
 
-    def _torque_feedback(self, arm_joint_vel):
-        tau_fb = self.torque_feedback_scalar * self._external_torque
-        tau_fb -= self.torque_feedback_damping * arm_joint_vel
+    def _torque_feedback(self, joint_vel):
+        tau_fb = self.torque_feedback_scalar * self._feedback_external_torque - self.torque_feedback_damping * joint_vel
         return tau_fb
+
+    def _momentum_observer_step(self, joint_pos, joint_vel, joint_effort, dt):
+        pin.computeAllTerms(self.pin_model, self.pin_data, joint_pos, joint_vel)
+
+        M = self.pin_data.M
+        g = self.pin_data.g
+
+        # C^T * q_dot term
+        C = self.pin_data.C
+        beta = C.T @ joint_vel
+
+        p = M @ joint_vel
+
+        # Friction compensation
+        tau_f = self.stiction_comp_gain * np.sign(joint_vel) + self.viscous_friction_gain * joint_vel
+
+        # Momentum observer update
+        # p_hat_dot = tau - tau_f - g + C^T*v + K*(p - p_hat)
+        p_hat_dot = joint_effort - tau_f - g + beta + self.K @ (p - self.p_hat)
+        self.p_hat += p_hat_dot * dt
+
+        tau_ext_hat = self.K @ (p - self.p_hat)
+
+        return tau_ext_hat
+
+    def estimate_joint_external_torque(self, joint_pos, joint_vel, joint_effort, dt):
+        tau_ext = self._momentum_observer_step(joint_pos, joint_vel, joint_effort, dt)
+        return tau_ext
+
+    def estimate_ee_external_wrench(self, joint_pos, joint_vel, joint_effort, dt):
+        tau_ext = self._momentum_observer_step(joint_pos, joint_vel, joint_effort, dt)
+
+        pin.computeJointJacobians(self.pin_model, self.pin_data, joint_pos)
+        pin.updateFramePlacements(self.pin_model, self.pin_data)
+
+        J = pin.getFrameJacobian(
+            self.pin_model, self.pin_data, self.ee_frame_id, pin.ReferenceFrame.LOCAL_WORLD_ALIGNED
+        )
+
+        # Use pseudo-inverse to map joint torques to end-effector wrench
+        # J.T * f_ext = tau_ext  => f_ext = (J.T)^+ * tau_ext
+        f_ext = np.linalg.pinv(J.T) @ tau_ext
+        return f_ext
 
 
 if __name__ == "__main__":
@@ -245,8 +332,8 @@ if __name__ == "__main__":
     try:
         with np.printoptions(suppress=True):
             while True:
-                # linker.act(encode_gripper=False)
-                print(np.around(linker.act(encode_gripper=False), 4))
+                # print(np.around(linker.act(encode_gripper=False), 4))
+                print(np.around(linker.act(), 4))
                 time.sleep(0.05)
     except Exception as e:
         raise e
