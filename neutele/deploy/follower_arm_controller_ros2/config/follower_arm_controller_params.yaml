@@ -1,0 +1,13 @@
+follower_arm_controller:
+  ros__parameters:
+    control_rate: 500.0
+    station_type: "follower"
+    port: "/dev/ttyUSB0"
+    joint_ids: [0, 1, 2, 3, 4]
+    gripper_id: 4
+    gripper_type: "lite"
+    joint_signs: [-1, 1, -1, -1, 1]
+    home_poses: [-1.5, 3.1, 0.0, 0.0, 1.0]
+    enable_dynamic: false
+    use_thread_backend: false
+    servo_types: ["HL3915", "HL3915", "HL3915", "HL3915", "HL3915"]
