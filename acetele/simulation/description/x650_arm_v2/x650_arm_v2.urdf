@@ -1,0 +1,589 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- This URDF was automatically created by SolidWorks to URDF Exporter! Originally created by Stephen Brawner (brawner@gmail.com)
+     Commit Version: 1.6.0-4-g7f85cfe  Build Version: 1.6.7995.38578
+     For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
+<robot
+  name="x650_arm_v2">
+  <link
+    name="world"/>
+  <joint
+    name="floating_base_joint"
+    type="floating">
+    <origin
+      xyz="0 0 0"
+      rpy="0 0 0" />
+    <parent
+      link="world" />
+    <child
+      link="base_link" />
+  </joint>
+  <link
+    name="base_link">
+    <inertial>
+      <origin
+        xyz="0.012342 0.00046104 -0.055319"
+        rpy="0 0 0" />
+      <mass
+        value="0.88997" />
+      <inertia
+        ixx="0.027411"
+        ixy="1.283E-05"
+        ixz="-9.574E-05"
+        iyy="0.026597"
+        iyz="-3.68E-06"
+        izz="0.028055" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://x650_arm_v2/meshes/base_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://x650_arm_v2/meshes/base_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <link
+    name="rotor_1">
+    <inertial>
+      <origin
+        xyz="0 0 0.001"
+        rpy="0 0 0" />
+      <mass
+        value="0.0011466" />
+      <inertia
+        ixx="4E-08"
+        ixy="0"
+        ixz="0"
+        iyy="9E-08"
+        iyz="0"
+        izz="1.3E-07" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://x650_arm_v2/meshes/rotor_1.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://x650_arm_v2/meshes/rotor_1.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="rotor_joint_1"
+    type="continuous">
+    <origin
+      xyz="0.22991 -0.22991 0.0635"
+      rpy="0 0 0" />
+    <parent
+      link="base_link" />
+    <child
+      link="rotor_1" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      effort="0.42"
+      velocity="628.32" />
+  </joint>
+  <link
+    name="rotor_2">
+    <inertial>
+      <origin
+        xyz="0 0 0.001"
+        rpy="0 0 0" />
+      <mass
+        value="0.0011466" />
+      <inertia
+        ixx="4E-08"
+        ixy="0"
+        ixz="0"
+        iyy="9E-08"
+        iyz="0"
+        izz="1.3E-07" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://x650_arm_v2/meshes/rotor_2.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://x650_arm_v2/meshes/rotor_2.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="rotor_joint_2"
+    type="continuous">
+    <origin
+      xyz="0.22991 0.22991 0.0635"
+      rpy="0 0 0" />
+    <parent
+      link="base_link" />
+    <child
+      link="rotor_2" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      effort="0.42"
+      velocity="628.32" />
+  </joint>
+  <link
+    name="rotor_3">
+    <inertial>
+      <origin
+        xyz="0 0 0.001"
+        rpy="0 0 0" />
+      <mass
+        value="0.0011466" />
+      <inertia
+        ixx="4E-08"
+        ixy="0"
+        ixz="0"
+        iyy="9E-08"
+        iyz="0"
+        izz="1.3E-07" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://x650_arm_v2/meshes/rotor_3.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://x650_arm_v2/meshes/rotor_3.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="rotor_joint_3"
+    type="continuous">
+    <origin
+      xyz="-0.22991 0.22991 0.0635"
+      rpy="0 0 0" />
+    <parent
+      link="base_link" />
+    <child
+      link="rotor_3" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      effort="0.42"
+      velocity="628.32" />
+  </joint>
+  <link
+    name="rotor_4">
+    <inertial>
+      <origin
+        xyz="0 0 0.001"
+        rpy="0 0 0" />
+      <mass
+        value="0.0011466" />
+      <inertia
+        ixx="4E-08"
+        ixy="0"
+        ixz="0"
+        iyy="9E-08"
+        iyz="0"
+        izz="1.3E-07" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://x650_arm_v2/meshes/rotor_4.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://x650_arm_v2/meshes/rotor_4.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="rotor_joint_4"
+    type="continuous">
+    <origin
+      xyz="-0.22991 -0.22991 0.0635"
+      rpy="0 0 0" />
+    <parent
+      link="base_link" />
+    <child
+      link="rotor_4" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      effort="0.42"
+      velocity="628.32" />
+  </joint>
+  <link
+    name="link_1">
+    <inertial>
+      <origin
+        xyz="0.023682 -0.16131 -0.00087342"
+        rpy="0 0 0" />
+      <mass
+        value="0.1468" />
+      <inertia
+        ixx="0.0009994"
+        ixy="0.00019641"
+        ixz="2.22E-06"
+        iyy="8.828E-05"
+        iyz="-8.03E-06"
+        izz="0.0010447" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://x650_arm_v2/meshes/link_1.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://x650_arm_v2/meshes/link_1.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="joint_1"
+    type="revolute">
+    <origin
+      xyz="0 0.0005 -0.13211"
+      rpy="1.5708 0 0" />
+    <parent
+      link="base_link" />
+    <child
+      link="link_1" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-2.6485"
+      upper="2.6485"
+      effort="4.9008"
+      velocity="8.95" />
+    <dynamics
+      damping="0.62275"
+      friction="0.098067" />
+  </joint>
+  <link
+    name="link_2">
+    <inertial>
+      <origin
+        xyz="-0.037783 -0.16226 -0.00087726"
+        rpy="0 0 0" />
+      <mass
+        value="0.1467" />
+      <inertia
+        ixx="0.0014513"
+        ixy="-7.609E-05"
+        ixz="-4.1E-07"
+        iyy="4.144E-05"
+        iyz="-1.015E-05"
+        izz="0.0014495" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://x650_arm_v2/meshes/link_2.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://x650_arm_v2/meshes/link_2.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="joint_2"
+    type="revolute">
+    <origin
+      xyz="0.04098 -0.2314 -0.0005"
+      rpy="0 0 0" />
+    <parent
+      link="link_1" />
+    <child
+      link="link_2" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="0"
+      upper="3.4907"
+      effort="3.4305"
+      velocity="4.72" />
+    <dynamics
+      damping="0.72763"
+      friction="0.068647" />
+  </joint>
+  <link
+    name="link_3">
+    <inertial>
+      <origin
+        xyz="0.0040244 -0.039487 -4.87E-06"
+        rpy="0 0 0" />
+      <mass
+        value="0.0618" />
+      <inertia
+        ixx="2.639E-05"
+        ixy="2.57E-06"
+        ixz="0"
+        iyy="1.354E-05"
+        iyz="0"
+        izz="2.514E-05" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://x650_arm_v2/meshes/link_3.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://x650_arm_v2/meshes/link_3.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="joint_3"
+    type="revolute">
+    <origin
+      xyz="-0.04098 -0.24861 -0.0005"
+      rpy="0 0 0" />
+    <parent
+      link="link_2" />
+    <child
+      link="link_3" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-2.6485"
+      upper="2.6485"
+      effort="3.4305"
+      velocity="4.72" />
+    <dynamics
+      damping="0.72763"
+      friction="0.068647" />
+  </joint>
+  <link
+    name="link_4">
+    <inertial>
+      <origin
+        xyz="0.012935 0.00072181 0.028883"
+        rpy="0 0 0" />
+      <mass
+        value="0.022338" />
+      <inertia
+        ixx="1.164E-05"
+        ixy="1.7E-07"
+        ixz="-1.99E-06"
+        iyy="1.445E-05"
+        iyz="1.2E-07"
+        izz="6.34E-06" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://x650_arm_v2/meshes/link_4.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://x650_arm_v2/meshes/link_4.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="joint_4"
+    type="revolute">
+    <origin
+      xyz="0 -0.0639 0"
+      rpy="1.5708 -1.5708 0" />
+    <parent
+      link="link_3" />
+    <child
+      link="link_4" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-3.1416"
+      upper="3.1416"
+      effort="1.3918"
+      velocity="10.47" />
+    <dynamics
+      damping="0.13298"
+      friction="0.027851" />
+  </joint>
+  <link
+    name="link_5">
+    <inertial>
+      <origin
+        xyz="0.0015718 -0.03228 -0.00038534"
+        rpy="0 0 0" />
+      <mass
+        value="0.00926" />
+      <inertia
+        ixx="4.4E-06"
+        ixy="2.7E-07"
+        ixz="0"
+        iyy="9.8E-07"
+        iyz="1E-07"
+        izz="3.87E-06" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://x650_arm_v2/meshes/link_5.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://x650_arm_v2/meshes/link_5.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="joint_5"
+    type="revolute">
+    <origin
+      xyz="-0.0044 0 0.02243"
+      rpy="-1.5708 0 0" />
+    <parent
+      link="link_4" />
+    <child
+      link="link_5" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="0"
+      upper="1.7628"
+      effort="1.3918"
+      velocity="10.47" />
+    <dynamics
+      damping="0.13298"
+      friction="0.027851" />
+  </joint>
+</robot>
