@@ -1,0 +1,3 @@
+[submodule "acetele/deploy/realsense-ros"]
+	path = acetele/deploy/realsense-ros
+	url = https://github.com/realsenseai/realsense-ros.git
