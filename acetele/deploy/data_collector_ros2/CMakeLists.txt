@@ -1,39 +1,53 @@
 cmake_minimum_required(VERSION 3.8)
-project(camera_sender_ros2)
+project(data_collector_ros2)
+
+# Enable Qt MOC
+set(CMAKE_AUTOMOC ON)
+set(CMAKE_AUTOUIC ON)
+set(CMAKE_AUTORCC ON)
 
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
-# find dependencies
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(realsense2_camera_msgs REQUIRED)
 find_package(cv_bridge REQUIRED)
 find_package(image_transport REQUIRED)
 find_package(OpenCV REQUIRED)
-find_package(realsense2 REQUIRED)
+find_package(Qt5 COMPONENTS Widgets Core Gui REQUIRED)
 
-add_executable(camera_sender src/camera_sender.cpp)
-target_include_directories(camera_sender PUBLIC
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-  $<INSTALL_INTERFACE:include>)
-
-target_link_libraries(camera_sender
-  ${OpenCV_LIBRARIES}
-  ${realsense2_LIBRARY}
+add_executable(data_collector
+  src/data_collector_main.cpp
+  src/data_collector_node.cpp
+  src/data_collector_gui.cpp
 )
 
-ament_target_dependencies(camera_sender
+target_include_directories(data_collector PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
+  $<INSTALL_INTERFACE:include>)
+
+target_link_libraries(data_collector
+  ${OpenCV_LIBRARIES}
+  Qt5::Widgets
+  Qt5::Core
+  Qt5::Gui
+)
+
+ament_target_dependencies(data_collector
   rclcpp
   std_msgs
   sensor_msgs
+  realsense2_camera_msgs
   cv_bridge
   image_transport
 )
 
-install(TARGETS camera_sender
+install(TARGETS data_collector
   DESTINATION lib/${PROJECT_NAME})
 
 ament_package()

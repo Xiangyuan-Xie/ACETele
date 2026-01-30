@@ -1,10 +1,10 @@
 <?xml version="1.0"?>
 <package format="3">
-  <name>camera_receiver_ros2</name>
+  <name>data_collector_ros2</name>
   <version>0.0.1</version>
-  <description>C++ ROS2 package for receiving H.264 RGB and ROS2 Depth</description>
+  <description>C++ ROS2 package for receiving and collecting RGB-D data for model training</description>
 
-  <maintainer email="user@example.com">User</maintainer>
+  <maintainer email="dragonboat_xxy@163.com">Xiangyuan Xie</maintainer>
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
@@ -12,8 +12,11 @@
   <depend>rclcpp</depend>
   <depend>std_msgs</depend>
   <depend>sensor_msgs</depend>
+  <depend>realsense2_camera_msgs</depend>
   <depend>cv_bridge</depend>
   <depend>image_transport</depend>
+  <depend>libopencv-dev</depend>
+  <depend>qtbase5-dev</depend>
 
   <export>
     <build_type>ament_cmake</build_type>
