@@ -10,11 +10,11 @@ from acetele.equipment.feetech.linker import Linker
 class LeaderArmControllerNode(Node, Linker):
     def __init__(self):
         Node.__init__(self, "leader_arm_controller_node")
-        self.config_loader = ConfigLoader(config_name="leader.toml")
-        station_type, _ = self.config_loader.get_station_info()
+        self.config_loader = ConfigLoader()
+        station_type = self.config_loader.get_station_type()
         linker_config = self.config_loader.get_linker_config()
         Linker.__init__(self, station_type, linker_config)
-        self.declare_parameter("control_rate", 500.0)
+        self.declare_parameter("control_rate", 250.0)
         self.control_rate = self.get_parameter("control_rate").value
 
         qos = QoSProfile(depth=10)

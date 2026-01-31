@@ -15,6 +15,9 @@ class ConfigLoader:
         with open(config_path, "rb") as f:
             self.config = tomli.load(f)
 
+    def get_station_type(self) -> str:
+        return self.config["basic"]["station_type"]
+
     def get_station_info(self) -> Tuple[str, str]:
         return STATION_MAP[self.config["basic"]["station_type"]]
 

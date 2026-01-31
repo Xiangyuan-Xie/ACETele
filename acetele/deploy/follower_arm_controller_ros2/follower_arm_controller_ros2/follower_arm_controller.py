@@ -10,8 +10,8 @@ from acetele.equipment.feetech.linker import Linker
 class FollowerArmControllerNode(Node, Linker):
     def __init__(self):
         Node.__init__(self, "follower_arm_controller_node")
-        self.config_loader = ConfigLoader(config_name="follower.toml")
-        station_name, _ = self.config_loader.get_station_info()
+        self.config_loader = ConfigLoader()
+        station_name = self.config_loader.get_station_type()
         linker_config = self.config_loader.get_linker_config()
         Linker.__init__(self, station_name, linker_config)
         self.declare_parameter("control_rate", 500.0)

@@ -263,10 +263,6 @@ class Linker(BaseEquipment):
 
     def _friction_compensation(self, tau_g, joint_vel):
         tau_ss = np.zeros(self._dof)
-
-        kv = self.pin_model.damping
-        kc = self.pin_model.friction
-
         for i in range(self._dof):
             if abs(joint_vel[i]) < self.stiction_comp_enable_speed:
                 if self.stiction_dither_flag[i]:
@@ -274,8 +270,6 @@ class Linker(BaseEquipment):
                 else:
                     tau_ss[i] -= self.stiction_comp_gain * abs(tau_g[i])
                 self.stiction_dither_flag[i] = ~self.stiction_dither_flag[i]
-            else:
-                tau_ss[i] = kc[i] * np.sign(joint_vel[i]) + kv[i] * joint_vel[i]
         return tau_ss
 
     def _torque_feedback(self, joint_vel):
