@@ -1,42 +1,19 @@
-from typing import Any, Dict
-
 import rclpy
 from rclpy.node import Node
-from rclpy.parameter import Parameter
 from rclpy.qos import QoSProfile
 from sensor_msgs.msg import JointState
 
+from acetele.config.config_loader import ConfigLoader
 from acetele.equipment.feetech.linker import Linker
 
 
 class FollowerArmControllerNode(Node, Linker):
     def __init__(self):
         Node.__init__(self, "follower_arm_controller_node")
-        self.declare_parameter("station_type", Parameter.Type.STRING)
-        self.declare_parameter("port", Parameter.Type.STRING)
-        self.declare_parameter("joint_ids", Parameter.Type.INTEGER_ARRAY)
-        self.declare_parameter("gripper_id", Parameter.Type.INTEGER)
-        self.declare_parameter("gripper_type", Parameter.Type.STRING)
-        self.declare_parameter("joint_signs", Parameter.Type.INTEGER_ARRAY)
-        self.declare_parameter("home_poses", Parameter.Type.DOUBLE_ARRAY)
-        self.declare_parameter("enable_dynamic", Parameter.Type.BOOL)
-        self.declare_parameter("use_thread_backend", Parameter.Type.BOOL)
-        self.declare_parameter("servo_types", Parameter.Type.STRING_ARRAY)
-
-        station_type = self.get_parameter("station_type").value
-        linker_config: Dict[str, Any] = {
-            "port": self.get_parameter("port").value,
-            "joint_ids": self.get_parameter("joint_ids").value,
-            "gripper_id": self.get_parameter("gripper_id").value,
-            "gripper_type": self.get_parameter("gripper_type").value,
-            "joint_signs": self.get_parameter("joint_signs").value,
-            "home_poses": self.get_parameter("home_poses").value,
-            "enable_dynamic": self.get_parameter("enable_dynamic").value,
-            "use_thread_backend": self.get_parameter("use_thread_backend").value,
-            "servo_types": self.get_parameter("servo_types").value,
-        }
-
-        Linker.__init__(self, station_type, linker_config)
+        self.config_loader = ConfigLoader(config_name="follower.toml")
+        station_name, _ = self.config_loader.get_station_info()
+        linker_config = self.config_loader.get_linker_config()
+        Linker.__init__(self, station_name, linker_config)
         self.declare_parameter("control_rate", 500.0)
         self.control_rate = self.get_parameter("control_rate").value
 
@@ -56,7 +33,7 @@ class FollowerArmControllerNode(Node, Linker):
         period = 1.0 / self.control_rate
         self.timer = self.create_timer(period, self._control_loop)
 
-        # self.move_position(self._home_poses)
+        self.move_position(self._home_poses)
         self.is_synced = False
 
         self.get_logger().info("Follower arm controller node started.")

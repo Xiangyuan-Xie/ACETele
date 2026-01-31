@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Optional, Tuple, Union
+from typing import Any, Dict, Tuple, Union
 
 import tomli
 
@@ -10,10 +10,18 @@ STATION_MAP = {
 
 
 class ConfigLoader:
-    def __init__(self, config_path: Optional[Union[str, Path]] = None):
-        config_path = Path(config_path or (Path(__file__).parent / "default.toml")).expanduser().resolve()
+    def __init__(self, config_dir: Path = Path(__file__).parent, config_name: str = "default.toml"):
+        config_path = Path(config_dir / config_name).expanduser().resolve()
         with open(config_path, "rb") as f:
             self.config = tomli.load(f)
 
     def get_station_info(self) -> Tuple[str, str]:
         return STATION_MAP[self.config["basic"]["station_type"]]
+
+    def get_linker_config(self) -> Union[Dict[str, Any], Tuple[Dict[str, Any], Dict[str, Any]]]:
+        if "single" in self.config["linker"]:
+            return self.config["linker"]["single"]
+        elif "dual" in self.config["linker"]:
+            return tuple(self.config["linker"]["dual"].values())
+        else:
+            raise ValueError("Linker type not supported")
