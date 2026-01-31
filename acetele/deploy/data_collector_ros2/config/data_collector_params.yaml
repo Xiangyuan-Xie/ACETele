@@ -1,0 +1,7 @@
+data_collector:
+  ros__parameters:
+    color_topic: "/camera/front/color/image_raw"
+    depth_topic: "/camera/front/aligned_depth_to_color/image_raw"
+    color_metadata_topic: "/camera/front/color/metadata"
+    color_transport: "compressed"
+    depth_transport: "compressedDepth"

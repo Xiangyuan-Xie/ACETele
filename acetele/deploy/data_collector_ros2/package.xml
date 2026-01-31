@@ -2,18 +2,19 @@
 <package format="3">
   <name>data_collector_ros2</name>
   <version>0.0.1</version>
-  <description>Python ROS2 package for receiving and collecting RGB-D data for model training</description>
+  <description>C++ ROS2 package for receiving and collecting RGB-D data for model training</description>
   <maintainer email="dragonboat_xxy@163.com">Xiangyuan Xie</maintainer>
   <license>Apache-2.0</license>
-  <depend>rclpy</depend>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>rclcpp</depend>
+  <depend>std_msgs</depend>
   <depend>sensor_msgs</depend>
   <depend>realsense2_camera_msgs</depend>
-  <exec_depend>python3-numpy</exec_depend>
-  <exec_depend>python3-pil</exec_depend>
-  <exec_depend>python3-pyside6</exec_depend>
-  <buildtool_depend>ament_python</buildtool_depend>
-  <test_depend>pytest</test_depend>
+  <depend>cv_bridge</depend>
+  <depend>image_transport</depend>
+  <depend>libopencv-dev</depend>
+  <depend>qtbase5-dev</depend>
   <export>
-    <build_type>ament_python</build_type>
+    <build_type>ament_cmake</build_type>
   </export>
 </package>
