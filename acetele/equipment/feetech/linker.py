@@ -25,8 +25,6 @@ NO_LOAD_CURRENT = {
 
 GRIPPER_ENCODING_SCALE = {
     "leader": np.pi / 4.0,
-    "lite": 81.0 / 180.0 * np.pi,
-    "nano": np.pi / 2.0,
 }
 GRIPPER_DECODING_SCALE = {k: 1.0 / v for k, v in GRIPPER_ENCODING_SCALE.items()}
 
@@ -124,7 +122,7 @@ class Linker(BaseEquipment):
                 gripper -= 2 * np.pi
             elif gripper <= -np.pi:
                 gripper += 2 * np.pi
-            positions_array[-1] = np.clip(gripper * self._gripper_encoding_scale, 0.0, 1.0)
+            positions_array[-1] = 1.0 - np.clip(gripper * self._gripper_encoding_scale, 0.0, 1.0)
         return positions_array
 
     def set_torque(self, torques: Sequence[float], ids: Optional[Sequence[int]] = None):
