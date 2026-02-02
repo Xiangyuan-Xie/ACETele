@@ -234,8 +234,26 @@ void DataCollectorWindow::updateStatusTable(const std::map<std::string, std::str
         QTableWidgetItem *keyItem = new QTableWidgetItem(QString::fromStdString(key));
         QTableWidgetItem *valItem = new QTableWidgetItem(QString::fromStdString(val));
 
-        if (val == "ONLINE") {
-            valItem->setForeground(QBrush(QColor("#4caf50"))); // Green
+        if (val.find("ONLINE") == 0) {
+            // Parse latency for color coding
+            double latency = 0.0;
+            size_t start = val.find('(');
+            size_t end = val.find(" ms)");
+            bool has_latency = (start != std::string::npos && end != std::string::npos);
+
+            if (has_latency) {
+                try {
+                    latency = std::stod(val.substr(start + 1, end - start - 1));
+                } catch (...) {}
+            }
+
+            if (!has_latency || latency < 50.0) {
+                valItem->setForeground(QBrush(QColor("#4caf50"))); // Green
+            } else if (latency < 150.0) {
+                valItem->setForeground(QBrush(QColor("#ff9800"))); // Orange
+            } else {
+                valItem->setForeground(QBrush(QColor("#ff5252"))); // Light Red
+            }
         } else {
             valItem->setForeground(QBrush(QColor("#f44336"))); // Red
         }

@@ -40,7 +40,7 @@ private:
     void depth_callback(const sensor_msgs::msg::Image::ConstSharedPtr& msg);
     void color_metadata_callback(const realsense2_camera_msgs::msg::Metadata::SharedPtr msg);
 
-    void update_status(const std::string& key);
+    void update_status(const std::string& key, double latency_ms = 0.0);
     void save_data_worker();
 
     image_transport::Subscriber depth_sub_;
@@ -52,6 +52,7 @@ private:
     cv::Mat latest_depth_;
     std::string last_metadata_json_;
     std::map<std::string, rclcpp::Time> topic_status_;
+    std::map<std::string, double> topic_latency_;
 
     // Recording State
     std::atomic<bool> is_recording_;

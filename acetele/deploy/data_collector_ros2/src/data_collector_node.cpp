@@ -177,18 +177,22 @@ void DataCollectorNode::save_data_worker()
     }
 }
 
-void DataCollectorNode::update_status(const std::string& key) {
+void DataCollectorNode::update_status(const std::string& key, double latency_ms) {
     std::lock_guard<std::mutex> lock(data_mutex_);
     topic_status_[key] = this->now();
+    topic_latency_[key] = latency_ms;
 }
 
 void DataCollectorNode::color_callback(const sensor_msgs::msg::Image::ConstSharedPtr& msg)
 {
     try {
         cv::Mat image = cv_bridge::toCvCopy(msg, "bgr8")->image;
-        std::lock_guard<std::mutex> lock(data_mutex_);
-        latest_color_ = image;
-        topic_status_["color"] = this->now();
+        double latency = (this->now() - msg->header.stamp).seconds() * 1000.0;
+        {
+            std::lock_guard<std::mutex> lock(data_mutex_);
+            latest_color_ = image;
+        }
+        update_status("color", latency);
     } catch (...) {}
 }
 
@@ -196,9 +200,12 @@ void DataCollectorNode::depth_callback(const sensor_msgs::msg::Image::ConstShare
 {
     try {
         cv::Mat image = cv_bridge::toCvCopy(msg, "16UC1")->image;
-        std::lock_guard<std::mutex> lock(data_mutex_);
-        latest_depth_ = image;
-        topic_status_["depth"] = this->now();
+        double latency = (this->now() - rclcpp::Time(msg->header.stamp)).seconds() * 1000.0;
+        {
+            std::lock_guard<std::mutex> lock(data_mutex_);
+            latest_depth_ = image;
+        }
+        update_status("depth", latency);
     } catch (...) {}
 }
 
