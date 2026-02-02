@@ -206,11 +206,8 @@ void DataCollectorWindow::updateView()
     if (!depth.empty()) {
         cv::Mat depth_vis;
         cv::normalize(depth, depth_vis, 0, 255, cv::NORM_MINMAX, CV_8U);
-        cv::applyColorMap(depth_vis, depth_vis, cv::COLORMAP_JET);
-        cv::Mat rgb_depth;
-        cv::cvtColor(depth_vis, rgb_depth, cv::COLOR_BGR2RGB);
 
-        QImage qimg = matToQImage(rgb_depth);
+        QImage qimg = matToQImage(depth_vis);
         QPixmap pix = QPixmap::fromImage(qimg);
 
         int w = depth_view_->width();
