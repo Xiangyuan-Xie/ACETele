@@ -1,4 +1,3 @@
-import numpy as np
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile
@@ -34,7 +33,8 @@ class FollowerArmControllerNode(Node, Linker):
         period = 1.0 / self.control_rate
         self.timer = self.create_timer(period, self._control_loop)
 
-        self.move_position(np.array([-1.5, 3.1, 0.0, 0.0, 0.0]))
+        current_pos, _, _ = self.act()
+        self.move_position(current_pos)
         self.is_synced = False
 
         self.get_logger().info("Follower arm controller node started.")
@@ -43,8 +43,8 @@ class FollowerArmControllerNode(Node, Linker):
         if self.is_synced:
             self.set_position(msg.position)
         else:
-            self.get_logger().info("Synchronizing to the master arm...")
-            self.get_logger().info("Please keep the master arm still.")
+            self.get_logger().info("Synchronizing to the leader arm...")
+            self.get_logger().info("Please keep the leader arm still.")
             self.move_position(msg.position)
             self.is_synced = True
             self.get_logger().info("Synchronization completed.")

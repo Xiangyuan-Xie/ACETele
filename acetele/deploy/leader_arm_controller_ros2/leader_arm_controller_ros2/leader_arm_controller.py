@@ -33,23 +33,43 @@ class LeaderArmControllerNode(Node, Linker):
         period = 1.0 / self.control_rate
         self.timer = self.create_timer(period, self._control_loop)
 
+        self.is_synced = False
+        self.is_started = False
+
         self.get_logger().info("Leader arm controller node started.")
 
     def state_callback(self, msg: JointState):
+        if not self.is_started:
+            if self.is_synced:
+                self.set_position(ids=self._ids[:-1], positions=msg.position[:-1])
+            else:
+                self.get_logger().info("Synchronizing to the follower arm...")
+                self.move_position(ids=self._ids[:-1], positions=msg.position[:-1])
+                self.is_synced = True
+                self.get_logger().info("Synchronization completed.")
         self.external_torque = msg.effort
 
     def _control_loop(self):
-        joint_pos, joint_vel, joint_effort = self.act(encode_gripper=False)
-        tau_n = self._null_space_regulation(joint_pos, joint_vel)  # 零空间投影
-        tau_g = self._gravity_compensation(joint_pos, joint_vel)  # 重力补偿
-        tau_ss = self._friction_compensation(tau_g, joint_vel)  # 摩擦力补偿
-        tau_fb = self._torque_feedback(joint_vel)  # 力反馈
-        tau = tau_n + tau_g + tau_ss + tau_fb
-        self.set_torque(tau)
-        joint_pos = self._encode_gripper(joint_pos)
-        self.publish_command(joint_pos, joint_vel, joint_effort)
-        # tau_ext = self.estimate_joint_external_torque(joint_pos, joint_vel, joint_effort, 1 / self.control_rate)
-        # print("Joint ext torque:", tau_ext)
+        if self.is_synced:
+            if self.is_started:
+                joint_pos, joint_vel, joint_effort = self.act(encode_gripper=False)
+                tau_n = self._null_space_regulation(joint_pos, joint_vel)  # 零空间投影
+                tau_g = self._gravity_compensation(joint_pos, joint_vel)  # 重力补偿
+                tau_ss = self._friction_compensation(tau_g, joint_vel)  # 摩擦力补偿
+                tau_fb = self._torque_feedback(joint_vel)  # 力反馈
+                tau = tau_n + tau_g + tau_ss + tau_fb
+                self.set_torque(tau)
+                joint_pos = self._encode_gripper(joint_pos)
+                self.publish_command(joint_pos, joint_vel, joint_effort)
+                # tau_ext = self.estimate_joint_external_torque(
+                #     joint_pos, joint_vel, joint_effort, 1 / self.control_rate
+                # )
+                # print("Joint ext torque:", tau_ext)
+            else:
+                joint_pos, _, _ = self.act()
+                if joint_pos[-1] <= 0.0:
+                    self.is_started = True
+                    self.get_logger().info("Leader arm control started.")
 
     def publish_command(self, joint_pos, joint_vel, joint_effort):
         msg = JointState()

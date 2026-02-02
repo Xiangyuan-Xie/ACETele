@@ -197,13 +197,21 @@ class Linker(BaseEquipment):
         if ids is None:
             ids = self._ids
 
+        ids = np.asarray(ids)
+        positions_array = np.asarray(positions)
+        assert len(ids) == len(positions_array), "ids and positions must have the same length."
+        assert np.all(np.isin(ids, self._ids)), "ids is illegal."
+
         current_pos, _, _ = self.act()
-        target_pos = np.asarray(positions)
+        indices = np.searchsorted(self._ids, ids)
+        current_pos = current_pos[indices]
+
+        target_pos = positions_array
         errors = (target_pos - current_pos + np.pi / 2) % (2 * np.pi) - np.pi / 2
 
         max_error = np.max(np.abs(errors))
         if max_error < 0.001:
-            self.set_position(ids=ids, positions=positions)
+            self.set_position(ids=ids, positions=positions_array)
             return 1
 
         num_steps = int(np.ceil(max_error / step_size))
