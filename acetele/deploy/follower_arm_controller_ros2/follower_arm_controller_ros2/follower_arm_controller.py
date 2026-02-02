@@ -1,3 +1,4 @@
+import numpy as np
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile
@@ -33,7 +34,7 @@ class FollowerArmControllerNode(Node, Linker):
         period = 1.0 / self.control_rate
         self.timer = self.create_timer(period, self._control_loop)
 
-        self.move_position(self._home_poses)
+        self.move_position(np.array([-1.5, 3.1, 0.0, 0.0, 0.0]))
         self.is_synced = False
 
         self.get_logger().info("Follower arm controller node started.")
