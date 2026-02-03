@@ -14,9 +14,25 @@
 #include <QGridLayout>
 #include <QTableWidget>
 #include <QJsonDocument>
-#include <QJsonObject>
+#include <QResizeEvent>
+#include <QTabWidget>
 #include <memory>
 #include "data_collector_node.hpp"
+
+class AspectRatioLabel : public QLabel {
+    Q_OBJECT
+
+public:
+    explicit AspectRatioLabel(QWidget *parent = nullptr);
+    void setPixmap(const QPixmap &pixmap);
+
+protected:
+    void resizeEvent(QResizeEvent *event) override;
+
+private:
+    QPixmap original_pixmap_;
+    void updatePixmap();
+};
 
 class DataCollectorWindow : public QMainWindow {
     Q_OBJECT
@@ -34,23 +50,31 @@ private:
     QTimer *timer_;
 
     // UI Elements
-    QLabel* title_label_;
-    QLabel* time_label_;
-    QLabel* rgb_view_;
-    QLabel* depth_view_;
+    // Left Panel
+    AspectRatioLabel* front_rgb_view_;
+    AspectRatioLabel* wrist_rgb_view_;
+    AspectRatioLabel* front_depth_view_;
+    AspectRatioLabel* wrist_depth_view_;
 
+    // Right Panel
+    QLabel* status_label_;
     QTableWidget* status_table_;
-    QTextEdit* metadata_view_;
 
+    // Metadata Panel (Tabbed)
+    QTabWidget* metadata_tabs_;
+    QTextEdit* front_metadata_view_;
+    QTextEdit* wrist_metadata_view_;
+
+    // Controls (Right Panel Bottom)
     QLineEdit* path_input_;
     QPushButton* record_btn_;
-    QLabel* record_status_label_;
 
     // Helpers
     QImage matToQImage(const cv::Mat& mat);
+    QPixmap createSampleImage(const QColor& color, const QString& text);
     void setupUI();
     void updateStatusTable(const std::map<std::string, std::string>& status);
-    void updateMetadata(const std::string& json_str);
+    void updateMetadata(const std::string& front_json, const std::string& wrist_json);
 };
 
 #endif // DATA_COLLECTOR_GUI_HPP

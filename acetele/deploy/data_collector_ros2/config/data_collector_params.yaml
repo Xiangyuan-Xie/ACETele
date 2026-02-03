@@ -1,7 +1,10 @@
 data_collector:
   ros__parameters:
-    color_topic: "/camera/front/color/image_raw"
-    depth_topic: "/camera/front/aligned_depth_to_color/image_raw"
-    color_metadata_topic: "/camera/front/color/metadata"
+    front_color_topic: "/camera/front/color/image_raw"
+    front_depth_topic: "/camera/front/aligned_depth_to_color/image_raw"
+    wrist_color_topic: "/camera/wrist/color/image_raw"
+    wrist_depth_topic: "/camera/wrist/aligned_depth_to_color/image_raw"
+    front_color_metadata_topic: "/camera/front/color/metadata"
+    wrist_color_metadata_topic: "/camera/wrist/color/metadata"
     color_transport: "compressed"
     depth_transport: "compressedDepth"
