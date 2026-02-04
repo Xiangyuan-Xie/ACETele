@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.8)
-project(data_collector_ros2)
+project(visualization_ros2)
 
 # Enable Qt MOC
 set(CMAKE_AUTOMOC ON)
@@ -20,25 +20,25 @@ find_package(image_transport REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(Qt5 COMPONENTS Widgets Core Gui REQUIRED)
 
-add_executable(data_collector
-  src/data_collector_main.cpp
-  src/data_collector_node.cpp
-  src/data_collector_gui.cpp
+add_executable(visualization
+  src/visualization_main.cpp
+  src/visualization_node.cpp
+  src/visualization_gui.cpp
 )
 
-target_include_directories(data_collector PUBLIC
+target_include_directories(visualization PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
   $<INSTALL_INTERFACE:include>)
 
-target_link_libraries(data_collector
+target_link_libraries(visualization
   ${OpenCV_LIBRARIES}
   Qt5::Widgets
   Qt5::Core
   Qt5::Gui
 )
 
-ament_target_dependencies(data_collector
+ament_target_dependencies(visualization
   rclcpp
   std_msgs
   sensor_msgs
@@ -47,7 +47,7 @@ ament_target_dependencies(data_collector
   image_transport
 )
 
-install(TARGETS data_collector
+install(TARGETS visualization
   DESTINATION lib/${PROJECT_NAME})
 
 install(DIRECTORY launch config

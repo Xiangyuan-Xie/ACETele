@@ -1,20 +1,20 @@
 #include <QApplication>
 #include <rclcpp/rclcpp.hpp>
 #include <thread>
-#include "data_collector_node.hpp"
-#include "data_collector_gui.hpp"
+#include "visualization_node.hpp"
+#include "visualization_gui.hpp"
 
 int main(int argc, char * argv[])
 {
     // 1. Initialize ROS
     rclcpp::init(argc, argv);
-    auto node = std::make_shared<DataCollectorNode>();
+    auto node = std::make_shared<VisualizationNode>();
 
     // 2. Initialize Qt
     QApplication app(argc, argv);
 
     // 3. Create Window
-    DataCollectorWindow window(node);
+    VisualizationWindow window(node);
     window.show();
 
     // 4. Run ROS in a separate thread

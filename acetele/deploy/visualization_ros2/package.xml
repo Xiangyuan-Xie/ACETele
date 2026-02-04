@@ -1,8 +1,8 @@
 <?xml version="1.0"?>
 <package format="3">
-  <name>data_collector_ros2</name>
+  <name>visualization_ros2</name>
   <version>0.0.1</version>
-  <description>C++ ROS2 package for receiving and collecting RGB-D data for model training</description>
+  <description>C++ ROS2 package for visualizing RGB-D data</description>
   <maintainer email="dragonboat_xxy@163.com">Xiangyuan Xie</maintainer>
   <license>Apache-2.0</license>
   <buildtool_depend>ament_cmake</buildtool_depend>

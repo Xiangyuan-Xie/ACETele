@@ -1,4 +1,4 @@
-#include "data_collector_gui.hpp"
+#include "visualization_gui.hpp"
 #include <QDateTime>
 #include <QDir>
 #include <QHeaderView>
@@ -41,26 +41,26 @@ void AspectRatioLabel::resizeEvent(QResizeEvent *event)
     QLabel::resizeEvent(event);
 }
 
-// --- DataCollectorWindow Implementation ---
+// --- VisualizationWindow Implementation ---
 
-DataCollectorWindow::DataCollectorWindow(std::shared_ptr<DataCollectorNode> node, QWidget *parent)
+VisualizationWindow::VisualizationWindow(std::shared_ptr<VisualizationNode> node, QWidget *parent)
     : QMainWindow(parent), node_(node)
 {
-    this->setWindowTitle("ACETele Data Collector");
+    this->setWindowTitle("ACETele Visualization");
     this->resize(1600, 900);
 
     setupUI();
 
     timer_ = new QTimer(this);
-    connect(timer_, &QTimer::timeout, this, &DataCollectorWindow::updateView);
+    connect(timer_, &QTimer::timeout, this, &VisualizationWindow::updateView);
     timer_->start(33); // ~30 FPS
 }
 
-DataCollectorWindow::~DataCollectorWindow()
+VisualizationWindow::~VisualizationWindow()
 {
 }
 
-void DataCollectorWindow::setupUI()
+void VisualizationWindow::setupUI()
 {
     // Main Window Style
     this->setStyleSheet("QMainWindow { background-color: #ffffff; }");
@@ -172,9 +172,6 @@ void DataCollectorWindow::setupUI()
     titleLayout->addWidget(status_label_);
     rightLayout->addLayout(titleLayout);
 
-    // Merged Information Section (Table for status + Metadata below)
-    // We use a vertical splitter or just layout
-
     // Status Table
     QLabel *statusHeader = new QLabel("Topic Status");
     statusHeader->setStyleSheet("font-weight: bold; color: #34495e; margin-top: 5px;");
@@ -248,83 +245,26 @@ void DataCollectorWindow::setupUI()
     );
     metadata_tabs_->addTab(wrist_metadata_view_, "Wrist Camera");
 
-    rightLayout->addWidget(metadata_tabs_, 2); // Takes 2/5 of available vertical space
-
-    // Controls Section (Bottom)
-    QLabel *controlTitle = new QLabel("Data Recording");
-    controlTitle->setStyleSheet("font-size: 14pt; font-weight: bold; margin-top: 20px; color: #2c3e50;");
-    rightLayout->addWidget(controlTitle);
-
-    path_input_ = new QLineEdit();
-    path_input_->setPlaceholderText("Output Path...");
-    path_input_->setText(QDir::homePath() + "/data_collection");
-    path_input_->setStyleSheet("padding: 8px; border: 1px solid #cccccc; border-radius: 4px; color: #333333;");
-    rightLayout->addWidget(path_input_);
-
-    record_btn_ = new QPushButton("Start Recording");
-    record_btn_->setMinimumHeight(40);
-    record_btn_->setStyleSheet(
-        "QPushButton {"
-        "   background-color: #3498db;"
-        "   color: white;"
+    // Arm State Tab
+    arm_state_view_ = new QTextEdit();
+    arm_state_view_->setReadOnly(true);
+    arm_state_view_->setStyleSheet(
+        "QTextEdit {"
         "   border: none;"
-        "   border-radius: 4px;"
-        "   font-weight: bold;"
-        "   font-size: 14px;"
+        "   background-color: #f8f8f8;"
+        "   color: #333333;"
+        "   font-family: 'Consolas', monospace;"
+        "   font-size: 11px;"
         "}"
-        "QPushButton:hover { background-color: #2980b9; }"
-        "QPushButton:disabled { background-color: #95a5a6; }"
     );
-    connect(record_btn_, &QPushButton::clicked, this, &DataCollectorWindow::toggleRecording);
-    rightLayout->addWidget(record_btn_);
+    metadata_tabs_->addTab(arm_state_view_, "Arm State");
+
+    rightLayout->addWidget(metadata_tabs_, 3); // Takes more space now that controls are gone
 
     mainLayout->addWidget(rightWidget, 1); // Right panel takes 1/5 width
 }
 
-void DataCollectorWindow::toggleRecording()
-{
-    if (node_->is_recording()) {
-        node_->stop_recording();
-        record_btn_->setText("Start Recording");
-        record_btn_->setStyleSheet(
-            "QPushButton {"
-            "   background-color: #3498db;"
-            "   color: white;"
-            "   border: none;"
-            "   border-radius: 4px;"
-            "   font-weight: bold;"
-            "   font-size: 14px;"
-            "}"
-            "QPushButton:hover { background-color: #2980b9; }"
-        );
-        path_input_->setEnabled(true);
-        status_label_->setText(QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss"));
-        status_label_->setStyleSheet("color: #666666; font-style: italic;");
-    } else {
-        std::string base_path = path_input_->text().toStdString();
-        auto now = QDateTime::currentDateTime();
-        std::string session_path = base_path + "/" + now.toString("yyyyMMdd_HHmmss").toStdString();
-
-        node_->start_recording(session_path);
-        record_btn_->setText("Stop Recording");
-        record_btn_->setStyleSheet(
-            "QPushButton {"
-            "   background-color: #e74c3c;"
-            "   color: white;"
-            "   border: none;"
-            "   border-radius: 4px;"
-            "   font-weight: bold;"
-            "   font-size: 14px;"
-            "}"
-            "QPushButton:hover { background-color: #c0392b; }"
-        );
-        path_input_->setEnabled(false);
-        status_label_->setText("● Recording");
-        status_label_->setStyleSheet("color: #e74c3c; font-weight: bold;");
-    }
-}
-
-void DataCollectorWindow::updateView()
+void VisualizationWindow::updateView()
 {
     // Get Images
     cv::Mat front_color, front_depth, wrist_color, wrist_depth;
@@ -375,16 +315,27 @@ void DataCollectorWindow::updateView()
     node_->get_latest_metadata(front_meta, wrist_meta);
     updateMetadata(front_meta, wrist_meta);
 
-    // Update Recording Status Info
-    if (node_->is_recording()) {
-        size_t count = node_->get_recorded_frame_count();
-        status_label_->setText(QString("● Recording - Frames: %1").arg(count));
+    // Update Arm State
+    sensor_msgs::msg::JointState arm_state;
+    node_->get_latest_arm_state(arm_state);
+    if (arm_state.name.empty()) {
+        arm_state_view_->setText("No Arm State");
     } else {
-        status_label_->setText(QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss"));
+        QString text = "Timestamp: " + QString::number(arm_state.header.stamp.sec) + "." + QString::number(arm_state.header.stamp.nanosec) + "\n\n";
+        for (size_t i = 0; i < arm_state.name.size(); ++i) {
+            text += QString::fromStdString(arm_state.name[i]) + ":\n";
+            if (i < arm_state.position.size()) text += "  Pos: " + QString::number(arm_state.position[i], 'f', 4) + "\n";
+            if (i < arm_state.velocity.size()) text += "  Vel: " + QString::number(arm_state.velocity[i], 'f', 4) + "\n";
+            if (i < arm_state.effort.size())   text += "  Eff: " + QString::number(arm_state.effort[i], 'f', 4) + "\n";
+            text += "\n";
+        }
+        arm_state_view_->setText(text);
     }
+
+    status_label_->setText(QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss"));
 }
 
-void DataCollectorWindow::updateStatusTable(const std::map<std::string, std::string>& status)
+void VisualizationWindow::updateStatusTable(const std::map<std::string, std::string>& status)
 {
     status_table_->setRowCount(status.size());
     int row = 0;
@@ -439,7 +390,7 @@ void DataCollectorWindow::updateStatusTable(const std::map<std::string, std::str
     }
 }
 
-void DataCollectorWindow::updateMetadata(const std::string& front_json, const std::string& wrist_json)
+void VisualizationWindow::updateMetadata(const std::string& front_json, const std::string& wrist_json)
 {
     // Update Front Metadata
     if (front_json.empty()) {
@@ -466,12 +417,12 @@ void DataCollectorWindow::updateMetadata(const std::string& front_json, const st
     }
 }
 
-QImage DataCollectorWindow::matToQImage(const cv::Mat& mat)
+QImage VisualizationWindow::matToQImage(const cv::Mat& mat)
 {
     return QImage(mat.data, mat.cols, mat.rows, mat.step, QImage::Format_RGB888).copy();
 }
 
-QPixmap DataCollectorWindow::createSampleImage(const QColor& color, const QString& text)
+QPixmap VisualizationWindow::createSampleImage(const QColor& color, const QString& text)
 {
     int width = 800;
     int height = 450;
