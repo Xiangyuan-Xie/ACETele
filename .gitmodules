@@ -1,3 +1,6 @@
 [submodule "acetele/deploy/realsense-ros"]
 	path = acetele/deploy/realsense-ros
 	url = https://github.com/realsenseai/realsense-ros.git
+[submodule "acetele/deploy/px4_ros2_ctrl"]
+	path = acetele/deploy/px4_ros2_ctrl
+	url = git@github.com:NextFlightLab/px4_ros2_ctrl.git
