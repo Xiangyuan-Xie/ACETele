@@ -332,9 +332,7 @@ class Linker(BaseEquipment):
 
 if __name__ == "__main__":
     config_loader = ConfigLoader()
-    config = config_loader.get_linker_config()
-    if isinstance(config, tuple):
-        config = config[0]
+    config = config_loader.get_linker_config()[0]
     linker = Linker(config)
     try:
         with np.printoptions(suppress=True):

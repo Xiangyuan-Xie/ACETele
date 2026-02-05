@@ -2,12 +2,14 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile
 from sensor_msgs.msg import JointState
 
+from acetele.config.config_loader import ConfigLoader
 from acetele.station.ace_follower.ace_follower import AceFollowerStation
 
 
 class AceFollowerROS2Station(Node, AceFollowerStation):
-    def __init__(self):
+    def __init__(self, config_loader: ConfigLoader):
         Node.__init__(self, "ace_follower_station_node")
+        AceFollowerStation.__init__(self, config_loader)
         self.declare_parameter("control_rate", 250.0)
         self._control_rate = self.get_parameter("control_rate").value
 

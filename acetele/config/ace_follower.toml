@@ -1,5 +1,6 @@
 [basic]
-station_type = "ace_follower_ros2"
+station_type = "ace_follower"
+backend = "ros2"
 
 [linker.single]
 port = "/dev/ttyCH341USB0"

@@ -19,7 +19,10 @@ class BaseStation(ABC):
 
         self._urdf_model_path: Optional[str]
         urdf_model_path = (
-            Path(__file__).resolve().parent / "description" / f"{self._config_loader.get_station_type()}.urdf"
+            Path(__file__).resolve().parent
+            / self._config_loader.get_station_type()
+            / "description"
+            / f"{self._config_loader.get_station_type()}.urdf"
         )
         if urdf_model_path.exists() and urdf_model_path.is_file():
             self._urdf_model_path = str(urdf_model_path)
@@ -44,7 +47,9 @@ class BaseStation(ABC):
 
         if self._urdf_model_path is None:
             raise RuntimeError("URDF model path is not available.")
-        pin_model, _, _ = pin.buildModelsFromUrdf(filename=self._urdf_model_path)
+        pin_model, _, _ = pin.buildModelsFromUrdf(
+            filename=self._urdf_model_path, package_dirs=str(Path(self._urdf_model_path).parent)
+        )
         return pin_model
 
 

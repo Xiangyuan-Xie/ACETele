@@ -1,12 +1,14 @@
 import rclpy
+from rclpy.node import Node
 
 from acetele.station.base_station import make_station
 
 
-def main(args=None):
-    rclpy.init(args=args)
+def main():
+    rclpy.init()
     station_node = make_station()
-    if not isinstance(station_node, rclpy.node.Node):
+    print(type(station_node))
+    if not isinstance(station_node, Node):
         raise ValueError("Station node must be a rclpy.node.Node instance")
     try:
         rclpy.spin(station_node)

@@ -1,6 +1,8 @@
 import time
 from dataclasses import dataclass
-from typing import Optional, Sequence, Tuple, cast
+from typing import Optional, Sequence, Tuple
+
+import numpy as np
 
 from acetele.config.config_loader import ConfigLoader
 from acetele.equipment.feetech.linker import Linker
@@ -15,9 +17,10 @@ class AceLeaderEquipmentLibrary(BaseEquipmentLibrary):
 class AceLeaderStation(BaseStation):
     def __init__(self, config_loader: ConfigLoader):
         super().__init__(config_loader)
+        (single_arm_config,) = self._config_loader.get_linker_config()
         self._equipments: AceLeaderEquipmentLibrary = AceLeaderEquipmentLibrary(
             single_arm=Linker(
-                config=cast(dict, self._config_loader.get_linker_config()),
+                config=single_arm_config,
                 pin_model=self.get_pin_model(),
             ),
         )
@@ -39,8 +42,11 @@ if __name__ == "__main__":
     config_loader = ConfigLoader()
     hardware = make_station()
     try:
-        while True:
-            print(hardware.act())
-            time.sleep(0.5)
+        with np.printoptions(suppress=True):
+            while True:
+                print(hardware.act())
+                time.sleep(0.05)
     except KeyboardInterrupt:
+        pass
+    finally:
         hardware.close()
