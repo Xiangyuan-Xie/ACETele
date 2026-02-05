@@ -30,15 +30,13 @@ class AspectRatioLabel(QLabel):
         super().__init__(parent)
         self.setMinimumSize(300, 200)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.setStyleSheet(
-            """
+        self.setStyleSheet("""
             AspectRatioLabel {
                 border: 2px solid #cccccc;
                 background-color: #f8f8f8;
                 border-radius: 5px;
             }
-        """
-        )
+        """)
         self._pixmap = None
 
     def setPixmap(self, pixmap):
@@ -202,8 +200,7 @@ class TeleOperationApp(QMainWindow):
         self.table.setAlternatingRowColors(True)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)  # Disable editing
-        self.table.setStyleSheet(
-            """
+        self.table.setStyleSheet("""
             QTableWidget {
                 gridline-color: #d0d0d0;
                 font-size: 11px;
@@ -221,8 +218,7 @@ class TeleOperationApp(QMainWindow):
                 border: none;
                 font-weight: bold;
             }
-        """
-        )
+        """)
 
         right_layout.addWidget(self.table, 1)  # Table area is stretchable
 
