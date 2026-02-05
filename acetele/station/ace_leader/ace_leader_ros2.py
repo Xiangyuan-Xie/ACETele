@@ -48,13 +48,13 @@ class AceLeaderROS2Station(Node, AceLeaderStation):
         if self._is_synced:
             joint_pos, joint_vel, joint_effort = self.act()
             if self._is_started:
-                self.publish_command(joint_pos, joint_vel, joint_effort)
+                self._publish_command(joint_pos, joint_vel, joint_effort)
             else:
                 if joint_pos[-1] <= 0.0:
                     self._is_started = True
                     self.get_logger().info("Leader arm control started.")
 
-    def publish_command(self, joint_pos, joint_vel, joint_effort):
+    def _publish_command(self, joint_pos, joint_vel, joint_effort):
         msg = JointState()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.name = [f"joint_{i+1}" for i in self._equipments.single_arm.ids]

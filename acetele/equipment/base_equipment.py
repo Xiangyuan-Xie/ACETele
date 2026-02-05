@@ -16,4 +16,6 @@ class BaseEquipment(ABC):
         pass
 
     def apply_torque_feedback(self, external_torque: Sequence[float]):
-        raise RuntimeError(f"Class '{self.__class__.__name__}' not support method '{self.act.__name__}()'.")
+        raise RuntimeError(
+            f"Class '{self.__class__.__name__}' not support method '{self.apply_torque_feedback.__name__}()'."
+        )

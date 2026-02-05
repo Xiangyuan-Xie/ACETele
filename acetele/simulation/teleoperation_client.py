@@ -49,9 +49,9 @@ class AspectRatioLabel(QLabel):
             The pixmap to display
         """
         self._pixmap = pixmap
-        self.updatePixmap()
+        self._update_pixmap()
 
-    def updatePixmap(self):
+    def _update_pixmap(self):
         """Update the displayed pixmap with proper aspect ratio scaling."""
         if self._pixmap and not self._pixmap.isNull():
             scaled_pixmap = self._pixmap.scaled(
@@ -68,7 +68,7 @@ class AspectRatioLabel(QLabel):
         event : QResizeEvent
             The resize event
         """
-        self.updatePixmap()
+        self._update_pixmap()
         super().resizeEvent(event)
 
 
@@ -80,13 +80,13 @@ class TeleOperationApp(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.initUI()
-        self.initData()
+        self._init_ui()
+        self._init_data()
         # Initialize ZMQ client for receiving data
         self.zmq_client = SubscriberClient()
-        self.zmq_client.data_received.connect(self.updateData)
+        self.zmq_client.data_received.connect(self._update_data)
 
-    def initUI(self):
+    def _init_ui(self):
         """Initialize the user interface components."""
         self.setWindowTitle("空中操作数据采集")
         self.setGeometry(100, 100, 1600, 900)
@@ -119,22 +119,22 @@ class TeleOperationApp(QMainWindow):
         self.camera_view = {
             "front_camera_rgb": {
                 "title": "前视相机(RGB)",
-                "original_image": self.createSampleImage(QColor(52, 152, 219)),
+                "original_image": self._create_sample_image(QColor(52, 152, 219)),
                 "display_label": AspectRatioLabel(),
             },
             "wrist_camera_rgb": {
                 "title": "腕部相机(RGB)",
-                "original_image": self.createSampleImage(QColor(46, 204, 113)),
+                "original_image": self._create_sample_image(QColor(46, 204, 113)),
                 "display_label": AspectRatioLabel(),
             },
             "front_camera_depth": {
                 "title": "前视相机(Depth)",
-                "original_image": self.createSampleImage(QColor(155, 89, 182)),
+                "original_image": self._create_sample_image(QColor(155, 89, 182)),
                 "display_label": AspectRatioLabel(),
             },
             "wrist_camera_depth": {
                 "title": "腕部相机(Depth)",
-                "original_image": self.createSampleImage(QColor(241, 196, 15)),
+                "original_image": self._create_sample_image(QColor(241, 196, 15)),
                 "display_label": AspectRatioLabel(),
             },
         }
@@ -226,7 +226,7 @@ class TeleOperationApp(QMainWindow):
         main_layout.addWidget(left_widget, 4)  # Left panel
         main_layout.addWidget(right_widget, 1)  # Right panel
 
-    def createSampleImage(self, color: QColor) -> QPixmap:
+    def _create_sample_image(self, color: QColor) -> QPixmap:
         """
         Create a sample placeholder image.
 
@@ -269,7 +269,7 @@ class TeleOperationApp(QMainWindow):
         painter.end()
         return pixmap
 
-    def initData(self):
+    def _init_data(self):
         """Initialize data structure with default values."""
         self.data_items = {
             "位置X": {"value": 0.0, "unit": " m", "status": "正常"},
@@ -304,9 +304,9 @@ class TeleOperationApp(QMainWindow):
             "命令角速度Yaw": {"value": 0.0, "unit": " rad/s", "status": "正常"},
         }
 
-        self.updateTable()
+        self._update_table()
 
-    def updateTable(self):
+    def _update_table(self):
         """Update the table with current data values."""
         self.table.setRowCount(len(self.data_items))
 
@@ -341,7 +341,7 @@ class TeleOperationApp(QMainWindow):
             self.table.setItem(row, 2, status_item)
 
     @Slot(dict)
-    def updateData(self, data: dict):
+    def _update_data(self, data: dict):
         """
         Update the UI with new data received from ZMQ.
 
@@ -361,7 +361,7 @@ class TeleOperationApp(QMainWindow):
             qimage = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format_RGB888)
             pixmap = QPixmap.fromImage(qimage)
             if pixmap.isNull():
-                pixmap = self.createSampleImage(QColor(200, 200, 200))
+                pixmap = self._create_sample_image(QColor(200, 200, 200))
 
             self.camera_view[name]["original_image"] = pixmap
             self.camera_view[name]["display_label"].setPixmap(pixmap)
@@ -410,7 +410,7 @@ class TeleOperationApp(QMainWindow):
         self.data_items["命令角速度Yaw"]["value"] = data["Data"]["command"][-1]
 
         # Refresh table and update status
-        self.updateTable()
+        self._update_table()
         self.status_label.setText(f"数据已更新 - {datetime.now().strftime('%H:%M:%S')}")
 
     def resizeEvent(self, event):

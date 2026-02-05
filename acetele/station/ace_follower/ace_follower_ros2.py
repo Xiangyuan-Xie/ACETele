@@ -45,9 +45,9 @@ class AceFollowerROS2Station(Node, AceFollowerStation):
 
     def _control_loop(self):
         joint_pos, joint_vel, joint_effort = self.act()
-        self.publish_state(joint_pos, joint_vel, joint_effort)
+        self._publish_state(joint_pos, joint_vel, joint_effort)
 
-    def publish_state(self, joint_pos, joint_vel, joint_effort):
+    def _publish_state(self, joint_pos, joint_vel, joint_effort):
         msg = JointState()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.name = [f"joint_{i+1}" for i in self._equipments.single_arm.ids]
