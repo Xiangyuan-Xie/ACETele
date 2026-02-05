@@ -1,3 +1,0 @@
-follower_arm_controller:
-  ros__parameters:
-    control_rate: 500.0

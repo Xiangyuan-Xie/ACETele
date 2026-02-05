@@ -1,8 +1,8 @@
 <?xml version="1.0"?>
 <package format="3">
-  <name>leader_arm_controller_ros2</name>
+  <name>ace_station_ros2</name>
   <version>0.0.1</version>
-  <description>ROS2 package for leader robotic arm control</description>
+  <description>Unified ROS2 package for ACE station (leader/follower) control</description>
   <maintainer email="dragonboat_xxy@163.com">Xiangyuan Xie</maintainer>
   <license>Apache-2.0</license>
   <depend>rclpy</depend>

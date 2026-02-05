@@ -1,6 +1,6 @@
 from setuptools import find_packages, setup
 
-package_name = "leader_arm_controller_ros2"
+package_name = "ace_station_ros2"
 
 setup(
     name=package_name,
@@ -9,14 +9,14 @@ setup(
     data_files=[
         ("share/ament_index/resource_index/packages", ["resource/" + package_name]),
         ("share/" + package_name, ["package.xml"]),
-        ("share/" + package_name + "/launch", ["launch/leader_arm_controller.launch.py"]),
-        ("share/" + package_name + "/config", ["config/leader_arm_controller_params.yaml"]),
+        ("share/" + package_name + "/launch", ["launch/ace_station.launch.py"]),
+        ("share/" + package_name + "/config", ["config/ace_station_params.yaml"]),
     ],
     install_requires=["setuptools"],
     zip_safe=True,
     entry_points={
         "console_scripts": [
-            "leader_arm_controller = leader_arm_controller_ros2.leader_arm_controller:main",
+            "ace_station_node = ace_station_ros2.ace_station_node:main",
         ],
     },
 )

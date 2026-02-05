@@ -10,11 +10,12 @@ def generate_launch_description():
     follower_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(
-                get_package_share_directory("follower_arm_controller_ros2"),
+                get_package_share_directory("ace_station_ros2"),
                 "launch",
-                "follower_arm_controller.launch.py",
+                "ace_station.launch.py",
             )
-        )
+        ),
+        launch_arguments={"station_type": "ace_follower"}.items(),
     )
 
     realsense_launch = IncludeLaunchDescription(

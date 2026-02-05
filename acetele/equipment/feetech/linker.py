@@ -1,6 +1,4 @@
-import os
 import time
-from pathlib import Path
 from threading import Event, Lock, Thread
 from typing import Any, Dict, Optional, Sequence, Tuple
 
@@ -24,21 +22,21 @@ NO_LOAD_CURRENT = {
 }
 
 GRIPPER_ENCODING_SCALE = {
-    "leader": np.pi / 4.0,
+    "ace_leader": np.pi / 4.0,
 }
 GRIPPER_DECODING_SCALE = {k: 1.0 / v for k, v in GRIPPER_ENCODING_SCALE.items()}
 
 
 class Linker(BaseEquipment):
-    def __init__(self, station_type: str, config: Dict[str, Any], driver: Optional[FeeTechDriver] = None):
+    def __init__(self, config: Dict[str, Any], driver: Optional[FeeTechDriver] = None, pin_model: pin.Model = None):
         super().__init__()
         self._ids = np.array(config["joint_ids"])
         self._dof = len(self._ids)
 
         self._signs = np.array(config["joint_signs"])
         self._home_poses = np.array(config["home_poses"])
-        self._enable_dynamic = config["enable_dynamic"]
-        self._use_thread_backend = config["use_thread_backend"]
+        self._enable_gravity_compensation = config["enable_gravity_compensation"]
+        self._enable_estimate_external_torque = config["enable_estimate_external_torque"]
         self._driver = driver if driver is not None else FeeTechDriver(self._ids, config["port"])
 
         self._gripper_id = config["gripper_id"]
@@ -51,45 +49,48 @@ class Linker(BaseEquipment):
         self._torque_current_mapping = np.array([KT_MAPPING[servo] * 1000.0 for servo in self._servo_types])
         self._no_load_current = np.array([NO_LOAD_CURRENT[servo] for servo in self._servo_types])
 
-        urdf_model_path = str(
-            (
-                Path(__file__).resolve().parent.parent
-                / ".."
-                / "station"
-                / station_type
-                / "description"
-                / f"{station_type}.urdf"
-            )
-        )
-        urdf_model_dir = os.path.dirname(urdf_model_path)
-        self.pin_model, _, _ = pin.buildModelsFromUrdf(filename=urdf_model_path, package_dirs=urdf_model_dir)
-        self.pin_data = self.pin_model.createData()
+        if pin_model:
+            self._pin_model = pin_model
+            self._pin_data = self._pin_model.createData()
+        else:
+            self._pin_model = None
+            self._pin_data = None
 
-        if self._enable_dynamic:
-            self.null_space_joint_target = self._home_poses
-            self.null_space_kp = 0.1
-            self.null_space_kd = 0.01
+        if self._enable_gravity_compensation:
+            if self._pin_model is None:
+                raise ValueError("Pinocchio model is None, please provide a valid model.")
 
-            self.gravity_comp_modifier = 1.0
+            self._null_space_joint_target = self._home_poses
+            self._null_space_kp = 0.1
+            self._null_space_kd = 0.01
 
-            self.stiction_dither_flag = np.ones(self._dof, dtype=bool)
-            self.stiction_comp_enable_speed = 0.9
-            self.stiction_comp_gain = 0.6
+            self._gravity_comp_modifier = 1.0
 
-            self._feedback_external_torque = np.zeros_like(self._dof)
-            self.torque_feedback_scalar = 0.05
-            self.torque_feedback_damping = 0.0
+            self._stiction_dither_flag = np.ones(self._dof, dtype=bool)
+            self._stiction_comp_enable_speed = 0.9
+            self._stiction_comp_gain = 0.6
 
-            if self._use_thread_backend:
-                self._lock = Lock()
-                self._stop_flag = Event()
-                self._control_thread = Thread(target=self._control_loop, daemon=True)
-                self._control_thread.start()
+            self._feedback_external_torque = np.zeros(self._dof)
+            self._torque_feedback_scalar = 0.05
+            self._torque_feedback_damping = 0.0
 
-            self.K = np.eye(self._dof) * 15.0  # Observer gain
-            self.p_hat = np.zeros(self._dof)  # Estimated momentum
-            self.ee_frame_id = self.pin_model.getFrameId("link_5")  # End-effector frame ID
-            self.viscous_friction_gain = 0.02
+            self._lock = Lock()
+            self._stop_flag = Event()
+            self._control_thread = None
+
+        if self._enable_estimate_external_torque:
+            self._K = np.eye(self._dof) * 15.0
+            self._p_hat = np.zeros(self._dof)
+            self._ee_frame_id = self._pin_model.getFrameId("link_5") if self._pin_model else None
+            self._viscous_friction_gain = 0.02
+
+            # Low Pass Filter for external torque estimation
+            self._estimated_external_torque = np.zeros(self._dof)
+            self._lpf_alpha = 0.2
+
+    @property
+    def ids(self):
+        return self._ids
 
     def act(
         self, encode_gripper: bool = True, cal_torque_sign: bool = False
@@ -98,7 +99,12 @@ class Linker(BaseEquipment):
 
         positions = np.array(list(encoded_pos.values())) * self._signs * np.pi / 2048.0
         if encode_gripper:
-            positions = self._encode_gripper(positions)
+            gripper = positions[-1] % (2 * np.pi)
+            if gripper > np.pi:
+                gripper -= 2 * np.pi
+            elif gripper <= -np.pi:
+                gripper += 2 * np.pi
+            positions[-1] = 1.0 - np.clip(gripper * self._gripper_encoding_scale, 0.0, 1.0)
 
         velocities = np.array(list(encoded_vel.values())) * self._signs * 0.732 * np.pi / 30
 
@@ -107,23 +113,14 @@ class Linker(BaseEquipment):
         torques_Nm_mag = torques_kgcmf_mag * 0.0981
 
         if cal_torque_sign:
-            if not self._enable_dynamic:
-                pin.rnea(self.pin_model, self.pin_data, positions, velocities, np.zeros_like(velocities))
-            torques_Nm = torques_Nm_mag * np.sign(self.pin_data.tau) * -self._signs
+            if self._pin_model is not None and self._pin_data is not None:
+                pin.rnea(self._pin_model, self._pin_data, positions, velocities, np.zeros_like(velocities))
+                torques_Nm = torques_Nm_mag * np.sign(self._pin_data.tau) * -self._signs
+            else:
+                torques_Nm = torques_Nm_mag * -self._signs
             return positions, velocities, torques_Nm
         else:
             return positions, velocities, torques_Nm_mag
-
-    def _encode_gripper(self, positions: Sequence[float]):
-        if self._gripper_id >= 0:
-            positions_array = np.asarray(positions)
-            gripper = positions_array[-1] % (2 * np.pi)
-            if gripper > np.pi:
-                gripper -= 2 * np.pi
-            elif gripper <= -np.pi:
-                gripper += 2 * np.pi
-            positions_array[-1] = 1.0 - np.clip(gripper * self._gripper_encoding_scale, 0.0, 1.0)
-        return positions_array
 
     def set_torque(self, torques: Sequence[float], ids: Optional[Sequence[int]] = None):
         if ids is None:
@@ -228,17 +225,29 @@ class Linker(BaseEquipment):
         return self._driver.get_frequency()
 
     def close(self):
-        if self._enable_dynamic and self._use_thread_backend:
-            self._stop_flag.set()
-            self._control_thread.join()
-            # self._driver.set_torque_enable(self._ids, [TorqueEnable.Disable] * len(self._ids))
+        if self._enable_gravity_compensation:
+            self.stop_control_loop()
         self._driver.set_torque_enable(self._ids, [TorqueEnable.Disable] * len(self._ids))
         time.sleep(0.1)
         self._driver.close()
 
-    def apply_torque_feedback(self, external_torque: Sequence[float]):
-        with self._lock:
-            self._feedback_external_torque = external_torque
+    def start_control_loop(self):
+        if not self._enable_gravity_compensation:
+            raise RuntimeError("Gravity compensation must be enabled to start the control loop.")
+
+        if not self._control_thread or not self._control_thread.is_alive():
+            self._control_thread = Thread(target=self._control_loop, daemon=True)
+            self._stop_flag.clear()
+            self._control_thread.start()
+
+    def stop_control_loop(self):
+        if not self._enable_gravity_compensation:
+            raise RuntimeError("Gravity compensation must be enabled to stop the control loop.")
+
+        if self._control_thread and self._control_thread.is_alive():
+            self._stop_flag.set()
+            self._control_thread.join()
+            self._control_thread = None
 
     def _control_loop(self):
         while not self._stop_flag.is_set():
@@ -255,87 +264,84 @@ class Linker(BaseEquipment):
             time.sleep(0.01)
 
     def _null_space_regulation(self, joint_pos, joint_vel):
-        J = pin.computeJointJacobian(self.pin_model, self.pin_data, joint_pos, self._dof)
+        J = pin.computeJointJacobian(self._pin_model, self._pin_data, joint_pos, self._dof)
         J_dagger = np.linalg.pinv(J)
         null_space_projector = np.eye(self._dof) - J_dagger @ J
-        q_error = joint_pos - self.null_space_joint_target
-        tau_n = null_space_projector @ (-self.null_space_kp * q_error - self.null_space_kd * joint_vel)
+        q_error = joint_pos - self._null_space_joint_target
+        tau_n = null_space_projector @ (-self._null_space_kp * q_error - self._null_space_kd * joint_vel)
         return tau_n
 
     def _gravity_compensation(self, joint_pos, joint_vel):
-        tau_g = pin.rnea(self.pin_model, self.pin_data, joint_pos, joint_vel, np.zeros_like(joint_vel))
-        tau_g *= self.gravity_comp_modifier
+        tau_g = pin.rnea(self._pin_model, self._pin_data, joint_pos, joint_vel, np.zeros_like(joint_vel))
+        tau_g *= self._gravity_comp_modifier
         return tau_g
 
     def _friction_compensation(self, tau_g, joint_vel):
         tau_ss = np.zeros(self._dof)
         for i in range(self._dof):
-            if abs(joint_vel[i]) < self.stiction_comp_enable_speed:
-                if self.stiction_dither_flag[i]:
-                    tau_ss[i] += self.stiction_comp_gain * abs(tau_g[i])
+            if abs(joint_vel[i]) < self._stiction_comp_enable_speed:
+                if self._stiction_dither_flag[i]:
+                    tau_ss[i] += self._stiction_comp_gain * abs(tau_g[i])
                 else:
-                    tau_ss[i] -= self.stiction_comp_gain * abs(tau_g[i])
-                self.stiction_dither_flag[i] = ~self.stiction_dither_flag[i]
+                    tau_ss[i] -= self._stiction_comp_gain * abs(tau_g[i])
+                self._stiction_dither_flag[i] = ~self._stiction_dither_flag[i]
         return tau_ss
 
     def _torque_feedback(self, joint_vel):
-        tau_fb = self.torque_feedback_scalar * self._feedback_external_torque - self.torque_feedback_damping * joint_vel
+        tau_fb = (
+            self._torque_feedback_scalar * self._feedback_external_torque - self._torque_feedback_damping * joint_vel
+        )
         return tau_fb
 
-    def _momentum_observer_step(self, joint_pos, joint_vel, joint_effort, dt):
-        pin.computeAllTerms(self.pin_model, self.pin_data, joint_pos, joint_vel)
+    def apply_torque_feedback(self, external_torque: Sequence[float]):
+        with self._lock:
+            self._feedback_external_torque = external_torque
 
-        M = self.pin_data.M
-        g = self.pin_data.g
-
-        # C^T * q_dot term
-        C = self.pin_data.C
+    def update_momentum_observer(self, joint_pos, joint_vel, joint_effort, dt):
+        pin.computeAllTerms(self._pin_model, self._pin_data, joint_pos, joint_vel)
+        M = self._pin_data.M
+        g = self._pin_data.g
+        C = self._pin_data.C
         beta = C.T @ joint_vel
-
         p = M @ joint_vel
-
-        # Friction compensation
-        tau_f = self.stiction_comp_gain * np.sign(joint_vel) + self.viscous_friction_gain * joint_vel
-
-        # Momentum observer update
-        # p_hat_dot = tau - tau_f - g + C^T*v + K*(p - p_hat)
-        p_hat_dot = joint_effort - tau_f - g + beta + self.K @ (p - self.p_hat)
-        self.p_hat += p_hat_dot * dt
-
-        tau_ext_hat = self.K @ (p - self.p_hat)
-
-        return tau_ext_hat
+        tau_f = self._stiction_comp_gain * np.sign(joint_vel) + self._viscous_friction_gain * joint_vel
+        p_hat_dot = joint_effort - tau_f - g + beta + self._K @ (p - self._p_hat)
+        self._p_hat += p_hat_dot * dt
+        tau_ext_raw = self._K @ (p - self._p_hat)
+        self._estimated_external_torque = (
+            self._lpf_alpha * tau_ext_raw + (1.0 - self._lpf_alpha) * self._estimated_external_torque
+        )
+        return self._estimated_external_torque
 
     def estimate_joint_external_torque(self, joint_pos, joint_vel, joint_effort, dt):
-        tau_ext = self._momentum_observer_step(joint_pos, joint_vel, joint_effort, dt)
-        return tau_ext
+        return self.update_momentum_observer(joint_pos, joint_vel, joint_effort, dt)
 
-    def estimate_ee_external_wrench(self, joint_pos, joint_vel, joint_effort, dt):
-        tau_ext = self._momentum_observer_step(joint_pos, joint_vel, joint_effort, dt)
-
-        pin.computeJointJacobians(self.pin_model, self.pin_data, joint_pos)
-        pin.updateFramePlacements(self.pin_model, self.pin_data)
-
+    def estimate_ee_external_wrench(self, joint_pos, joint_vel, joint_effort, dt, update_dynamics: bool = True):
+        if update_dynamics:
+            tau_ext = self.update_momentum_observer(joint_pos, joint_vel, joint_effort, dt)
+        else:
+            tau_ext = self._estimated_external_torque
+        pin.computeJointJacobians(self._pin_model, self._pin_data, joint_pos)
+        pin.updateFramePlacements(self._pin_model, self._pin_data)
         J = pin.getFrameJacobian(
-            self.pin_model, self.pin_data, self.ee_frame_id, pin.ReferenceFrame.LOCAL_WORLD_ALIGNED
+            self._pin_model, self._pin_data, self._ee_frame_id, pin.ReferenceFrame.LOCAL_WORLD_ALIGNED
         )
-
-        # Use pseudo-inverse to map joint torques to end-effector wrench
-        # J.T * f_ext = tau_ext  => f_ext = (J.T)^+ * tau_ext
         f_ext = np.linalg.pinv(J.T) @ tau_ext
         return f_ext
 
 
 if __name__ == "__main__":
     config_loader = ConfigLoader()
-    linker = Linker(config_loader.config["basic"]["station_type"], config_loader.config["linker"]["single"])
+    config = config_loader.get_linker_config()
+    if isinstance(config, tuple):
+        config = config[0]
+    linker = Linker(config)
     try:
         with np.printoptions(suppress=True):
             while True:
-                # print(np.around(linker.act(encode_gripper=False), 4))
                 print(np.around(linker.act(), 4))
                 time.sleep(0.05)
-    except Exception as e:
-        raise e
+    except KeyboardInterrupt:
+        pass
     finally:
         linker.close()
