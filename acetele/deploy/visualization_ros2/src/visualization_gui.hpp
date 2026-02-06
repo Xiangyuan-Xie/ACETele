@@ -85,6 +85,12 @@ private:
     QTextEdit *front_metadata_view_;
     QTextEdit *wrist_metadata_view_;
     QTextEdit *arm_state_view_;
+
+    // Layouts
+    QHBoxLayout *main_layout_;
+    QVBoxLayout *left_layout_;
+    QGridLayout *grid_layout_;
+    QVBoxLayout *right_layout_;
 };
 
 #endif // VISUALIZATION_GUI_HPP

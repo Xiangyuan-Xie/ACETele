@@ -68,22 +68,22 @@ void VisualizationWindow::setupUI()
 
     QWidget *centralWidget = new QWidget(this);
     this->setCentralWidget(centralWidget);
-    QHBoxLayout *mainLayout = new QHBoxLayout(centralWidget);
-    mainLayout->setSpacing(15);
-    mainLayout->setContentsMargins(15, 15, 15, 15);
+    main_layout_ = new QHBoxLayout(centralWidget);
+    main_layout_->setSpacing(15);
+    main_layout_->setContentsMargins(15, 15, 15, 15);
 
     // --- Left Panel (Camera Views) ---
     QWidget *leftWidget = new QWidget();
-    QVBoxLayout *leftLayout = new QVBoxLayout(leftWidget);
+    left_layout_ = new QVBoxLayout(leftWidget);
 
     image_title_ = new QLabel("Camera Views (Front & Wrist)");
     image_title_->setStyleSheet("font-size: 18pt; font-weight: bold; margin-bottom: 10px; color: #2c3e50;");
-    leftLayout->addWidget(image_title_);
+    left_layout_->addWidget(image_title_);
 
     QWidget *gridWidget = new QWidget();
-    QGridLayout *gridLayout = new QGridLayout(gridWidget);
-    gridLayout->setSpacing(10);
-    gridLayout->setContentsMargins(5, 5, 5, 5);
+    grid_layout_ = new QGridLayout(gridWidget);
+    grid_layout_->setSpacing(10);
+    grid_layout_->setContentsMargins(5, 5, 5, 5);
 
     // Grid Layout Strategy:
     // (0,0) Front RGB   (0,1) Wrist RGB
@@ -102,7 +102,7 @@ void VisualizationWindow::setupUI()
     front_rgb_text_->setStyleSheet("font-weight: bold; color: #2c3e50; font-size: 10pt;");
     frontRgbLayout->addWidget(front_rgb_view_);
     frontRgbLayout->addWidget(front_rgb_text_);
-    gridLayout->addWidget(frontRgbContainer, 0, 0);
+    grid_layout_->addWidget(frontRgbContainer, 0, 0);
 
     // 2. Wrist RGB (0,1)
     QWidget *wristRgbContainer = new QWidget();
@@ -117,7 +117,7 @@ void VisualizationWindow::setupUI()
     wrist_rgb_text_->setStyleSheet("font-weight: bold; color: #2c3e50; font-size: 10pt;");
     wristRgbLayout->addWidget(wrist_rgb_view_);
     wristRgbLayout->addWidget(wrist_rgb_text_);
-    gridLayout->addWidget(wristRgbContainer, 0, 1);
+    grid_layout_->addWidget(wristRgbContainer, 0, 1);
 
     // 3. Front Depth (1,0)
     QWidget *frontDepthContainer = new QWidget();
@@ -132,7 +132,7 @@ void VisualizationWindow::setupUI()
     front_depth_text_->setStyleSheet("font-weight: bold; color: #2c3e50; font-size: 10pt;");
     frontDepthLayout->addWidget(front_depth_view_);
     frontDepthLayout->addWidget(front_depth_text_);
-    gridLayout->addWidget(frontDepthContainer, 1, 0);
+    grid_layout_->addWidget(frontDepthContainer, 1, 0);
 
     // 4. Wrist Depth (1,1)
     QWidget *wristDepthContainer = new QWidget();
@@ -147,20 +147,20 @@ void VisualizationWindow::setupUI()
     wrist_depth_text_->setStyleSheet("font-weight: bold; color: #2c3e50; font-size: 10pt;");
     wristDepthLayout->addWidget(wrist_depth_view_);
     wristDepthLayout->addWidget(wrist_depth_text_);
-    gridLayout->addWidget(wristDepthContainer, 1, 1);
+    grid_layout_->addWidget(wristDepthContainer, 1, 1);
 
     // Stretch factors
-    gridLayout->setRowStretch(0, 1);
-    gridLayout->setRowStretch(1, 1);
-    gridLayout->setColumnStretch(0, 1);
-    gridLayout->setColumnStretch(1, 1);
+    grid_layout_->setRowStretch(0, 1);
+    grid_layout_->setRowStretch(1, 1);
+    grid_layout_->setColumnStretch(0, 1);
+    grid_layout_->setColumnStretch(1, 1);
 
-    leftLayout->addWidget(gridWidget, 1);
-    mainLayout->addWidget(leftWidget, 4); // Left panel takes 4/5 width
+    left_layout_->addWidget(gridWidget, 1);
+    main_layout_->addWidget(leftWidget, 4); // Left panel takes 4/5 width
 
     // --- Right Panel (Status & Controls) ---
     QWidget *rightWidget = new QWidget();
-    QVBoxLayout *rightLayout = new QVBoxLayout(rightWidget);
+    right_layout_ = new QVBoxLayout(rightWidget);
 
     // Title & Status
     QHBoxLayout *titleLayout = new QHBoxLayout();
@@ -171,12 +171,12 @@ void VisualizationWindow::setupUI()
     titleLayout->addWidget(data_title_);
     titleLayout->addStretch();
     titleLayout->addWidget(status_label_);
-    rightLayout->addLayout(titleLayout);
+    right_layout_->addLayout(titleLayout);
 
     // Status Table
     status_header_ = new QLabel("Topic Status");
     status_header_->setStyleSheet("font-weight: bold; color: #34495e; margin-top: 5px;");
-    rightLayout->addWidget(status_header_);
+    right_layout_->addWidget(status_header_);
 
     status_table_ = new QTableWidget(0, 2);
     status_table_->setHorizontalHeaderLabels({"Topic", "Status"});
@@ -185,84 +185,90 @@ void VisualizationWindow::setupUI()
     status_table_->setAlternatingRowColors(true);
     status_table_->setSelectionMode(QAbstractItemView::NoSelection);
     status_table_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    status_table_->setFocusPolicy(Qt::NoFocus);
     status_table_->setStyleSheet(
         "QTableWidget {"
-        "   gridline-color: #d0d0d0;"
-        "   font-size: 11px;"
-        "   border: 1px solid #cccccc;"
-        "   border-radius: 5px;"
+        "   gridline-color: #e0e0e0;"
+        "   font-family: 'Segoe UI', 'Roboto', 'Helvetica', 'Arial', sans-serif;"
+        "   font-size: 12px;"
+        "   border: 1px solid #d0d0d0;"
+        "   border-radius: 6px;"
+        "   background-color: #ffffff;"
+        "   selection-background-color: #e8f0fe;"
+        "   selection-color: #2c3e50;"
         "}"
         "QTableWidget::item {"
-        "   padding: 8px;"
+        "   padding: 10px;"
         "   border-bottom: 1px solid #f0f0f0;"
+        "   color: #2c3e50;"
         "}"
         "QHeaderView::section {"
-        "   background-color: #3498db;"
-        "   color: white;"
-        "   padding: 8px;"
+        "   background-color: #2c3e50;"
+        "   color: #ffffff;"
+        "   padding: 10px;"
         "   border: none;"
-        "   font-weight: bold;"
+        "   font-weight: 600;"
+        "   font-family: 'Segoe UI', 'Roboto', 'Helvetica', 'Arial', sans-serif;"
+        "   text-transform: uppercase;"
+        "   letter-spacing: 1px;"
         "}"
     );
-    rightLayout->addWidget(status_table_, 2); // Takes 2/5 of available vertical space
+    right_layout_->addWidget(status_table_, 2); // Takes 2/5 of available vertical space
 
     // Metadata View (Tabbed)
     meta_header_ = new QLabel("Metadata");
     meta_header_->setStyleSheet("font-weight: bold; color: #34495e; margin-top: 10px;");
-    rightLayout->addWidget(meta_header_);
+    right_layout_->addWidget(meta_header_);
 
     metadata_tabs_ = new QTabWidget();
     metadata_tabs_->setStyleSheet(
-        "QTabWidget::pane { border: 1px solid #cccccc; border-radius: 4px; }"
-        "QTabBar::tab { background: #e0e0e0; padding: 5px 10px; margin-right: 2px; border-top-left-radius: 4px; border-top-right-radius: 4px; }"
-        "QTabBar::tab:selected { background: #f8f8f8; font-weight: bold; }"
+        "QTabWidget::pane { border: 1px solid #d0d0d0; border-radius: 6px; background-color: #fafafa; }"
+        "QTabBar::tab { "
+        "   background: #e0e0e0; "
+        "   color: #555555; "
+        "   padding: 8px 16px; "
+        "   margin-right: 2px; "
+        "   border-top-left-radius: 6px; "
+        "   border-top-right-radius: 6px; "
+        "   font-family: 'Segoe UI', 'Roboto', 'Helvetica', 'Arial', sans-serif;"
+        "}"
+        "QTabBar::tab:selected { background: #fafafa; color: #2c3e50; font-weight: bold; border-bottom: 2px solid #2c3e50; }"
+        "QTabBar::tab:hover { background: #ececec; }"
     );
+
+    // Common style for metadata views
+    QString metaStyle =
+        "QTextEdit {"
+        "   border: none;"
+        "   background-color: #fafafa;"
+        "   color: #2c3e50;"
+        "   font-family: 'JetBrains Mono', 'Fira Code', 'Roboto Mono', 'Consolas', monospace;"
+        "   font-size: 12px;"
+        "   padding: 10px;"
+        "   line-height: 1.5;"
+        "}";
 
     // Front Metadata Tab
     front_metadata_view_ = new QTextEdit();
     front_metadata_view_->setReadOnly(true);
-    front_metadata_view_->setStyleSheet(
-        "QTextEdit {"
-        "   border: none;"
-        "   background-color: #f8f8f8;"
-        "   color: #333333;"
-        "   font-family: 'Consolas', monospace;"
-        "   font-size: 11px;"
-        "}"
-    );
+    front_metadata_view_->setStyleSheet(metaStyle);
     metadata_tabs_->addTab(front_metadata_view_, "Front Camera");
 
     // Wrist Metadata Tab
     wrist_metadata_view_ = new QTextEdit();
     wrist_metadata_view_->setReadOnly(true);
-    wrist_metadata_view_->setStyleSheet(
-        "QTextEdit {"
-        "   border: none;"
-        "   background-color: #f8f8f8;"
-        "   color: #333333;"
-        "   font-family: 'Consolas', monospace;"
-        "   font-size: 11px;"
-        "}"
-    );
+    wrist_metadata_view_->setStyleSheet(metaStyle);
     metadata_tabs_->addTab(wrist_metadata_view_, "Wrist Camera");
 
     // Arm State Tab
     arm_state_view_ = new QTextEdit();
     arm_state_view_->setReadOnly(true);
-    arm_state_view_->setStyleSheet(
-        "QTextEdit {"
-        "   border: none;"
-        "   background-color: #f8f8f8;"
-        "   color: #333333;"
-        "   font-family: 'Consolas', monospace;"
-        "   font-size: 11px;"
-        "}"
-    );
+    arm_state_view_->setStyleSheet(metaStyle);
     metadata_tabs_->addTab(arm_state_view_, "Arm State");
 
-    rightLayout->addWidget(metadata_tabs_, 3); // Takes more space now that controls are gone
+    right_layout_->addWidget(metadata_tabs_, 3); // Takes more space now that controls are gone
 
-    mainLayout->addWidget(rightWidget, 1); // Right panel takes 1/5 width
+    main_layout_->addWidget(rightWidget, 1); // Right panel takes 1/5 width
 }
 
 void VisualizationWindow::resizeEvent(QResizeEvent *event)
@@ -282,14 +288,26 @@ void VisualizationWindow::updateFonts()
     // Minimum scale to prevent text becoming unreadable
     if (scale < 0.5) scale = 0.5;
 
-    // Update Stylesheets with scaled font sizes
+    // --- 1. Scale Layouts ---
+    if (main_layout_) {
+        main_layout_->setSpacing(int(15 * scale));
+        main_layout_->setContentsMargins(int(15 * scale), int(15 * scale), int(15 * scale), int(15 * scale));
+    }
+    if (grid_layout_) {
+        grid_layout_->setSpacing(int(10 * scale));
+        grid_layout_->setContentsMargins(int(5 * scale), int(5 * scale), int(5 * scale), int(5 * scale));
+    }
+    if (left_layout_) left_layout_->setSpacing(int(6 * scale));
+    if (right_layout_) right_layout_->setSpacing(int(6 * scale));
 
-    // 1. Image Title (Base 18pt)
+    // --- 2. Update Stylesheets ---
+
+    // Image Title (Base 18pt)
     image_title_->setStyleSheet(QString(
-        "font-size: %1pt; font-weight: bold; margin-bottom: 10px; color: #2c3e50;"
-    ).arg(int(18 * scale)));
+        "font-size: %1pt; font-weight: bold; margin-bottom: %2px; color: #2c3e50;"
+    ).arg(int(18 * scale)).arg(int(10 * scale)));
 
-    // 2. View Labels (Base 10pt)
+    // View Labels (Base 10pt)
     QString viewLabelStyle = QString(
         "font-weight: bold; color: #2c3e50; font-size: %1pt;"
     ).arg(int(10 * scale));
@@ -298,66 +316,100 @@ void VisualizationWindow::updateFonts()
     front_depth_text_->setStyleSheet(viewLabelStyle);
     wrist_depth_text_->setStyleSheet(viewLabelStyle);
 
-    // 3. Data Title (Base 16pt)
+    // Data Title (Base 16pt)
     data_title_->setStyleSheet(QString(
-        "font-size: %1pt; font-weight: bold; margin-bottom: 10px; color: #2c3e50;"
-    ).arg(int(16 * scale)));
+        "font-size: %1pt; font-weight: bold; margin-bottom: %2px; color: #2c3e50;"
+    ).arg(int(16 * scale)).arg(int(10 * scale)));
 
-    // 4. Status Label (Base 10pt)
+    // Status Label (Base 10pt)
     status_label_->setStyleSheet(QString(
         "color: #666666; font-style: italic; font-size: %1pt;"
     ).arg(int(10 * scale)));
 
-    // 5. Headers (Base 11pt bold)
+    // Headers (Base 11pt bold)
     QString headerStyle = QString(
-        "font-weight: bold; color: #34495e; margin-top: 5px; font-size: %1pt;"
-    ).arg(int(11 * scale));
+        "font-weight: bold; color: #34495e; margin-top: %2px; font-size: %1pt;"
+    ).arg(int(11 * scale)).arg(int(5 * scale));
     status_header_->setStyleSheet(headerStyle);
     meta_header_->setStyleSheet(headerStyle);
 
-    // 6. Status Table (Base 11pt)
+    // Status Table (Base 12px)
+    // Scale row height explicitly
+    status_table_->verticalHeader()->setDefaultSectionSize(int(36 * scale));
+
     status_table_->setStyleSheet(QString(
         "QTableWidget {"
-        "   gridline-color: #d0d0d0;"
+        "   gridline-color: #e0e0e0;"
+        "   font-family: 'Segoe UI', 'Roboto', 'Helvetica', 'Arial', sans-serif;"
         "   font-size: %1px;"
-        "   border: 1px solid #cccccc;"
-        "   border-radius: 5px;"
+        "   border: 1px solid #d0d0d0;"
+        "   border-radius: 6px;"
+        "   background-color: #ffffff;"
+        "   selection-background-color: #e8f0fe;"
+        "   selection-color: #2c3e50;"
         "}"
         "QTableWidget::item {"
-        "   padding: 8px;"
+        "   padding: %2px;"
         "   border-bottom: 1px solid #f0f0f0;"
+        "   color: #2c3e50;"
         "}"
         "QHeaderView::section {"
-        "   background-color: #3498db;"
-        "   color: white;"
-        "   padding: 8px;"
+        "   background-color: #2c3e50;"
+        "   color: #ffffff;"
+        "   padding: %2px;"
         "   border: none;"
-        "   font-weight: bold;"
-        "   font-size: %2px;"
+        "   font-weight: 600;"
+        "   font-family: 'Segoe UI', 'Roboto', 'Helvetica', 'Arial', sans-serif;"
+        "   text-transform: uppercase;"
+        "   letter-spacing: 1px;"
+        "   font-size: %3px;"
         "}"
-    ).arg(int(11 * scale)).arg(int(11 * scale)));
+    ).arg(int(12 * scale))
+     .arg(int(10 * scale))
+     .arg(int(12 * scale)));
 
-    // 7. Metadata Views (Base 11px)
+    // Metadata Views (Base 12px)
     QString metaStyle = QString(
         "QTextEdit {"
         "   border: none;"
-        "   background-color: #f8f8f8;"
-        "   color: #333333;"
-        "   font-family: 'Consolas', monospace;"
+        "   background-color: #fafafa;"
+        "   color: #2c3e50;"
+        "   font-family: 'JetBrains Mono', 'Fira Code', 'Roboto Mono', 'Consolas', monospace;"
         "   font-size: %1px;"
+        "   padding: %2px;"
+        "   line-height: 1.5;"
         "}"
-    ).arg(int(11 * scale));
+    ).arg(int(12 * scale)).arg(int(10 * scale));
 
     front_metadata_view_->setStyleSheet(metaStyle);
     wrist_metadata_view_->setStyleSheet(metaStyle);
     arm_state_view_->setStyleSheet(metaStyle);
 
-    // 8. Tab Widget (Tabs themselves)
+    // Tab Widget (Tabs themselves)
+    // Added min-width to prevent text truncation
     metadata_tabs_->setStyleSheet(QString(
-        "QTabWidget::pane { border: 1px solid #cccccc; border-radius: 4px; }"
-        "QTabBar::tab { background: #e0e0e0; padding: 5px 10px; margin-right: 2px; border-top-left-radius: 4px; border-top-right-radius: 4px; font-size: %1px; }"
-        "QTabBar::tab:selected { background: #f8f8f8; font-weight: bold; }"
-    ).arg(int(11 * scale)));
+        "QTabWidget::pane { border: 1px solid #d0d0d0; border-radius: 6px; background-color: #fafafa; }"
+        "QTabBar::tab { "
+        "   background: #e0e0e0; "
+        "   color: #555555; "
+        "   padding: %2px %3px; "
+        "   margin-right: 2px; "
+        "   border-top-left-radius: 6px; "
+        "   border-top-right-radius: 6px; "
+        "   font-family: 'Segoe UI', 'Roboto', 'Helvetica', 'Arial', sans-serif;"
+        "   font-size: %1px; "
+        "   min-width: %4px; "
+        "}"
+        "QTabBar::tab:selected { background: #fafafa; color: #2c3e50; font-weight: bold; border-bottom: 2px solid #2c3e50; }"
+        "QTabBar::tab:hover { background: #ececec; }"
+    ).arg(int(12 * scale))
+     .arg(int(8 * scale))
+     .arg(int(12 * scale)) // Reduced horizontal padding slightly for better fit
+     .arg(int(80 * scale))); // min-width ensures text space
+
+    // Force style update
+    metadata_tabs_->style()->unpolish(metadata_tabs_);
+    metadata_tabs_->style()->polish(metadata_tabs_);
 }
 
 void VisualizationWindow::updateView()
