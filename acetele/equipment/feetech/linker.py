@@ -64,7 +64,7 @@ class Linker(BaseEquipment):
             self._null_space_kp = 0.1
             self._null_space_kd = 0.01
 
-            self._gravity_comp_modifier = 1.0
+            self._gravity_comp_modifier = 1.2
 
             self._stiction_dither_flag = np.ones(self._dof, dtype=bool)
             self._stiction_comp_enable_speed = 0.9
@@ -259,9 +259,7 @@ class Linker(BaseEquipment):
             tau_fb = self._torque_feedback(joint_vel)  # 力反馈
             tau = tau_n + tau_g + tau_ss + tau_fb
             self.set_torque(tau)
-            # self.set_position_and_torque(positions=pos, torques=tau, encode_gripper=False)
-
-            time.sleep(0.01)
+            # self.set_position_and_torque(positions=joint_pos, torques=tau, encode_gripper=False)
 
     def _null_space_regulation(self, joint_pos, joint_vel):
         J = pin.computeJointJacobian(self._pin_model, self._pin_data, joint_pos, self._dof)

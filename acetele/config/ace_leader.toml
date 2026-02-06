@@ -9,6 +9,6 @@ joint_signs = [1, -1, -1, -1, 1]
 home_poses = [0.0, 0.0, 0.0, 0.0, 0.0]
 gripper_id = 4
 gripper_type = "ace_leader"
-enable_gravity_compensation = false
+enable_gravity_compensation = true
 enable_estimate_external_torque = false
 servo_types = ["HL3915", "HL3915", "HL3915", "HL3915", "HL3915"]

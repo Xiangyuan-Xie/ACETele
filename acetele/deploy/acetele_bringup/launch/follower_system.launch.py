@@ -15,7 +15,6 @@ def generate_launch_description():
                 "ace_station.launch.py",
             )
         ),
-        launch_arguments={"station_type": "ace_follower"}.items(),
     )
 
     realsense_launch = IncludeLaunchDescription(

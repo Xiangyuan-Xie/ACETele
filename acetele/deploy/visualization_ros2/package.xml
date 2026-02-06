@@ -12,7 +12,7 @@
   <depend>realsense2_camera_msgs</depend>
   <depend>cv_bridge</depend>
   <depend>image_transport</depend>
-  <depend>libopencv-dev</depend>
+  <depend>opencv</depend>
   <depend>qtbase5-dev</depend>
   <export>
     <build_type>ament_cmake</build_type>
