@@ -2,6 +2,7 @@
 #include <QDateTime>
 #include <QDir>
 #include <QHeaderView>
+#include <QResizeEvent>
 
 // --- AspectRatioLabel Implementation ---
 
@@ -75,9 +76,9 @@ void VisualizationWindow::setupUI()
     QWidget *leftWidget = new QWidget();
     QVBoxLayout *leftLayout = new QVBoxLayout(leftWidget);
 
-    QLabel *imageTitle = new QLabel("Camera Views (Front & Wrist)");
-    imageTitle->setStyleSheet("font-size: 18pt; font-weight: bold; margin-bottom: 10px; color: #2c3e50;");
-    leftLayout->addWidget(imageTitle);
+    image_title_ = new QLabel("Camera Views (Front & Wrist)");
+    image_title_->setStyleSheet("font-size: 18pt; font-weight: bold; margin-bottom: 10px; color: #2c3e50;");
+    leftLayout->addWidget(image_title_);
 
     QWidget *gridWidget = new QWidget();
     QGridLayout *gridLayout = new QGridLayout(gridWidget);
@@ -96,11 +97,11 @@ void VisualizationWindow::setupUI()
 
     front_rgb_view_ = new AspectRatioLabel();
     front_rgb_view_->setPixmap(createSampleImage(QColor(52, 152, 219), "Front RGB"));
-    QLabel *frontRgbText = new QLabel("Front RGB");
-    frontRgbText->setAlignment(Qt::AlignCenter);
-    frontRgbText->setStyleSheet("font-weight: bold; color: #2c3e50; font-size: 10pt;");
+    front_rgb_text_ = new QLabel("Front RGB");
+    front_rgb_text_->setAlignment(Qt::AlignCenter);
+    front_rgb_text_->setStyleSheet("font-weight: bold; color: #2c3e50; font-size: 10pt;");
     frontRgbLayout->addWidget(front_rgb_view_);
-    frontRgbLayout->addWidget(frontRgbText);
+    frontRgbLayout->addWidget(front_rgb_text_);
     gridLayout->addWidget(frontRgbContainer, 0, 0);
 
     // 2. Wrist RGB (0,1)
@@ -111,11 +112,11 @@ void VisualizationWindow::setupUI()
 
     wrist_rgb_view_ = new AspectRatioLabel();
     wrist_rgb_view_->setPixmap(createSampleImage(QColor(46, 204, 113), "Wrist RGB"));
-    QLabel *wristRgbText = new QLabel("Wrist RGB");
-    wristRgbText->setAlignment(Qt::AlignCenter);
-    wristRgbText->setStyleSheet("font-weight: bold; color: #2c3e50; font-size: 10pt;");
+    wrist_rgb_text_ = new QLabel("Wrist RGB");
+    wrist_rgb_text_->setAlignment(Qt::AlignCenter);
+    wrist_rgb_text_->setStyleSheet("font-weight: bold; color: #2c3e50; font-size: 10pt;");
     wristRgbLayout->addWidget(wrist_rgb_view_);
-    wristRgbLayout->addWidget(wristRgbText);
+    wristRgbLayout->addWidget(wrist_rgb_text_);
     gridLayout->addWidget(wristRgbContainer, 0, 1);
 
     // 3. Front Depth (1,0)
@@ -126,11 +127,11 @@ void VisualizationWindow::setupUI()
 
     front_depth_view_ = new AspectRatioLabel();
     front_depth_view_->setPixmap(createSampleImage(QColor(155, 89, 182), "Front Depth"));
-    QLabel *frontDepthText = new QLabel("Front Depth");
-    frontDepthText->setAlignment(Qt::AlignCenter);
-    frontDepthText->setStyleSheet("font-weight: bold; color: #2c3e50; font-size: 10pt;");
+    front_depth_text_ = new QLabel("Front Depth");
+    front_depth_text_->setAlignment(Qt::AlignCenter);
+    front_depth_text_->setStyleSheet("font-weight: bold; color: #2c3e50; font-size: 10pt;");
     frontDepthLayout->addWidget(front_depth_view_);
-    frontDepthLayout->addWidget(frontDepthText);
+    frontDepthLayout->addWidget(front_depth_text_);
     gridLayout->addWidget(frontDepthContainer, 1, 0);
 
     // 4. Wrist Depth (1,1)
@@ -141,11 +142,11 @@ void VisualizationWindow::setupUI()
 
     wrist_depth_view_ = new AspectRatioLabel();
     wrist_depth_view_->setPixmap(createSampleImage(QColor(241, 196, 15), "Wrist Depth"));
-    QLabel *wristDepthText = new QLabel("Wrist Depth");
-    wristDepthText->setAlignment(Qt::AlignCenter);
-    wristDepthText->setStyleSheet("font-weight: bold; color: #2c3e50; font-size: 10pt;");
+    wrist_depth_text_ = new QLabel("Wrist Depth");
+    wrist_depth_text_->setAlignment(Qt::AlignCenter);
+    wrist_depth_text_->setStyleSheet("font-weight: bold; color: #2c3e50; font-size: 10pt;");
     wristDepthLayout->addWidget(wrist_depth_view_);
-    wristDepthLayout->addWidget(wristDepthText);
+    wristDepthLayout->addWidget(wrist_depth_text_);
     gridLayout->addWidget(wristDepthContainer, 1, 1);
 
     // Stretch factors
@@ -163,19 +164,19 @@ void VisualizationWindow::setupUI()
 
     // Title & Status
     QHBoxLayout *titleLayout = new QHBoxLayout();
-    QLabel *dataTitle = new QLabel("System Info");
-    dataTitle->setStyleSheet("font-size: 16pt; font-weight: bold; margin-bottom: 10px; color: #2c3e50;");
+    data_title_ = new QLabel("System Info");
+    data_title_->setStyleSheet("font-size: 16pt; font-weight: bold; margin-bottom: 10px; color: #2c3e50;");
     status_label_ = new QLabel(QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss"));
     status_label_->setStyleSheet("color: #666666; font-style: italic;");
-    titleLayout->addWidget(dataTitle);
+    titleLayout->addWidget(data_title_);
     titleLayout->addStretch();
     titleLayout->addWidget(status_label_);
     rightLayout->addLayout(titleLayout);
 
     // Status Table
-    QLabel *statusHeader = new QLabel("Topic Status");
-    statusHeader->setStyleSheet("font-weight: bold; color: #34495e; margin-top: 5px;");
-    rightLayout->addWidget(statusHeader);
+    status_header_ = new QLabel("Topic Status");
+    status_header_->setStyleSheet("font-weight: bold; color: #34495e; margin-top: 5px;");
+    rightLayout->addWidget(status_header_);
 
     status_table_ = new QTableWidget(0, 2);
     status_table_->setHorizontalHeaderLabels({"Topic", "Status"});
@@ -206,9 +207,9 @@ void VisualizationWindow::setupUI()
     rightLayout->addWidget(status_table_, 2); // Takes 2/5 of available vertical space
 
     // Metadata View (Tabbed)
-    QLabel *metaHeader = new QLabel("Metadata");
-    metaHeader->setStyleSheet("font-weight: bold; color: #34495e; margin-top: 10px;");
-    rightLayout->addWidget(metaHeader);
+    meta_header_ = new QLabel("Metadata");
+    meta_header_->setStyleSheet("font-weight: bold; color: #34495e; margin-top: 10px;");
+    rightLayout->addWidget(meta_header_);
 
     metadata_tabs_ = new QTabWidget();
     metadata_tabs_->setStyleSheet(
@@ -262,6 +263,101 @@ void VisualizationWindow::setupUI()
     rightLayout->addWidget(metadata_tabs_, 3); // Takes more space now that controls are gone
 
     mainLayout->addWidget(rightWidget, 1); // Right panel takes 1/5 width
+}
+
+void VisualizationWindow::resizeEvent(QResizeEvent *event)
+{
+    updateFonts();
+    QMainWindow::resizeEvent(event);
+}
+
+void VisualizationWindow::updateFonts()
+{
+    // Base resolution is 1600x900
+    // We scale based on the smaller ratio to ensure fit
+    double scale_w = (double)this->width() / base_width_;
+    double scale_h = (double)this->height() / base_height_;
+    double scale = std::min(scale_w, scale_h);
+
+    // Minimum scale to prevent text becoming unreadable
+    if (scale < 0.5) scale = 0.5;
+
+    // Update Stylesheets with scaled font sizes
+
+    // 1. Image Title (Base 18pt)
+    image_title_->setStyleSheet(QString(
+        "font-size: %1pt; font-weight: bold; margin-bottom: 10px; color: #2c3e50;"
+    ).arg(int(18 * scale)));
+
+    // 2. View Labels (Base 10pt)
+    QString viewLabelStyle = QString(
+        "font-weight: bold; color: #2c3e50; font-size: %1pt;"
+    ).arg(int(10 * scale));
+    front_rgb_text_->setStyleSheet(viewLabelStyle);
+    wrist_rgb_text_->setStyleSheet(viewLabelStyle);
+    front_depth_text_->setStyleSheet(viewLabelStyle);
+    wrist_depth_text_->setStyleSheet(viewLabelStyle);
+
+    // 3. Data Title (Base 16pt)
+    data_title_->setStyleSheet(QString(
+        "font-size: %1pt; font-weight: bold; margin-bottom: 10px; color: #2c3e50;"
+    ).arg(int(16 * scale)));
+
+    // 4. Status Label (Base 10pt)
+    status_label_->setStyleSheet(QString(
+        "color: #666666; font-style: italic; font-size: %1pt;"
+    ).arg(int(10 * scale)));
+
+    // 5. Headers (Base 11pt bold)
+    QString headerStyle = QString(
+        "font-weight: bold; color: #34495e; margin-top: 5px; font-size: %1pt;"
+    ).arg(int(11 * scale));
+    status_header_->setStyleSheet(headerStyle);
+    meta_header_->setStyleSheet(headerStyle);
+
+    // 6. Status Table (Base 11pt)
+    status_table_->setStyleSheet(QString(
+        "QTableWidget {"
+        "   gridline-color: #d0d0d0;"
+        "   font-size: %1px;"
+        "   border: 1px solid #cccccc;"
+        "   border-radius: 5px;"
+        "}"
+        "QTableWidget::item {"
+        "   padding: 8px;"
+        "   border-bottom: 1px solid #f0f0f0;"
+        "}"
+        "QHeaderView::section {"
+        "   background-color: #3498db;"
+        "   color: white;"
+        "   padding: 8px;"
+        "   border: none;"
+        "   font-weight: bold;"
+        "   font-size: %2px;"
+        "}"
+    ).arg(int(11 * scale)).arg(int(11 * scale)));
+
+    // 7. Metadata Views (Base 11px)
+    QString metaStyle = QString(
+        "QTextEdit {"
+        "   border: none;"
+        "   background-color: #f8f8f8;"
+        "   color: #333333;"
+        "   font-family: 'Consolas', monospace;"
+        "   font-size: %1px;"
+        "}"
+    ).arg(int(11 * scale));
+
+    front_metadata_view_->setStyleSheet(metaStyle);
+    wrist_metadata_view_->setStyleSheet(metaStyle);
+    arm_state_view_->setStyleSheet(metaStyle);
+
+    // 8. Tab Widget (Tabs themselves)
+    metadata_tabs_->setStyleSheet(QString(
+        "QTabWidget::pane { border: 1px solid #cccccc; border-radius: 4px; }"
+        "QTabBar::tab { background: #e0e0e0; padding: 5px 10px; margin-right: 2px; border-top-left-radius: 4px; border-top-right-radius: 4px; font-size: %1px; }"
+        "QTabBar::tab:selected { background: #f8f8f8; font-weight: bold; }"
+    ).arg(int(11 * scale)));
 }
 
 void VisualizationWindow::updateView()

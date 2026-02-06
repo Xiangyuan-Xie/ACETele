@@ -145,7 +145,11 @@ void VisualizationNode::color_callback(const sensor_msgs::msg::Image::ConstShare
             latest_color_ = image;
         }
         update_status("front_color", latency);
-    } catch (...) {}
+    } catch (const std::exception& e) {
+        RCLCPP_ERROR(this->get_logger(), "Error in color_callback: %s", e.what());
+    } catch (...) {
+        RCLCPP_ERROR(this->get_logger(), "Unknown error in color_callback");
+    }
 }
 
 void VisualizationNode::depth_callback(const sensor_msgs::msg::Image::ConstSharedPtr& msg)
@@ -159,7 +163,11 @@ void VisualizationNode::depth_callback(const sensor_msgs::msg::Image::ConstShare
             latest_depth_ = image;
         }
         update_status("front_depth", latency);
-    } catch (...) {}
+    } catch (const std::exception& e) {
+        RCLCPP_ERROR(this->get_logger(), "Error in depth_callback: %s", e.what());
+    } catch (...) {
+        RCLCPP_ERROR(this->get_logger(), "Unknown error in depth_callback");
+    }
 }
 
 void VisualizationNode::wrist_color_callback(const sensor_msgs::msg::Image::ConstSharedPtr& msg)
@@ -173,7 +181,11 @@ void VisualizationNode::wrist_color_callback(const sensor_msgs::msg::Image::Cons
             latest_wrist_color_ = image;
         }
         update_status("wrist_color", latency);
-    } catch (...) {}
+    } catch (const std::exception& e) {
+        RCLCPP_ERROR(this->get_logger(), "Error in wrist_color_callback: %s", e.what());
+    } catch (...) {
+        RCLCPP_ERROR(this->get_logger(), "Unknown error in wrist_color_callback");
+    }
 }
 
 void VisualizationNode::wrist_depth_callback(const sensor_msgs::msg::Image::ConstSharedPtr& msg)
@@ -187,7 +199,11 @@ void VisualizationNode::wrist_depth_callback(const sensor_msgs::msg::Image::Cons
             latest_wrist_depth_ = image;
         }
         update_status("wrist_depth", latency);
-    } catch (...) {}
+    } catch (const std::exception& e) {
+        RCLCPP_ERROR(this->get_logger(), "Error in wrist_depth_callback: %s", e.what());
+    } catch (...) {
+        RCLCPP_ERROR(this->get_logger(), "Unknown error in wrist_depth_callback");
+    }
 }
 
 void VisualizationNode::front_metadata_callback(const realsense2_camera_msgs::msg::Metadata::SharedPtr msg)

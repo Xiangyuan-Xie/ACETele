@@ -44,11 +44,15 @@ public:
     explicit VisualizationWindow(std::shared_ptr<VisualizationNode> node, QWidget *parent = nullptr);
     ~VisualizationWindow();
 
+protected:
+    void resizeEvent(QResizeEvent *event) override;
+
 private slots:
     void updateView();
 
 private:
     void setupUI();
+    void updateFonts();
     void updateStatusTable(const std::map<std::string, std::string>& status);
     void updateMetadata(const std::string& front_json, const std::string& wrist_json);
     QImage matToQImage(const cv::Mat& mat);
@@ -56,16 +60,27 @@ private:
 
     std::shared_ptr<VisualizationNode> node_;
     QTimer *timer_;
+    double base_width_ = 1600.0;
+    double base_height_ = 900.0;
 
     // UI Elements
+    QLabel *image_title_;
+    QLabel *front_rgb_text_;
+    QLabel *wrist_rgb_text_;
+    QLabel *front_depth_text_;
+    QLabel *wrist_depth_text_;
+
     AspectRatioLabel *front_rgb_view_;
     AspectRatioLabel *front_depth_view_;
     AspectRatioLabel *wrist_rgb_view_;
     AspectRatioLabel *wrist_depth_view_;
 
+    QLabel *data_title_;
     QLabel *status_label_;
+    QLabel *status_header_;
     QTableWidget *status_table_;
 
+    QLabel *meta_header_;
     QTabWidget *metadata_tabs_;
     QTextEdit *front_metadata_view_;
     QTextEdit *wrist_metadata_view_;
