@@ -56,7 +56,15 @@ class DataCollectorNode(Node):
     def _start_recording(self):
         self.get_logger().info("Triggered: Starting recording...")
 
-        cmd = ["ros2", "bag", "record"]
+        cmd = [
+            "ros2",
+            "bag",
+            "record",
+            "--compression-mode",
+            "file",
+            "--compression-format",
+            "zstd",
+        ]
 
         if self._combined_regex:
             cmd.append("--regex")
