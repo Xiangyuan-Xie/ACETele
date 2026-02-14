@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "A real-time remote teleoperation system for controlling robotic platforms."
 readme = { file = "README.md", content-type = "text/markdown" }
 authors = [
-    { name = "Shane Xie", email = "dragonboat_xxy@163.com" }
+    { name = "Xiangyuan Xie", email = "dragonboat_xxy@163.com" }
 ]
 keywords = ["python", "robotic", "teleoperation"]
 classifiers = [
@@ -17,13 +17,22 @@ classifiers = [
 ]
 requires-python = ">=3.9"
 dependencies = [
+    "coacd",
+    "h5py",
     "loguru",
+    "matplotlib",
+    "mujoco",
     "numpy",
+    "onnxruntime",
     "pin",
+    "pygame",
+    "pymavlink",
     "pyserial",
     "scipy",
     "tomli",
+    "torch",
     "tqdm",
+    "trimesh",
 ]
 
 [tool.setuptools.packages.find]
