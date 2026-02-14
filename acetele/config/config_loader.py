@@ -7,10 +7,12 @@ _STATION_MAP = {
     "ace_leader": {
         "default": ("acetele.station.ace_leader.ace_leader", "AceLeaderStation"),
         "ros2": ("acetele.station.ace_leader.ace_leader_ros2", "AceLeaderROS2Station"),
+        "mock": ("acetele.station.ace_leader.ace_leader_mock", "AceLeaderMockStation"),
     },
     "ace_follower": {
         "default": ("acetele.station.ace_follower.ace_follower", "AceFollowerStation"),
         "ros2": ("acetele.station.ace_follower.ace_follower_ros2", "AceFollowerROS2Station"),
+        "mock": ("acetele.station.ace_follower.ace_follower_mock", "AceFollowerMockStation"),
     },
 }
 

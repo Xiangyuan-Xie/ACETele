@@ -1,0 +1,255 @@
+<?xml version='1.0' encoding='utf-8'?>
+<mujoco model="x500_arm2x">
+  <compiler angle="radian" meshdir="meshes/" texturedir="meshes/" />
+  <option density="1.225" timestep="0.002" integrator="implicit" viscosity="1.8e-5" cone="elliptic" impratio="10" magnetic="2.73e-5 0 -4.54e-5" />
+  <size njmax="500" nconmax="100" />
+  <asset>
+    <mesh name="base_link" file="base_link.STL" />
+    <mesh name="base_link_decomp_0" file="base_link_decomp_0.stl" />
+    <mesh name="base_link_decomp_1" file="base_link_decomp_1.stl" />
+    <mesh name="base_link_decomp_2" file="base_link_decomp_2.stl" />
+    <mesh name="base_link_decomp_3" file="base_link_decomp_3.stl" />
+    <mesh name="base_link_decomp_4" file="base_link_decomp_4.stl" />
+    <mesh name="base_link_decomp_5" file="base_link_decomp_5.stl" />
+    <mesh name="base_link_decomp_6" file="base_link_decomp_6.stl" />
+    <mesh name="base_link_decomp_7" file="base_link_decomp_7.stl" />
+    <mesh name="base_link_decomp_8" file="base_link_decomp_8.stl" />
+    <mesh name="base_link_decomp_9" file="base_link_decomp_9.stl" />
+    <mesh name="base_link_decomp_10" file="base_link_decomp_10.stl" />
+    <mesh name="base_link_decomp_11" file="base_link_decomp_11.stl" />
+    <mesh name="base_link_decomp_12" file="base_link_decomp_12.stl" />
+    <mesh name="base_link_decomp_13" file="base_link_decomp_13.stl" />
+    <mesh name="rotor_1" file="rotor_1.STL" />
+    <mesh name="rotor_1_decomp_0" file="rotor_1_decomp_0.stl" />
+    <mesh name="rotor_2" file="rotor_2.STL" />
+    <mesh name="rotor_2_decomp_0" file="rotor_2_decomp_0.stl" />
+    <mesh name="rotor_3" file="rotor_3.STL" />
+    <mesh name="rotor_3_decomp_0" file="rotor_3_decomp_0.stl" />
+    <mesh name="rotor_4" file="rotor_4.STL" />
+    <mesh name="rotor_4_decomp_0" file="rotor_4_decomp_0.stl" />
+    <mesh name="link_0" file="link_0.STL" />
+    <mesh name="link_0_decomp_0" file="link_0_decomp_0.stl" />
+    <mesh name="link_0_decomp_1" file="link_0_decomp_1.stl" />
+    <mesh name="link_0_decomp_2" file="link_0_decomp_2.stl" />
+    <mesh name="link_0_decomp_3" file="link_0_decomp_3.stl" />
+    <mesh name="link_0_decomp_4" file="link_0_decomp_4.stl" />
+    <mesh name="link_0_decomp_5" file="link_0_decomp_5.stl" />
+    <mesh name="link_0_decomp_6" file="link_0_decomp_6.stl" />
+    <mesh name="link_0_decomp_7" file="link_0_decomp_7.stl" />
+    <mesh name="link_0_decomp_8" file="link_0_decomp_8.stl" />
+    <mesh name="link_0_decomp_9" file="link_0_decomp_9.stl" />
+    <mesh name="link_0_decomp_10" file="link_0_decomp_10.stl" />
+    <mesh name="link_0_decomp_11" file="link_0_decomp_11.stl" />
+    <mesh name="link_0_decomp_12" file="link_0_decomp_12.stl" />
+    <mesh name="link_0_decomp_13" file="link_0_decomp_13.stl" />
+    <mesh name="link_1" file="link_1.STL" />
+    <mesh name="link_1_decomp_0" file="link_1_decomp_0.stl" />
+    <mesh name="link_1_decomp_1" file="link_1_decomp_1.stl" />
+    <mesh name="link_2" file="link_2.STL" />
+    <mesh name="link_2_decomp_0" file="link_2_decomp_0.stl" />
+    <mesh name="link_2_decomp_1" file="link_2_decomp_1.stl" />
+    <mesh name="link_3" file="link_3.STL" />
+    <mesh name="link_3_decomp_0" file="link_3_decomp_0.stl" />
+    <mesh name="link_3_decomp_1" file="link_3_decomp_1.stl" />
+    <mesh name="link_3_decomp_2" file="link_3_decomp_2.stl" />
+    <mesh name="link_3_decomp_3" file="link_3_decomp_3.stl" />
+    <mesh name="link_3_decomp_4" file="link_3_decomp_4.stl" />
+    <mesh name="link_4" file="link_4.STL" />
+    <mesh name="link_4_decomp_0" file="link_4_decomp_0.stl" />
+    <mesh name="link_4_decomp_1" file="link_4_decomp_1.stl" />
+    <mesh name="link_4_decomp_2" file="link_4_decomp_2.stl" />
+    <mesh name="link_4_decomp_3" file="link_4_decomp_3.stl" />
+    <mesh name="link_4_decomp_4" file="link_4_decomp_4.stl" />
+    <mesh name="link_4_decomp_5" file="link_4_decomp_5.stl" />
+    <mesh name="link_5" file="link_5.STL" />
+    <mesh name="link_5_decomp_0" file="link_5_decomp_0.stl" />
+    <mesh name="link_5_decomp_1" file="link_5_decomp_1.stl" />
+    <mesh name="link_5_decomp_2" file="link_5_decomp_2.stl" />
+    <mesh name="gripper_left" file="gripper_left.STL" />
+    <mesh name="gripper_left_decomp_0" file="gripper_left_decomp_0.stl" />
+    <mesh name="gripper_left_decomp_1" file="gripper_left_decomp_1.stl" />
+    <mesh name="gripper_left_decomp_2" file="gripper_left_decomp_2.stl" />
+    <mesh name="gripper_left_decomp_3" file="gripper_left_decomp_3.stl" />
+    <mesh name="gripper_right" file="gripper_right.STL" />
+    <mesh name="gripper_right_decomp_0" file="gripper_right_decomp_0.stl" />
+    <mesh name="gripper_right_decomp_1" file="gripper_right_decomp_1.stl" />
+    <mesh name="gripper_right_decomp_2" file="gripper_right_decomp_2.stl" />
+    <mesh name="gripper_right_decomp_3" file="gripper_right_decomp_3.stl" />
+    <texture name="grid" type="2d" builtin="checker" width="512" height="512" rgb1=".1 .2 .3" rgb2=".2 .3 .4" />
+    <material name="grid" texture="grid" texrepeat="1 1" texuniform="true" reflectance="0.2" specular="1.0" shininess="0.5" />
+  </asset>
+  <worldbody>
+    <light pos="0 0 5" directional="true" diffuse=".8 .8 .8" specular=".5 .5 .5" dir="0 0 -1" castshadow="true" />
+    <geom name="floor" type="plane" material="grid" size="0 0 0.1" pos="0 0 0" group="0" contype="1" conaffinity="1" />
+    <body name="base_link" pos="0 0 0.269138">
+      <inertial pos="-0.000763566 0.000110304 -0.0391436" quat="0.502318 0.509049 -0.492447 0.496026" mass="0.68805" diaginertia="0.0157539 0.0127367 0.0122218" />
+      <joint name="floating_base_joint" type="free" />
+      <geom type="mesh" mesh="base_link" rgba="1 1 1 1" group="1" contype="0" conaffinity="0" />
+      <geom type="mesh" mesh="base_link_decomp_0" rgba="1 1 1 1" group="3" contype="1" conaffinity="1" />
+      <geom type="mesh" mesh="base_link_decomp_1" rgba="1 1 1 1" group="3" contype="1" conaffinity="1" />
+      <geom type="mesh" mesh="base_link_decomp_2" rgba="1 1 1 1" group="3" contype="1" conaffinity="1" />
+      <geom type="mesh" mesh="base_link_decomp_3" rgba="1 1 1 1" group="3" contype="1" conaffinity="1" />
+      <geom type="mesh" mesh="base_link_decomp_4" rgba="1 1 1 1" group="3" contype="1" conaffinity="1" />
+      <geom type="mesh" mesh="base_link_decomp_5" rgba="1 1 1 1" group="3" contype="1" conaffinity="1" />
+      <geom type="mesh" mesh="base_link_decomp_6" rgba="1 1 1 1" group="3" contype="1" conaffinity="1" />
+      <geom type="mesh" mesh="base_link_decomp_7" rgba="1 1 1 1" group="3" contype="1" conaffinity="1" />
+      <geom type="mesh" mesh="base_link_decomp_8" rgba="1 1 1 1" group="3" contype="1" conaffinity="1" />
+      <geom type="mesh" mesh="base_link_decomp_9" rgba="1 1 1 1" group="3" contype="1" conaffinity="1" />
+      <geom type="mesh" mesh="base_link_decomp_10" rgba="1 1 1 1" group="3" contype="1" conaffinity="1" />
+      <geom type="mesh" mesh="base_link_decomp_11" rgba="1 1 1 1" group="3" contype="1" conaffinity="1" />
+      <geom type="mesh" mesh="base_link_decomp_12" rgba="1 1 1 1" group="3" contype="1" conaffinity="1" />
+      <geom type="mesh" mesh="base_link_decomp_13" rgba="1 1 1 1" group="3" contype="1" conaffinity="1" />
+      <geom type="mesh" mesh="link_0" pos="0 0 -0.050515" quat="0.499998 0.5 0.500002 0.5" rgba="1 1 1 1" group="1" contype="0" conaffinity="0" />
+      <geom type="mesh" mesh="link_0_decomp_0" pos="0 0 -0.050515" quat="0.499998 0.5 0.500002 0.5" rgba="1 1 1 1" group="3" contype="1" conaffinity="1" />
+      <geom type="mesh" mesh="link_0_decomp_1" pos="0 0 -0.050515" quat="0.499998 0.5 0.500002 0.5" rgba="1 1 1 1" group="3" contype="1" conaffinity="1" />
+      <geom type="mesh" mesh="link_0_decomp_2" pos="0 0 -0.050515" quat="0.499998 0.5 0.500002 0.5" rgba="1 1 1 1" group="3" contype="1" conaffinity="1" />
+      <geom type="mesh" mesh="link_0_decomp_3" pos="0 0 -0.050515" quat="0.499998 0.5 0.500002 0.5" rgba="1 1 1 1" group="3" contype="1" conaffinity="1" />
+      <geom type="mesh" mesh="link_0_decomp_4" pos="0 0 -0.050515" quat="0.499998 0.5 0.500002 0.5" rgba="1 1 1 1" group="3" contype="1" conaffinity="1" />
+      <geom type="mesh" mesh="link_0_decomp_5" pos="0 0 -0.050515" quat="0.499998 0.5 0.500002 0.5" rgba="1 1 1 1" group="3" contype="1" conaffinity="1" />
+      <geom type="mesh" mesh="link_0_decomp_6" pos="0 0 -0.050515" quat="0.499998 0.5 0.500002 0.5" rgba="1 1 1 1" group="3" contype="1" conaffinity="1" />
+      <geom type="mesh" mesh="link_0_decomp_7" pos="0 0 -0.050515" quat="0.499998 0.5 0.500002 0.5" rgba="1 1 1 1" group="3" contype="1" conaffinity="1" />
+      <geom type="mesh" mesh="link_0_decomp_8" pos="0 0 -0.050515" quat="0.499998 0.5 0.500002 0.5" rgba="1 1 1 1" group="3" contype="1" conaffinity="1" />
+      <geom type="mesh" mesh="link_0_decomp_9" pos="0 0 -0.050515" quat="0.499998 0.5 0.500002 0.5" rgba="1 1 1 1" group="3" contype="1" conaffinity="1" />
+      <geom type="mesh" mesh="link_0_decomp_10" pos="0 0 -0.050515" quat="0.499998 0.5 0.500002 0.5" rgba="1 1 1 1" group="3" contype="1" conaffinity="1" />
+      <geom type="mesh" mesh="link_0_decomp_11" pos="0 0 -0.050515" quat="0.499998 0.5 0.500002 0.5" rgba="1 1 1 1" group="3" contype="1" conaffinity="1" />
+      <geom type="mesh" mesh="link_0_decomp_12" pos="0 0 -0.050515" quat="0.499998 0.5 0.500002 0.5" rgba="1 1 1 1" group="3" contype="1" conaffinity="1" />
+      <geom type="mesh" mesh="link_0_decomp_13" pos="0 0 -0.050515" quat="0.499998 0.5 0.500002 0.5" rgba="1 1 1 1" group="3" contype="1" conaffinity="1" />
+      <body name="rotor_1" pos="0.17688 -0.17688 0.056">
+        <site name="rotor_joint_thrust1" type="cylinder" size="0.01 0.005" pos="0 0 0" rgba="1 0 0 0.5" />
+      </body>
+      <body name="rotor_2" pos="-0.17688 0.17688 0.056">
+        <site name="rotor_joint_thrust2" type="cylinder" size="0.01 0.005" pos="0 0 0" rgba="1 0 0 0.5" />
+      </body>
+      <body name="rotor_3" pos="0.17688 0.17688 0.056">
+        <site name="rotor_joint_thrust3" type="cylinder" size="0.01 0.005" pos="0 0 0" rgba="1 0 0 0.5" />
+      </body>
+      <body name="rotor_4" pos="-0.17688 -0.17688 0.056">
+        <site name="rotor_joint_thrust4" type="cylinder" size="0.01 0.005" pos="0 0 0" rgba="1 0 0 0.5" />
+      </body>
+      <body name="link_1" pos="-1.69371e-07 0 -0.096625" quat="1.29869e-06 -3.89602e-06 0.707104 -0.707109">
+        <inertial pos="-0.018022 0.15628 -0.00061218" quat="0.440996 0.531998 -0.462612 0.555419" mass="0.09846" diaginertia="0.000691409 0.000678665 2.75863e-05" />
+        <joint name="joint_1" pos="0 0 0" axis="0 0 1" limited="true" range="-2.6485 2.6485" />
+        <geom type="mesh" mesh="link_1" rgba="1 1 1 1" group="1" contype="0" conaffinity="0" />
+        <geom type="mesh" mesh="link_1_decomp_0" rgba="1 1 1 1" group="3" contype="1" conaffinity="1" />
+        <geom type="mesh" mesh="link_1_decomp_1" rgba="1 1 1 1" group="3" contype="1" conaffinity="1" />
+        <body name="link_2" pos="-0.04068 0.2314 0" quat="-3.67321e-06 0 0 1">
+          <inertial pos="-0.039143 -0.162598 -0.00061585" quat="0.514821 0.503656 -0.499122 0.481838" mass="0.09066" diaginertia="0.000824917 0.000823861 1.17525e-05" />
+          <joint name="joint_2" pos="0 0 0" axis="0 0 1" limited="true" range="0 3.4907" />
+          <geom type="mesh" mesh="link_2" rgba="1 1 1 1" group="1" contype="0" conaffinity="0" />
+          <geom type="mesh" mesh="link_2_decomp_0" rgba="1 1 1 1" group="3" contype="1" conaffinity="1" />
+          <geom type="mesh" mesh="link_2_decomp_1" rgba="1 1 1 1" group="3" contype="1" conaffinity="1" />
+          <body name="link_3" pos="-0.04068 -0.24862 0">
+            <inertial pos="-0.0054771 -0.042366 5.33e-06" quat="0.540248 0.456215 -0.540248 0.456215" mass="0.0449" diaginertia="1.301e-05 1.117e-05 7.95997e-06" />
+            <joint name="joint_3" pos="0 0 0" axis="0 0 1" limited="true" range="-2.6485 2.6485" />
+            <geom type="mesh" mesh="link_3" rgba="1 1 1 1" group="1" contype="0" conaffinity="0" />
+            <geom type="mesh" mesh="link_3_decomp_0" rgba="1 1 1 1" group="3" contype="1" conaffinity="1" />
+            <geom type="mesh" mesh="link_3_decomp_1" rgba="1 1 1 1" group="3" contype="1" conaffinity="1" />
+            <geom type="mesh" mesh="link_3_decomp_2" rgba="1 1 1 1" group="3" contype="1" conaffinity="1" />
+            <geom type="mesh" mesh="link_3_decomp_3" rgba="1 1 1 1" group="3" contype="1" conaffinity="1" />
+            <geom type="mesh" mesh="link_3_decomp_4" rgba="1 1 1 1" group="3" contype="1" conaffinity="1" />
+            <body name="link_4" pos="0 -0.059 0" quat="0.499998 0.5 -0.5 0.500002">
+              <inertial pos="-3.369e-05 0.0017879 0.034604" quat="0.450826 0.544762 0.450401 0.545096" mass="0.10644" diaginertia="0.000182535 0.000164535 4.38699e-05" />
+              <joint name="joint_4" pos="0 0 0" axis="0 0 1" limited="true" range="-3.1416 3.1416" />
+              <geom type="mesh" mesh="link_4" rgba="1 1 1 1" group="1" contype="0" conaffinity="0" />
+              <geom type="mesh" mesh="link_4_decomp_0" rgba="1 1 1 1" group="3" contype="1" conaffinity="1" />
+              <geom type="mesh" mesh="link_4_decomp_1" rgba="1 1 1 1" group="3" contype="1" conaffinity="1" />
+              <geom type="mesh" mesh="link_4_decomp_2" rgba="1 1 1 1" group="3" contype="1" conaffinity="1" />
+              <geom type="mesh" mesh="link_4_decomp_3" rgba="1 1 1 1" group="3" contype="1" conaffinity="1" />
+              <geom type="mesh" mesh="link_4_decomp_4" rgba="1 1 1 1" group="3" contype="1" conaffinity="1" />
+              <geom type="mesh" mesh="link_4_decomp_5" rgba="1 1 1 1" group="3" contype="1" conaffinity="1" />
+              <body name="link_5" pos="0 0 0.0355">
+                <inertial pos="0 0 0.004453" quat="0.113214 0.697985 -0.113214 0.697985" mass="0.0069" diaginertia="7.82e-06 7.313e-06 5.77e-07" />
+                <joint name="joint_5" pos="0 0 0" axis="0 0 1" limited="true" range="-1.723 0" />
+                <geom type="mesh" mesh="link_5" rgba="1 1 1 1" group="1" contype="0" conaffinity="0" />
+                <geom type="mesh" mesh="link_5_decomp_0" rgba="1 1 1 1" group="3" contype="1" conaffinity="1" />
+                <geom type="mesh" mesh="link_5_decomp_1" rgba="1 1 1 1" group="3" contype="1" conaffinity="1" />
+                <geom type="mesh" mesh="link_5_decomp_2" rgba="1 1 1 1" group="3" contype="1" conaffinity="1" />
+              </body>
+              <body name="gripper_left" pos="-0.05175 0 0.0602" quat="0.499998 -0.5 -0.500002 0.5">
+                <inertial pos="-3.81e-06 -0.019442 -0.00068794" quat="0.466633 0.532537 -0.515067 0.483079" mass="0.02118" diaginertia="1.24004e-05 1.03885e-05 2.94106e-06" />
+                <joint name="joint_gripper_left" type="slide" pos="0 0 0" axis="0 0 1" limited="true" range="-0.04225 0" />
+                <geom type="mesh" mesh="gripper_left" rgba="1 1 1 1" group="1" contype="0" conaffinity="0" />
+                <geom type="mesh" mesh="gripper_left_decomp_0" rgba="1 1 1 1" group="3" contype="1" conaffinity="1" />
+                <geom type="mesh" mesh="gripper_left_decomp_1" rgba="1 1 1 1" group="3" contype="1" conaffinity="1" />
+                <geom type="mesh" mesh="gripper_left_decomp_2" rgba="1 1 1 1" group="3" contype="1" conaffinity="1" />
+                <geom type="mesh" mesh="gripper_left_decomp_3" rgba="1 1 1 1" group="3" contype="1" conaffinity="1" />
+              </body>
+              <body name="gripper_right" pos="0.05175 0 0.0602" quat="0.499998 -0.5 -0.500002 0.5">
+                <inertial pos="-3.81e-06 -0.0194415 0.00068794" quat="0.506876 0.48972 -0.475284 0.526646" mass="0.02118" diaginertia="1.23541e-05 1.03885e-05 2.98747e-06" />
+                <joint name="joint_gripper_right" type="slide" pos="0 0 0" axis="0 0 1" limited="true" range="0 0.04225" />
+                <geom type="mesh" mesh="gripper_right" rgba="1 1 1 1" group="1" contype="0" conaffinity="0" />
+                <geom type="mesh" mesh="gripper_right_decomp_0" rgba="1 1 1 1" group="3" contype="1" conaffinity="1" />
+                <geom type="mesh" mesh="gripper_right_decomp_1" rgba="1 1 1 1" group="3" contype="1" conaffinity="1" />
+                <geom type="mesh" mesh="gripper_right_decomp_2" rgba="1 1 1 1" group="3" contype="1" conaffinity="1" />
+                <geom type="mesh" mesh="gripper_right_decomp_3" rgba="1 1 1 1" group="3" contype="1" conaffinity="1" />
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+      <site name="base_link_origin" type="sphere" size="0.01" pos="0 0 0" rgba="1 0 0 0.5" />
+      <site name="rotor_offset_1" type="sphere" size="0.005" pos="0.176880 -0.176880 0.056000" rgba="0 0 1 0.5" />
+      <site name="rotor_offset_2" type="sphere" size="0.005" pos="-0.176880 0.176880 0.056000" rgba="0 0 1 0.5" />
+      <site name="rotor_offset_3" type="sphere" size="0.005" pos="0.176880 0.176880 0.056000" rgba="0 0 1 0.5" />
+      <site name="rotor_offset_4" type="sphere" size="0.005" pos="-0.176880 -0.176880 0.056000" rgba="0 0 1 0.5" />
+    </body>
+    <body name="rotor_1_vis" mocap="true">
+      <geom type="mesh" mesh="rotor_1" rgba="1 1 1 1" group="1" contype="0" conaffinity="0" />
+    </body>
+    <body name="rotor_2_vis" mocap="true">
+      <geom type="mesh" mesh="rotor_2" rgba="1 1 1 1" group="1" contype="0" conaffinity="0" />
+    </body>
+    <body name="rotor_3_vis" mocap="true">
+      <geom type="mesh" mesh="rotor_3" rgba="1 1 1 1" group="1" contype="0" conaffinity="0" />
+    </body>
+    <body name="rotor_4_vis" mocap="true">
+      <geom type="mesh" mesh="rotor_4" rgba="1 1 1 1" group="1" contype="0" conaffinity="0" />
+    </body>
+  </worldbody>
+  <actuator>
+    <position name="joint_1" kp="748.6" kv="0.547" joint="joint_1" forcerange="-4.905 4.905" ctrlrange="-2.6485 2.6485" />
+    <position name="joint_2" kp="524.0" kv="0.727" joint="joint_2" forcerange="-3.43 3.43" ctrlrange="0 3.4907" />
+    <position name="joint_3" kp="524.0" kv="0.727" joint="joint_3" forcerange="-3.43 3.43" ctrlrange="-2.6485 2.6485" />
+    <position name="joint_4" kp="524.0" kv="0.727" joint="joint_4" forcerange="-3.43 3.43" ctrlrange="-3.1416 3.1416" />
+    <position name="joint_5" kp="212.6" kv="0.133" joint="joint_5" forcerange="-1.3916 1.3916" ctrlrange="-1.723 0" />
+    <position name="joint_gripper_left" kp="2000.0" kv="124.0" joint="joint_gripper_left" forcerange="-49.06 49.06" ctrlrange="-0.04225 0" />
+    <position name="joint_gripper_right" kp="2000.0" kv="124.0" joint="joint_gripper_right" forcerange="-49.06 49.06" ctrlrange="0 0.04225" />
+  </actuator>
+  <sensor>
+    <framepos name="framepos" objtype="site" objname="base_link_origin" />
+    <framequat name="framequat" objtype="site" objname="base_link_origin" />
+    <framelinvel name="framelinvel" objtype="site" objname="base_link_origin" />
+    <gyro name="gyro" site="base_link_origin" />
+    <accelerometer name="accelerometer" site="base_link_origin" />
+    <magnetometer name="magnetometer" site="base_link_origin" />
+  </sensor>
+  <keyframe>
+    <key name="home" qpos="0 0 0.2691375195980072 1 0 0 0 -1.57 3.14 0.0 0.0 0.0 0 0" />
+  </keyframe>
+  <contact>
+    <exclude body1="base_link" body2="rotor_1" />
+    <exclude body1="base_link" body2="rotor_2" />
+    <exclude body1="rotor_2" body2="rotor_1" />
+    <exclude body1="base_link" body2="rotor_3" />
+    <exclude body1="rotor_3" body2="rotor_1" />
+    <exclude body1="rotor_3" body2="rotor_2" />
+    <exclude body1="base_link" body2="rotor_4" />
+    <exclude body1="rotor_4" body2="rotor_1" />
+    <exclude body1="rotor_4" body2="rotor_2" />
+    <exclude body1="rotor_4" body2="rotor_3" />
+    <exclude body1="base_link" body2="link_1" />
+    <exclude body1="link_1" body2="rotor_1" />
+    <exclude body1="link_1" body2="rotor_2" />
+    <exclude body1="link_1" body2="rotor_3" />
+    <exclude body1="link_1" body2="rotor_4" />
+    <exclude body1="link_1" body2="link_2" />
+    <exclude body1="link_2" body2="link_3" />
+    <exclude body1="link_3" body2="link_4" />
+    <exclude body1="link_4" body2="link_5" />
+    <exclude body1="link_4" body2="gripper_left" />
+    <exclude body1="gripper_left" body2="link_5" />
+    <exclude body1="link_4" body2="gripper_right" />
+    <exclude body1="gripper_right" body2="link_5" />
+    <exclude body1="gripper_right" body2="gripper_left" />
+  </contact>
+</mujoco>

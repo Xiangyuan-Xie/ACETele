@@ -15,6 +15,7 @@ class BaseEquipmentLibrary:
 class BaseStation(ABC):
     def __init__(self, config_loader: ConfigLoader):
         self._config_loader = config_loader
+        self._name = f"{self._config_loader.get_station_type()}_{self._config_loader.get_backend()}"
         self._equipments: BaseEquipmentLibrary = BaseEquipmentLibrary()
 
         self._urdf_model_path: Optional[str]
@@ -28,6 +29,10 @@ class BaseStation(ABC):
             self._urdf_model_path = str(urdf_model_path)
         else:
             self._urdf_model_path = None
+
+    @property
+    def name(self) -> str:
+        return self._name
 
     @abstractmethod
     def act(self):

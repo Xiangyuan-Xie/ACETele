@@ -1,0 +1,734 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- This URDF was automatically created by SolidWorks to URDF Exporter! Originally created by Stephen Brawner (brawner@gmail.com)
+     Commit Version: 1.6.0-4-g7f85cfe  Build Version: 1.6.7995.38578
+     For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
+<robot
+  name="x500_arm2x">
+  <link
+    name="base_link">
+    <inertial>
+      <origin
+        xyz="-0.0010307 0.0003139 -0.031209"
+        rpy="0 0 0" />
+      <mass
+        value="0.57465" />
+      <inertia
+        ixx="0.012459"
+        ixy="4.95E-06"
+        ixz="6.337E-05"
+        iyy="0.01195"
+        iyz="-3.99E-06"
+        izz="0.015706" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://x500_arm2x/meshes/base_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://x500_arm2x/meshes/base_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <link
+    name="rotor_1">
+    <inertial>
+      <origin
+        xyz="0 0 0.0062143"
+        rpy="0 0 0" />
+      <mass
+        value="0.012" />
+      <inertia
+        ixx="5.699E-05"
+        ixy="-6.08E-06"
+        ixz="0"
+        iyy="1.06E-06"
+        iyz="0"
+        izz="5.789E-05" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://x500_arm2x/meshes/rotor_1.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://x500_arm2x/meshes/rotor_1.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="rotor_joint_1"
+    type="continuous">
+    <origin
+      xyz="0.17688 -0.17688 0.056"
+      rpy="0 0 0" />
+    <parent
+      link="base_link" />
+    <child
+      link="rotor_1" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      effort="0.18"
+      velocity="1032.2" />
+  </joint>
+  <link
+    name="rotor_2">
+    <inertial>
+      <origin
+        xyz="0 0 0.0062122"
+        rpy="0 0 0" />
+      <mass
+        value="0.012" />
+      <inertia
+        ixx="5.699E-05"
+        ixy="-6.08E-06"
+        ixz="0"
+        iyy="1.06E-06"
+        iyz="0"
+        izz="5.789E-05" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://x500_arm2x/meshes/rotor_2.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://x500_arm2x/meshes/rotor_2.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="rotor_joint_2"
+    type="continuous">
+    <origin
+      xyz="-0.17688 0.17688 0.056"
+      rpy="0 0 0" />
+    <parent
+      link="base_link" />
+    <child
+      link="rotor_2" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      effort="0.18"
+      velocity="1032.2" />
+  </joint>
+  <link
+    name="rotor_3">
+    <inertial>
+      <origin
+        xyz="0 0 0.0062143"
+        rpy="0 0 0" />
+      <mass
+        value="0.012" />
+      <inertia
+        ixx="5.703E-05"
+        ixy="6.09E-06"
+        ixz="0"
+        iyy="1.06E-06"
+        iyz="0"
+        izz="5.793E-05" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://x500_arm2x/meshes/rotor_3.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://x500_arm2x/meshes/rotor_3.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="rotor_joint_3"
+    type="continuous">
+    <origin
+      xyz="0.17688 0.17688 0.056"
+      rpy="0 0 0" />
+    <parent
+      link="base_link" />
+    <child
+      link="rotor_3" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      effort="0.18"
+      velocity="1032.2" />
+  </joint>
+  <link
+    name="rotor_4">
+    <inertial>
+      <origin
+        xyz="0 0 0.0062122"
+        rpy="0 0 0" />
+      <mass
+        value="0.012" />
+      <inertia
+        ixx="5.703E-05"
+        ixy="6.09E-06"
+        ixz="0"
+        iyy="1.06E-06"
+        iyz="0"
+        izz="5.793E-05" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://x500_arm2x/meshes/rotor_4.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://x500_arm2x/meshes/rotor_4.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="rotor_joint_4"
+    type="continuous">
+    <origin
+      xyz="-0.17688 -0.17688 0.056"
+      rpy="0 0 0" />
+    <parent
+      link="base_link" />
+    <child
+      link="rotor_4" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      effort="0.18"
+      velocity="1032.2" />
+  </joint>
+  <link
+    name="link_0">
+    <inertial>
+      <origin
+        xyz="-0.00092141 -0.028837 0.00059023"
+        rpy="0 0 0" />
+      <mass
+        value="0.1134" />
+      <inertia
+        ixx="5.211E-05"
+        ixy="-1.21E-06"
+        ixz="-6E-08"
+        iyy="4.588E-05"
+        iyz="-1.64E-06"
+        izz="5.955E-05" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://x500_arm2x/meshes/link_0.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://x500_arm2x/meshes/link_0.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="joint_0"
+    type="fixed">
+    <origin
+      xyz="0 0 -0.050515"
+      rpy="1.5708 0 1.5708" />
+    <parent
+      link="base_link" />
+    <child
+      link="link_0" />
+    <axis
+      xyz="0 0 0" />
+  </joint>
+  <link
+    name="link_1">
+    <inertial>
+      <origin
+        xyz="-0.018022 0.15628 -0.00061218"
+        rpy="0 0 0" />
+      <mass
+        value="0.09846" />
+      <inertia
+        ixx="0.0006569"
+        ixy="0.0001171"
+        ixz="-1.28E-06"
+        iyy="4.94E-05"
+        iyz="3.77E-06"
+        izz="0.00069136" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://x500_arm2x/meshes/link_1.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://x500_arm2x/meshes/link_1.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="joint_1"
+    type="revolute">
+    <origin
+      xyz="0 -0.04611 0"
+      rpy="3.1416 1.5708 0" />
+    <parent
+      link="link_0" />
+    <child
+      link="link_1" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-2.6485"
+      upper="2.6485"
+      effort="4.9008"
+      velocity="8.95" />
+  </joint>
+  <link
+    name="link_2">
+    <inertial>
+      <origin
+        xyz="-0.039143 -0.16259767 -0.00061585"
+        rpy="0 0 0" />
+      <mass
+        value="0.09066" />
+      <inertia
+        ixx="0.0008232"
+        ixy="-2.318E-05"
+        ixz="-9E-08"
+        iyy="1.244E-05"
+        iyz="-4.54E-06"
+        izz="0.00082489" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://x500_arm2x/meshes/link_2.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://x500_arm2x/meshes/link_2.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="joint_2"
+    type="revolute">
+    <origin
+      xyz="-0.04068 0.2314 0"
+      rpy="0 0 3.1416" />
+    <parent
+      link="link_1" />
+    <child
+      link="link_2" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="0"
+      upper="3.4907"
+      effort="1.3918"
+      velocity="10.47" />
+  </joint>
+  <link
+    name="link_3">
+    <inertial>
+      <origin
+        xyz="-0.0054771 -0.042366 5.33E-06"
+        rpy="0 0 0" />
+      <mass
+        value="0.0449" />
+      <inertia
+        ixx="1.108E-05"
+        ixy="-5.3E-07"
+        ixz="0"
+        iyy="8.05E-06"
+        iyz="0"
+        izz="1.301E-05" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://x500_arm2x/meshes/link_3.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://x500_arm2x/meshes/link_3.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="joint_3"
+    type="revolute">
+    <origin
+      xyz="-0.04068 -0.24862 0"
+      rpy="0 0 0" />
+    <parent
+      link="link_2" />
+    <child
+      link="link_3" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-2.6485"
+      upper="2.6485"
+      effort="1.3918"
+      velocity="10.47" />
+  </joint>
+  <link
+    name="link_4">
+    <inertial>
+      <origin
+        xyz="-3.369E-05 0.0017879 0.034604"
+        rpy="0 0 0" />
+      <mass
+        value="0.10644" />
+      <inertia
+        ixx="4.387E-05"
+        ixy="2E-08"
+        ixz="-9E-08"
+        iyy="0.0001819"
+        iyz="3.32E-06"
+        izz="0.00016517" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://x500_arm2x/meshes/link_4.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://x500_arm2x/meshes/link_4.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="joint_4"
+    type="revolute">
+    <origin
+      xyz="0 -0.059 0"
+      rpy="1.5708 -1.5708 0" />
+    <parent
+      link="link_3" />
+    <child
+      link="link_4" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-3.1416"
+      upper="3.1416"
+      effort="1.3918"
+      velocity="10.47" />
+  </joint>
+  <link
+    name="link_5">
+    <inertial>
+      <origin
+        xyz="0 0 0.004453"
+        rpy="0 0 0" />
+      <mass
+        value="0.0069" />
+      <inertia
+        ixx="1.25E-06"
+        ixy="2.02E-06"
+        ixz="0"
+        iyy="6.64E-06"
+        iyz="0"
+        izz="7.82E-06" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://x500_arm2x/meshes/link_5.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://x500_arm2x/meshes/link_5.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="joint_5"
+    type="revolute">
+    <origin
+      xyz="0 0 0.0355"
+      rpy="0 0 0" />
+    <parent
+      link="link_4" />
+    <child
+      link="link_5" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-1.723"
+      upper="0"
+      effort="1.3918"
+      velocity="10.47" />
+  </joint>
+  <link
+    name="gripper_left">
+    <inertial>
+      <origin
+        xyz="-3.81E-06 -0.019442 -0.00068794"
+        rpy="0 0 0" />
+      <mass
+        value="0.02118" />
+      <inertia
+        ixx="1.038E-05"
+        ixy="2.5E-07"
+        ixz="3E-08"
+        iyy="3.04E-06"
+        iyz="-9.2E-07"
+        izz="1.231E-05" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://x500_arm2x/meshes/gripper_left.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://x500_arm2x/meshes/gripper_left.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="joint_gripper_left"
+    type="prismatic">
+    <origin
+      xyz="-0.05175 0 0.0602"
+      rpy="-1.5708 0 1.5708" />
+    <parent
+      link="link_4" />
+    <child
+      link="gripper_left" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-0.04225"
+      upper="0"
+      effort="49.06"
+      velocity="0.0297" />
+  </joint>
+  <link
+    name="gripper_right">
+    <inertial>
+      <origin
+        xyz="-3.81E-06 -0.01944152 0.00068794"
+        rpy="0 0 0" />
+      <mass
+        value="0.02118" />
+      <inertia
+        ixx="1.038E-05"
+        ixy="2.5E-07"
+        ixz="-3E-08"
+        iyy="3.04E-06"
+        iyz="6.4E-07"
+        izz="1.231E-05" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://x500_arm2x/meshes/gripper_right.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://x500_arm2x/meshes/gripper_right.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="joint_gripper_right"
+    type="prismatic">
+    <origin
+      xyz="0.05175 0 0.0602"
+      rpy="-1.5708 0 1.5708" />
+    <parent
+      link="link_4" />
+    <child
+      link="gripper_right" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="0"
+      upper="0.04225"
+      effort="49.06"
+      velocity="0.0297" />
+    <mimic
+      joint="joint_gripper_left"
+      multiplier="-1"
+      offset="0" />
+  </joint>
+</robot>

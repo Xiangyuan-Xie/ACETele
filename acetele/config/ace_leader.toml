@@ -1,6 +1,6 @@
 [basic]
 station_type = "ace_leader"
-backend = "ros2"
+backend = "mock"
 
 [linker.single]
 port = "/dev/ttyUSB0"
