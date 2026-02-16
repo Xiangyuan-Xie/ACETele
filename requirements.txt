@@ -4,12 +4,10 @@ loguru
 matplotlib
 mujoco
 numpy
-onnxruntime
 pin
 pygame
 pymavlink
 pyserial
 scipy
-torch
 tqdm
 trimesh

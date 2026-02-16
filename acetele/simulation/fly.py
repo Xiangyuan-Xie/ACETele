@@ -5,68 +5,67 @@ import mujoco.viewer
 import numpy as np
 from scipy.spatial.transform import Rotation
 
-from acetele.equipment.joystick.joystick_driver import JDKFPVDriver
 from acetele.simulation.px4_interface import PX4Interface
 from acetele.station.base_station import make_station
 
 
 class MujocoBase:
-    # PX4 Quad X Standard: 1:FR(CCW), 2:BL(CCW), 3:FL(CW), 4:BR(CW)
-    # MuJoCo XML: Rotor 1(FR), Rotor 2(BL), Rotor 3(FL), Rotor 4(BR)
+    # PX4 Quad X standard: 1: FR (CCW), 2: BL (CCW), 3: FL (CW), 4: BR (CW).
+    # MuJoCo XML: rotor_1 (FR), rotor_2 (BL), rotor_3 (FL), rotor_4 (BR).
     ROTOR_DIRECTION = np.array([1.0, 1.0, -1.0, -1.0])
 
-    # Motor Constants
+    # Motor constants.
     MOTOR_CONSTANT = 8.54858e-06
     MOMENT_CONSTANT = 0.016
     ROTOR_DRAG_COEFF = 8.06428e-05
     ROLLING_MOMENT_COEFF = 1e-06
+    IDLE_VISUAL_SPEED = 55.0
 
-    # GPS Origin: Beihang University, Beijing
+    # GPS origin: Beihang University, Beijing.
     GPS_LAT_START = 39.98329
     GPS_LON_START = 116.34745
     GPS_ALT_START = 50.0
 
     def __init__(self, model_path: str):
         """Initialize MuJoCo model and PX4 interface."""
-        self.mj_model = mujoco.MjModel.from_xml_path(model_path)
-        self.mj_data = mujoco.MjData(self.mj_model)
+        self._mj_model = mujoco.MjModel.from_xml_path(model_path)
+        self._mj_data = mujoco.MjData(self._mj_model)
 
-        # Set timestep to 0.001s (1000Hz)
-        self.mj_model.opt.timestep = 0.001
+        # Set simulation timestep to 0.001 s (1000 Hz).
+        self._mj_model.opt.timestep = 0.001
 
-        mujoco.mj_resetData(self.mj_model, self.mj_data)
+        mujoco.mj_resetData(self._mj_model, self._mj_data)
 
-        self.station = make_station()
-        self.joystick = JDKFPVDriver()
+        self._station = make_station()
 
-        # PX4 interface (TCP server at 4560)
+        # PX4 interface (TCP server at port 4560).
         print("-" * 50)
         print("[PX4 SITL] Waiting for connection on TCP 4560...")
         print("[PX4 SITL] Run command: export PX4_SIM_MODEL=none_iris && make px4_sitl none")
         print("-" * 50)
-        self.px4 = PX4Interface()
+        self._px4_interface = PX4Interface()
 
-        self.sim_time_us = 0
-        self.step_count = 0
+        self._simulation_time_us = 0
+        self._step_count = 0
 
-        self.desired_rotor_velocity = np.zeros(4)
-        self.rotor_velocity = np.zeros(4)
-        self.rotor_angle = np.zeros(4)
-        self.rotor_offsets = self._load_rotor_offsets()
+        self._desired_rotor_angular_velocity = np.zeros(4)
+        self._rotor_angular_velocity = np.zeros(4)
+        self._rotor_angle = np.zeros(4)
+        self._rotor_offsets = self._load_rotor_offsets()
 
-        self._init_hardware_mapping()
-        self._init_sensors()
+        self._initialize_hardware_handles()
+        self._initialize_sensor_buffers()
 
         # Set initial keyframe and arm actuator ctrl
         self._reset_to_home()
 
-    def _init_hardware_mapping(self):
+    def _initialize_hardware_handles(self):
         """Cache IDs for actuators, bodies, mocap, and sensors."""
-        # Base link
-        self.base_link_id = mujoco.mj_name2id(self.mj_model, mujoco.mjtObj.mjOBJ_BODY, "base_link")
+        # Base link.
+        self._base_link_id = mujoco.mj_name2id(self._mj_model, mujoco.mjtObj.mjOBJ_BODY, "base_link")
 
-        # Arm actuators
-        self.arm_joint_names = [
+        # Arm actuators.
+        self._arm_joint_names = [
             "joint_1",
             "joint_2",
             "joint_3",
@@ -75,136 +74,150 @@ class MujocoBase:
             "joint_gripper_left",
             "joint_gripper_right",
         ]
-        self.arm_actuator_ids = [
-            mujoco.mj_name2id(self.mj_model, mujoco.mjtObj.mjOBJ_ACTUATOR, name) for name in self.arm_joint_names
+        self._arm_actuator_ids = [
+            mujoco.mj_name2id(self._mj_model, mujoco.mjtObj.mjOBJ_ACTUATOR, name) for name in self._arm_joint_names
         ]
 
         rotor_candidates = ["rotor_1_vis", "rotor_2_vis", "rotor_3_vis", "rotor_4_vis"]
         alt_candidates = ["rotor_1", "rotor_2", "rotor_3", "rotor_4"]
-        body_ids = [mujoco.mj_name2id(self.mj_model, mujoco.mjtObj.mjOBJ_BODY, n) for n in rotor_candidates]
+        body_ids = [mujoco.mj_name2id(self._mj_model, mujoco.mjtObj.mjOBJ_BODY, n) for n in rotor_candidates]
         if any(b < 0 for b in body_ids):
-            body_ids = [mujoco.mj_name2id(self.mj_model, mujoco.mjtObj.mjOBJ_BODY, n) for n in alt_candidates]
-            self.rotor_body_names = alt_candidates
+            body_ids = [mujoco.mj_name2id(self._mj_model, mujoco.mjtObj.mjOBJ_BODY, n) for n in alt_candidates]
+            self._rotor_body_names = alt_candidates
         else:
-            self.rotor_body_names = rotor_candidates
-        self.rotor_body_ids = body_ids
-        self.rotor_mocap_ids = [self.mj_model.body_mocapid[b_id] if b_id >= 0 else -1 for b_id in self.rotor_body_ids]
+            self._rotor_body_names = rotor_candidates
+        self._rotor_body_ids = body_ids
+        self._rotor_mocap_ids = [
+            self._mj_model.body_mocapid[b_id] if b_id >= 0 else -1 for b_id in self._rotor_body_ids
+        ]
 
-        # Sensor IDs
-        self.sensor_ids = {
-            "pos": mujoco.mj_name2id(self.mj_model, mujoco.mjtObj.mjOBJ_SENSOR, "framepos"),
-            "quat": mujoco.mj_name2id(self.mj_model, mujoco.mjtObj.mjOBJ_SENSOR, "framequat"),
-            "linvel": mujoco.mj_name2id(self.mj_model, mujoco.mjtObj.mjOBJ_SENSOR, "framelinvel"),
-            "gyro": mujoco.mj_name2id(self.mj_model, mujoco.mjtObj.mjOBJ_SENSOR, "gyro"),
-            "accel": mujoco.mj_name2id(self.mj_model, mujoco.mjtObj.mjOBJ_SENSOR, "accelerometer"),
-            "mag": mujoco.mj_name2id(self.mj_model, mujoco.mjtObj.mjOBJ_SENSOR, "magnetometer"),
+        # Sensor IDs.
+        self._sensor_id_map = {
+            "pos": mujoco.mj_name2id(self._mj_model, mujoco.mjtObj.mjOBJ_SENSOR, "framepos"),
+            "quat": mujoco.mj_name2id(self._mj_model, mujoco.mjtObj.mjOBJ_SENSOR, "framequat"),
+            "linvel": mujoco.mj_name2id(self._mj_model, mujoco.mjtObj.mjOBJ_SENSOR, "framelinvel"),
+            "gyro": mujoco.mj_name2id(self._mj_model, mujoco.mjtObj.mjOBJ_SENSOR, "gyro"),
+            "accel": mujoco.mj_name2id(self._mj_model, mujoco.mjtObj.mjOBJ_SENSOR, "accelerometer"),
+            "mag": mujoco.mj_name2id(self._mj_model, mujoco.mjtObj.mjOBJ_SENSOR, "magnetometer"),
         }
 
-    def _init_sensors(self):
+    def _initialize_sensor_buffers(self):
         """Initialize sensor buffers with initial noisy values."""
-        # Zero-order hold buffers
-        self.last_accel_frd = np.zeros(3)
-        self.last_gyro_frd = np.zeros(3)
-        self.last_mag_frd = np.zeros(3)
-        self.last_baro_alt = self.GPS_ALT_START
+        # Zero-order-hold buffers.
+        self._last_accel_frd = np.zeros(3)
+        self._last_gyro_frd = np.zeros(3)
+        self._last_mag_frd = np.zeros(3)
+        self._last_baro_altitude_m = self.GPS_ALT_START
 
         # Initial noise sampling
-        self.last_mag_frd = self._get_mag_with_noise()
-        self.last_accel_frd = self._get_accel_with_noise()
-        self.last_gyro_frd = self._get_gyro_with_noise()
+        self._last_mag_frd = self._get_mag_with_noise()
+        self._last_accel_frd = self._get_accel_with_noise()
+        self._last_gyro_frd = self._get_gyro_with_noise()
 
     def _reset_to_home(self):
-        key_id = mujoco.mj_name2id(self.mj_model, mujoco.mjtObj.mjOBJ_KEY, "home")
+        key_id = mujoco.mj_name2id(self._mj_model, mujoco.mjtObj.mjOBJ_KEY, "home")
         if key_id >= 0:
             print("Loading 'home' keyframe...")
-            mujoco.mj_resetDataKeyframe(self.mj_model, self.mj_data, key_id)
+            mujoco.mj_resetDataKeyframe(self._mj_model, self._mj_data, key_id)
             # Initialize arm actuator control values from qpos
             home_pose = []
-            for i, act_id in enumerate(self.arm_actuator_ids):
-                j_id = mujoco.mj_name2id(self.mj_model, mujoco.mjtObj.mjOBJ_JOINT, self.arm_joint_names[i])
+            for i, act_id in enumerate(self._arm_actuator_ids):
+                j_id = mujoco.mj_name2id(self._mj_model, mujoco.mjtObj.mjOBJ_JOINT, self._arm_joint_names[i])
                 if j_id >= 0 and act_id >= 0:
-                    self.mj_data.ctrl[act_id] = self.mj_data.qpos[self.mj_model.jnt_qposadr[j_id]]
-                    home_pose.append(self.mj_data.ctrl[act_id])
+                    self._mj_data.ctrl[act_id] = self._mj_data.qpos[self._mj_model.jnt_qposadr[j_id]]
+                    home_pose.append(self._mj_data.ctrl[act_id])
             print(f"Home Pose: [{', '.join([f'{v:.3f}' for v in home_pose])}]")
         else:
             print("No 'home' keyframe found. Using default.")
 
     def _load_rotor_offsets(self):
-        arr = []
+        rotor_offsets = []
         for i in range(1, 5):
-            site_id = mujoco.mj_name2id(self.mj_model, mujoco.mjtObj.mjOBJ_SITE, f"rotor_offset_{i}")
+            site_id = mujoco.mj_name2id(self._mj_model, mujoco.mjtObj.mjOBJ_SITE, f"rotor_offset_{i}")
             if site_id < 0:
                 return None
-            arr.append(self.mj_model.site_pos[site_id].copy())
-        return np.array(arr)
+            rotor_offsets.append(self._mj_model.site_pos[site_id].copy())
+        return np.array(rotor_offsets)
 
-    def _update_arm_control_from_station(self):
-        if self.step_count % 5 == 0:
-            joint_pos, _, _ = self.station.act()
-            for i, act_id in enumerate(self.arm_actuator_ids):
+    def _update_arm_control(self):
+        if self._step_count % 5 == 0:
+            joint_pos, _, _ = self._station.act()
+            for i, act_id in enumerate(self._arm_actuator_ids):
                 if act_id >= 0 and i < len(joint_pos):
-                    self.mj_data.ctrl[act_id] = joint_pos[i]
+                    self._mj_data.ctrl[act_id] = joint_pos[i]
 
     def _get_sensor_raw(self, name: str):
-        id = self.sensor_ids.get(name, -1)
-        if id == -1:
+        sensor_id = self._sensor_id_map.get(name, -1)
+        if sensor_id == -1:
             return np.zeros(3)
-        adr = self.mj_model.sensor_adr[id]
-        return self.mj_data.sensordata[adr : adr + self.mj_model.sensor_dim[id]].copy()
+        adr = self._mj_model.sensor_adr[sensor_id]
+        return self._mj_data.sensordata[adr : adr + self._mj_model.sensor_dim[sensor_id]].copy()
 
     def _get_accel_with_noise(self):
-        val = self._get_sensor_raw("accel")
-        val += np.random.normal(0, [0.00637, 0.00637, 0.00686])
-        return np.array([val[0], -val[1], -val[2]])  # Body to FRD
+        sensor_value = self._get_sensor_raw("accel")
+        sensor_value += np.random.normal(0, [0.00637, 0.00637, 0.00686])
+        return np.array([sensor_value[0], -sensor_value[1], -sensor_value[2]])  # Body to FRD
 
     def _get_gyro_with_noise(self):
-        val = self._get_sensor_raw("gyro")
-        val += np.random.normal(0, 0.0008726646, size=3)
-        return np.array([val[0], -val[1], -val[2]])  # Body to FRD
+        sensor_value = self._get_sensor_raw("gyro")
+        sensor_value += np.random.normal(0, 0.0008726646, size=3)
+        return np.array([sensor_value[0], -sensor_value[1], -sensor_value[2]])  # Body to FRD
 
     def _get_mag_with_noise(self):
-        val = self._get_sensor_raw("mag") * 10000.0  # Tesla -> Gauss
-        val += np.random.normal(0, 0.003, size=3)
-        return np.array([val[0], -val[1], -val[2]])  # Body to FRD
+        sensor_value = self._get_sensor_raw("mag") * 10000.0  # Tesla -> Gauss
+        sensor_value += np.random.normal(0, 0.003, size=3)
+        return np.array([sensor_value[0], -sensor_value[1], -sensor_value[2]])  # Body to FRD
 
     def _update_sensors_and_send(self):
-        """Update IMU/mag/baro buffers at target rates and send HIL_SENSOR."""
-        # IMU (Accel/Gyro): 250Hz -> Every 2 steps (4ms)
-        if self.step_count % 4 == 0:
-            self.last_accel_frd = self._get_accel_with_noise()
-            self.last_gyro_frd = self._get_gyro_with_noise()
+        """Update IMU, magnetometer, and barometer buffers and send HIL_SENSOR."""
+        # IMU (accelerometer and gyro): 250 Hz → every 4 ms (2 steps).
+        if self._step_count % 4 == 0:
+            self._last_accel_frd = self._get_accel_with_noise()
+            self._last_gyro_frd = self._get_gyro_with_noise()
 
-        # Mag: 100Hz -> Every 5 steps (10ms)
-        if self.step_count % 10 == 0:
-            self.last_mag_frd = self._get_mag_with_noise()
+        # Magnetometer: 100 Hz → every 10 ms (5 steps).
+        if self._step_count % 10 == 0:
+            self._last_mag_frd = self._get_mag_with_noise()
 
-        # Baro: 50Hz -> Every 10 steps (20ms)
-        if self.step_count % 20 == 0:
-            pos = self._get_sensor_raw("pos")
-            self.last_baro_alt = pos[2] + self.GPS_ALT_START + np.random.normal(0, 0.25)
+        # Barometer: 50 Hz → every 20 ms (10 steps).
+        if self._step_count % 20 == 0:
+            position_sensor = self._get_sensor_raw("pos")
+            self._last_baro_altitude_m = position_sensor[2] + self.GPS_ALT_START + np.random.normal(0, 0.25)
 
-        # Send HIL_SENSOR at 250Hz
-        if self.step_count % 4 == 0:
-            self.px4.send_hil_sensor(
-                self.sim_time_us, self.last_accel_frd, self.last_gyro_frd, self.last_mag_frd, self.last_baro_alt
+        # Send HIL_SENSOR at 250 Hz.
+        if self._step_count % 4 == 0:
+            self._px4_interface.send_hil_sensor(
+                self._simulation_time_us,
+                self._last_accel_frd,
+                self._last_gyro_frd,
+                self._last_mag_frd,
+                self._last_baro_altitude_m,
             )
 
     def _update_gps_and_send(self):
-        """Update GPS data and send HIL_GPS (50Hz)."""
-        if self.step_count % 20 == 0:
+        """Update GPS data and send HIL_GPS at 50 Hz."""
+        if self._step_count % 20 == 0:
             lat_e7, lon_e7, alt_mm = self._get_gps_pos_with_noise()
             vel_cm_s, vn_cm_s, ve_cm_s, vd_cm_s, cog_cdeg = self._get_gps_vel_with_noise()
-            self.px4.send_hil_gps(
-                self.sim_time_us, lat_e7, lon_e7, alt_mm, vel_cm_s, vn_cm_s, ve_cm_s, vd_cm_s, cog_cdeg
+            self._px4_interface.send_hil_gps(
+                self._simulation_time_us,
+                lat_e7,
+                lon_e7,
+                alt_mm,
+                vel_cm_s,
+                vn_cm_s,
+                ve_cm_s,
+                vd_cm_s,
+                cog_cdeg,
             )
 
     def _update_px4_controls(self):
-        """Update PX4 controls (200Hz)."""
-        if self.step_count % 4 == 0:
-            controls = self.px4.receive_controls()
+        """Update PX4 controls at 200 Hz."""
+        if self._step_count % 4 == 0:
+            controls = self._px4_interface.read_actuator_controls()
             if controls and len(controls) >= 4:
                 # PX4: [FR, BL, FL, BR] -> MuJoCo: [FR, BL, FL, BR] (Direct map)
-                self.desired_rotor_velocity = np.clip(np.array(controls[:4]) * 1000, 0, 1000)
+                self._desired_rotor_angular_velocity = np.clip(np.array(controls[:4]) * 1000, 0, 1000)
 
     def _get_gps_pos_with_noise(self):
         """Return (lat_e7, lon_e7, alt_mm) with small position noise."""
@@ -227,28 +240,8 @@ class MujocoBase:
         cog_deg = (np.degrees(cog_rad) + 360.0) % 360.0
         return int(vel), int(vn), int(ve), int(vd), int(cog_deg * 100.0)
 
-    def _update_rc_channels(self):
-        """Update RC channels from joystick input (10Hz)."""
-        if self.step_count % 10 == 0:
-            data = self.joystick.act()
-            if data and data["connected"] and data["mapped"]:
-                mapped = data["mapped"]
-                channels = np.array([-1.0] * 8)
-                channels[0] = mapped.get("Roll", 0.0)
-                channels[1] = mapped.get("Pitch", 0.0)
-                channels[2] = mapped.get("Throttle", -1.0)
-                channels[3] = mapped.get("Yaw", 0.0)
-                channels[4] = mapped.get("Aux1", -1.0)
-                channels[5] = mapped.get("Aux2", -1.0)
-                channels[6] = mapped.get("Aux3", -1.0)
-                channels[7] = mapped.get("Aux4", -1.0)
-                condlist = [channels > 0.5, (channels >= -0.5) & (channels <= 0.5), channels < -0.5]
-                choicelist = [2000, 1500, 1000]
-                channels = np.select(condlist, choicelist)
-                self.px4.send_rc_channels_to_qgc(*channels)
-
     # def _apply_motor_physics(self):
-    #     """Apply rotor thrust, drag and reaction moments to base_link."""
+    #     """Apply rotor thrust, drag, and reaction moments to base_link."""
     #     dt = self.mj_model.opt.timestep
     #     for i in range(4):
     #         diff = self.desired_rotor_velocity[i] - self.rotor_velocity[i]
@@ -289,12 +282,12 @@ class MujocoBase:
     #     self.mj_data.xfrc_applied[self.base_link_id][3:6] = m_sum_w
 
     def _apply_motor_physics(self):
-        """Apply rotor thrust, drag and reaction moments to base_link."""
-        dt = self.mj_model.opt.timestep
+        """Apply rotor thrust, drag, and reaction moments to base_link."""
+        dt = self._mj_model.opt.timestep
         for i in range(4):
-            diff = self.desired_rotor_velocity[i] - self.rotor_velocity[i]
+            diff = self._desired_rotor_angular_velocity[i] - self._rotor_angular_velocity[i]
             tc = 0.0125 if diff > 0 else 0.025
-            self.rotor_velocity[i] += diff * (1.0 - np.exp(-dt / tc))
+            self._rotor_angular_velocity[i] += diff * (1.0 - np.exp(-dt / tc))
 
         base_pos = self._get_sensor_raw("pos")
         base_quat = self._get_sensor_raw("quat")
@@ -303,17 +296,17 @@ class MujocoBase:
         omega_r = self._get_sensor_raw("gyro")
         omega_w = Rb.apply(omega_r)
 
-        self.mj_data.xfrc_applied[self.base_link_id][:] = 0.0
-        self.mj_data.qfrc_applied[:] = 0.0
+        self._mj_data.xfrc_applied[self._base_link_id][:] = 0.0
+        self._mj_data.qfrc_applied[:] = 0.0
 
         for i in range(4):
-            r_off_w = Rb.apply(self.rotor_offsets[i])
+            r_off_w = Rb.apply(self._rotor_offsets[i])
             v_point_w = v_com_w + np.cross(omega_w, r_off_w)
 
             v_point_r = Rb.inv().apply(v_point_w)
             v_planar_r = np.array([v_point_r[0], v_point_r[1], 0.0])
 
-            omega = self.rotor_velocity[i]
+            omega = self._rotor_angular_velocity[i]
             direction = self.ROTOR_DIRECTION[i]
             thrust = self.MOTOR_CONSTANT * (omega**2)
             torque_z_r = self.MOMENT_CONSTANT * thrust * (-direction)
@@ -326,7 +319,13 @@ class MujocoBase:
 
             pos_w = base_pos + r_off_w
             mujoco.mj_applyFT(
-                self.mj_model, self.mj_data, f_total_w, m_react_w, pos_w, self.base_link_id, self.mj_data.qfrc_applied
+                self._mj_model,
+                self._mj_data,
+                f_total_w,
+                m_react_w,
+                pos_w,
+                self._base_link_id,
+                self._mj_data.qfrc_applied,
             )
 
     def _update_rotor_visuals(self):
@@ -334,41 +333,43 @@ class MujocoBase:
         base_pos = self._get_sensor_raw("pos")
         base_quat = self._get_sensor_raw("quat")
         Rb = Rotation.from_quat(base_quat, scalar_first=True)
+        armed = self._px4_interface.update_arming_state()
         for i in range(4):
-            mocap_id = self.rotor_mocap_ids[i]
+            mocap_id = self._rotor_mocap_ids[i]
             if mocap_id < 0:
                 continue
-            self.rotor_angle[i] += self.rotor_velocity[i] * self.ROTOR_DIRECTION[i] * self.mj_model.opt.timestep
-            spin = Rotation.from_rotvec([0.0, 0.0, self.rotor_angle[i]])
+            visual_speed = self._rotor_angular_velocity[i]
+            if armed and visual_speed < self.IDLE_VISUAL_SPEED:
+                visual_speed = self.IDLE_VISUAL_SPEED
+            self._rotor_angle[i] += visual_speed * self.ROTOR_DIRECTION[i] * self._mj_model.opt.timestep
+            spin = Rotation.from_rotvec([0.0, 0.0, self._rotor_angle[i]])
             q_total = (Rb * spin).as_quat(scalar_first=True)
-            pos_w = base_pos + Rb.apply(self.rotor_offsets[i])
-            self.mj_data.mocap_pos[mocap_id] = pos_w
-            self.mj_data.mocap_quat[mocap_id] = q_total
+            pos_w = base_pos + Rb.apply(self._rotor_offsets[i])
+            self._mj_data.mocap_pos[mocap_id] = pos_w
+            self._mj_data.mocap_quat[mocap_id] = q_total
 
     def control(self, model, data):
-        """MuJoCo control callback: exchange PX4 messages and advance simulation."""
-        self.step_count += 1
-        self.sim_time_us += int(model.opt.timestep * 1e6)
+        """MuJoCo control callback to exchange PX4 messages and advance simulation."""
+        self._step_count += 1
+        self._simulation_time_us += int(model.opt.timestep * 1e6)
 
-        if not self.px4.connected:
-            self.px4.check_connection()
+        if not self._px4_interface.is_connected:
+            self._px4_interface.update_connection_state()
         else:
             self._update_sensors_and_send()
             self._update_gps_and_send()
             self._update_px4_controls()
-            self._update_rc_channels()
             self._apply_motor_physics()
 
-        self._update_arm_control_from_station()
+        self._update_arm_control()
         self._update_rotor_visuals()
 
     def run(self):
         mujoco.set_mjcb_control(self.control)
-        mujoco.viewer.launch(self.mj_model, self.mj_data)
+        mujoco.viewer.launch(self._mj_model, self._mj_data)
 
     def close(self):
-        self.station.close()
-        self.joystick.close()
+        self._station.close()
 
 
 if __name__ == "__main__":
