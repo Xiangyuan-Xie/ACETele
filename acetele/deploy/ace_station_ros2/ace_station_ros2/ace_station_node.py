@@ -1,7 +1,7 @@
 import rclpy
 from rclpy.node import Node
 
-from acetele.station.base_station import make_station
+from acetele.core.make_station import make_station
 
 
 def main():

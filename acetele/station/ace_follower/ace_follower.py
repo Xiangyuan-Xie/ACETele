@@ -5,8 +5,9 @@ from typing import Optional, Sequence, Tuple
 import numpy as np
 
 from acetele.config.config_loader import ConfigLoader
+from acetele.core.make_station import make_station
 from acetele.equipment.feetech.linker import Linker
-from acetele.station.base_station import BaseEquipmentLibrary, BaseStation, make_station
+from acetele.station.base_station import BaseEquipmentLibrary, BaseStation
 
 
 @dataclass

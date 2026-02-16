@@ -5,8 +5,8 @@ import mujoco.viewer
 import numpy as np
 from scipy.spatial.transform import Rotation
 
+from acetele.core.make_station import make_station
 from acetele.simulation.px4_interface import PX4Interface
-from acetele.station.base_station import make_station
 
 
 class MujocoBase:
