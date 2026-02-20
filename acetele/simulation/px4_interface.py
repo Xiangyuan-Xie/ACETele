@@ -23,7 +23,6 @@ class PX4Interface:
         """Start listening for PX4 connection in server mode."""
         # tcpin:0.0.0.0:4560 listens on all interfaces (server mode).
         # PX4 (client) connects to this process.
-        print(f"[PX4 SITL] Listening on tcpin:0.0.0.0:{self._port}...")
         self._mavlink_connection = mavutil.mavlink_connection(
             f"tcpin:{self._host}:{self._port}", source_system=254, source_component=97
         )

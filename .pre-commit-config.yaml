@@ -57,7 +57,8 @@ repos:
         ]
         additional_dependencies: [
           "types-requests",
-          "types-setuptools"
+          "types-setuptools",
+          "types-PyYAML"
         ]
         language: python
         types: [ python ]

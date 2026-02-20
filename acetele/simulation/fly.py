@@ -1,3 +1,4 @@
+import platform
 from pathlib import Path
 
 import mujoco
@@ -40,8 +41,13 @@ class MujocoBase:
 
         # PX4 interface (TCP server at port 4560).
         print("-" * 50)
-        print("[PX4 SITL] Waiting for connection on TCP 4560...")
-        print("[PX4 SITL] Run command: export PX4_SIM_MODEL=none_iris && make px4_sitl none")
+        if platform.system() == "Windows":
+            print("[ACETele Sim] Windows detected. Please execute the following in WSL:")
+            print("  1. Bind device: usbipd wsl list / usbipd wsl attach --busid <BUSID>")
+            print("  2. Start backend: ros2 launch px4_sim_ros2 windows_backend.launch.py")
+        else:
+            print("[ACETele Sim] Linux detected. Please execute the following:")
+            print("  1. Start backend: ros2 launch px4_sim_ros2 linux_backend.launch.py")
         print("-" * 50)
         self._px4_interface = PX4Interface()
 
@@ -117,7 +123,6 @@ class MujocoBase:
     def _reset_to_home(self):
         key_id = mujoco.mj_name2id(self._mj_model, mujoco.mjtObj.mjOBJ_KEY, "home")
         if key_id >= 0:
-            print("Loading 'home' keyframe...")
             mujoco.mj_resetDataKeyframe(self._mj_model, self._mj_data, key_id)
             # Initialize arm actuator control values from qpos
             home_pose = []
@@ -126,7 +131,7 @@ class MujocoBase:
                 if j_id >= 0 and act_id >= 0:
                     self._mj_data.ctrl[act_id] = self._mj_data.qpos[self._mj_model.jnt_qposadr[j_id]]
                     home_pose.append(self._mj_data.ctrl[act_id])
-            print(f"Home Pose: [{', '.join([f'{v:.3f}' for v in home_pose])}]")
+            print(f"Loading 'home' keyframe: [{', '.join([f'{v:.3f}' for v in home_pose])}]")
         else:
             print("No 'home' keyframe found. Using default.")
 
