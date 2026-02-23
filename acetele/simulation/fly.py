@@ -43,7 +43,7 @@ class MujocoBase:
         print("-" * 50)
         if platform.system() == "Windows":
             print("[ACETele Sim] Windows detected. Please execute the following in WSL:")
-            print("  1. Bind device: usbipd wsl list / usbipd wsl attach --busid <BUSID>")
+            print("  1. Bind device: usbipd list / usbipd bind -b <BUSID> / usbipd attach --wsl --busid <BUSID>")
             print("  2. Start backend: ros2 launch px4_sim_ros2 windows_backend.launch.py")
         else:
             print("[ACETele Sim] Linux detected. Please execute the following:")

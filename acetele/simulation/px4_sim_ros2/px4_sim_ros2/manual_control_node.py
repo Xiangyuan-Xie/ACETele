@@ -10,7 +10,7 @@ from acetele.equipment.joystick.joystick_driver import JDKFPVDriver
 
 class ManualControlNode(Node):
     def __init__(self) -> None:
-        super().__init__("manual_control_from_joystick")
+        super().__init__("manual_control")
         self._driver = JDKFPVDriver()
         self._publisher = self.create_publisher(
             ManualControlSetpoint,

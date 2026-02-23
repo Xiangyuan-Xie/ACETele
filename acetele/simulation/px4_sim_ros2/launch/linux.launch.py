@@ -1,37 +1,54 @@
+import importlib.util
+import os
 from pathlib import Path
+from typing import Optional
 
-import yaml
-from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import ExecuteProcess
+from launch.actions import DeclareLaunchArgument, ExecuteProcess, OpaqueFunction
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
-def _load_px4_repo_path() -> str:
-    share_dir = Path(get_package_share_directory("px4_sim_ros2"))
-    cfg_path = share_dir / "config" / "px4_sim_config.yaml"
-    default_path = "acetele/simulation/PX4-Autopilot"
-    if cfg_path.is_file():
-        params = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
-        px4_repo_path = params.get("px4_repo_path")
-        if isinstance(px4_repo_path, str) and px4_repo_path.strip():
-            return px4_repo_path.strip()
-    return default_path
+def _detect_acetele_root() -> Path:
+    spec = importlib.util.find_spec("acetele")
+    if spec is not None:
+        locations = spec.submodule_search_locations
+        if locations:
+            return Path(next(iter(locations))).resolve()
+        origin = spec.origin
+        if origin:
+            return Path(origin).resolve().parent
+    env = os.environ.get("ACETELE_ROOT")
+    if env:
+        return Path(env).resolve()
+    raise RuntimeError("Failed to locate ACETele repository; set ACETELE_ROOT or pass px4_repo")
 
 
-def generate_launch_description():
-    px4_repo_path = _load_px4_repo_path()
+def _load_px4_repo_path(override: Optional[str]) -> str:
+    if isinstance(override, str) and override.strip():
+        value = Path(override.strip())
+        if not value.is_absolute():
+            base = _detect_acetele_root()
+            value = (base / value).resolve()
+        return str(value)
+    base = _detect_acetele_root()
+    return str((base / "simulation" / "third_party" / "PX4-Autopilot").resolve())
+
+
+def _launch_setup(context):
+    override = LaunchConfiguration("px4_repo").perform(context)
+    px4_repo_path = _load_px4_repo_path(override)
     micro_xrce_agent = ExecuteProcess(
         cmd=["MicroXRCEAgent", "udp4", "-p", "8888"],
         output="screen",
     )
     px4_sitl = ExecuteProcess(
-        cmd=["bash", "-lc", "make px4_sitl none"],
+        cmd=["bash", "-lc", "export PX4_SIM_MODEL=none_iris && make px4_sitl none"],
         cwd=px4_repo_path,
         output="screen",
     )
     mujoco_sim = ExecuteProcess(
-        cmd=["python3", "-m", "acetele.simulation.fly"],
+        cmd=["python3", "-m", "acesim.fly"],
         output="screen",
     )
     joystick_node = Node(
@@ -40,11 +57,22 @@ def generate_launch_description():
         name="manual_control",
         output="screen",
     )
+    return [
+        micro_xrce_agent,
+        px4_sitl,
+        mujoco_sim,
+        joystick_node,
+    ]
+
+
+def generate_launch_description():
     return LaunchDescription(
         [
-            micro_xrce_agent,
-            px4_sitl,
-            mujoco_sim,
-            joystick_node,
+            DeclareLaunchArgument(
+                "px4_repo",
+                default_value="",
+                description="PX4-Autopilot repository path; if empty, auto-detect from ACETele",
+            ),
+            OpaqueFunction(function=_launch_setup),
         ]
     )

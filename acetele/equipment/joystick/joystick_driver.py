@@ -7,6 +7,7 @@ import numpy as np
 
 os.environ["SDL_VIDEODRIVER"] = "dummy"
 os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "hide"
+os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
 import pygame  # noqa: E402
 
 from acetele.equipment.base_equipment import BaseEquipment  # noqa: E402
@@ -24,6 +25,7 @@ class JoystickDriver(BaseEquipment):
         axis_map: Optional[Dict[int, str]] = None,
         button_map: Optional[Dict[int, str]] = None,
         hat_map: Optional[Dict[int, str]] = None,
+        connect_timeout: float = 3.0,
     ):
         """
         Initialize the Joystick Driver.
@@ -53,6 +55,16 @@ class JoystickDriver(BaseEquipment):
         # Start worker thread
         self._thread = threading.Thread(target=self._worker, daemon=True)
         self._thread.start()
+
+        if connect_timeout and connect_timeout > 0:
+            deadline = time.time() + connect_timeout
+            while time.time() < deadline:
+                with self._data_lock:
+                    if self._is_connected:
+                        break
+                time.sleep(0.1)
+            else:
+                raise RuntimeError("No joystick detected; please check USB/IP mapping and device name.")
 
     def _worker(self):
         pygame.init()
