@@ -3,16 +3,16 @@ from typing import Any, Dict, Tuple
 
 import tomli
 
-_STATION_MAP = {
+_ROBOT_MAP = {
     "ace_leader": {
-        "default": ("acetele.station.ace_leader.ace_leader", "AceLeaderStation"),
-        "ros2": ("acetele.station.ace_leader.ace_leader_ros2", "AceLeaderROS2Station"),
-        "mock": ("acetele.station.ace_leader.ace_leader_mock", "AceLeaderMockStation"),
+        "default": ("acetele.robot.ace_leader.ace_leader", "AceLeaderRobot"),
+        "ros2": ("acetele.robot.ace_leader.ace_leader_ros2", "AceLeaderROS2Robot"),
+        "mock": ("acetele.robot.ace_leader.ace_leader_mock", "AceLeaderMockRobot"),
     },
     "ace_follower": {
-        "default": ("acetele.station.ace_follower.ace_follower", "AceFollowerStation"),
-        "ros2": ("acetele.station.ace_follower.ace_follower_ros2", "AceFollowerROS2Station"),
-        "mock": ("acetele.station.ace_follower.ace_follower_mock", "AceFollowerMockStation"),
+        "default": ("acetele.robot.ace_follower.ace_follower", "AceFollowerRobot"),
+        "ros2": ("acetele.robot.ace_follower.ace_follower_ros2", "AceFollowerROS2Robot"),
+        "mock": ("acetele.robot.ace_follower.ace_follower_mock", "AceFollowerMockRobot"),
     },
 }
 
@@ -28,33 +28,33 @@ class ConfigLoader:
             self._entry_config = tomli.load(f)
 
         if "config_file" in self._entry_config["basic"]:
-            station_config_path = self._config_dir / self._entry_config["basic"]["config_file"]
-            with open(station_config_path, "rb") as f:
-                self._station_config = tomli.load(f)
+            robot_config_path = self._config_dir / self._entry_config["basic"]["config_file"]
+            with open(robot_config_path, "rb") as f:
+                self._robot_config = tomli.load(f)
         else:
-            raise RuntimeError("Station config file not specified.")
+            raise RuntimeError("Robot config file not specified.")
 
-    def get_station_type(self) -> str:
-        return self._station_config["basic"]["station_type"]
+    def get_robot_type(self) -> str:
+        return self._robot_config["basic"]["robot_type"]
 
     def get_backend(self) -> str:
-        return self._station_config["basic"].get("backend", "default")
+        return self._robot_config["basic"].get("backend", "default")
 
-    def get_station_info(self) -> Tuple[str, str]:
-        station_type = self.get_station_type()
+    def get_robot_info(self) -> Tuple[str, str]:
+        robot_type = self.get_robot_type()
         backend = self.get_backend()
-        if station_type in _STATION_MAP:
-            if backend in _STATION_MAP[station_type]:
-                return _STATION_MAP[station_type][backend]
+        if robot_type in _ROBOT_MAP:
+            if backend in _ROBOT_MAP[robot_type]:
+                return _ROBOT_MAP[robot_type][backend]
             else:
-                raise ValueError(f"Backend '{backend}' not supported for station type '{station_type}'")
+                raise ValueError(f"Backend '{backend}' not supported for robot type '{robot_type}'")
         else:
-            raise ValueError(f"Station type '{station_type}' not supported")
+            raise ValueError(f"Robot type '{robot_type}' not supported")
 
     def get_linker_config(self) -> Tuple[Dict[str, Any], ...]:
-        if "single" in self._station_config["linker"]:
-            return (self._station_config["linker"]["single"],)
-        elif "dual" in self._station_config["linker"]:
-            return tuple(self._station_config["linker"]["dual"].values())
+        if "single" in self._robot_config["linker"]:
+            return (self._robot_config["linker"]["single"],)
+        elif "dual" in self._robot_config["linker"]:
+            return tuple(self._robot_config["linker"]["dual"].values())
         else:
             raise ValueError("Linker type not supported")

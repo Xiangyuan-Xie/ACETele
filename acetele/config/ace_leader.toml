@@ -1,5 +1,5 @@
 [basic]
-station_type = "ace_leader"
+robot_type = "ace_leader"
 backend = "mock"
 
 [linker.single]

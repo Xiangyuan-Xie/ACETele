@@ -10,9 +10,9 @@ def generate_launch_description():
     follower_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(
-                get_package_share_directory("ace_station_ros2"),
+                get_package_share_directory("ace_robot_ros2"),
                 "launch",
-                "ace_station.launch.py",
+                "ace_robot.launch.py",
             )
         ),
     )

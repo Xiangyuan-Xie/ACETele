@@ -17,18 +17,13 @@ classifiers = [
 ]
 requires-python = ">=3.9"
 dependencies = [
-    "coacd",
     "h5py",
     "loguru",
-    "matplotlib",
     "numpy",
     "pin",
     "pygame",
     "pyserial",
-    "scipy",
-    "tomli",
     "tqdm",
-    "trimesh",
 ]
 
 [tool.setuptools.packages.find]

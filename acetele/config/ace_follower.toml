@@ -1,5 +1,5 @@
 [basic]
-station_type = "ace_follower"
+robot_type = "ace_follower"
 backend = "ros2"
 
 [linker.single]

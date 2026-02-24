@@ -7,7 +7,7 @@
   <maintainer email="dragonboat_xxy@163.com">Xiangyuan Xie</maintainer>
   <license>Apache-2.0</license>
 
-  <depend>ace_station_ros2</depend>
+  <depend>ace_robot_ros2</depend>
   <depend>visualization_ros2</depend>
   <depend>realsense2_camera</depend>
   <depend>ros2_px4_odometry</depend>

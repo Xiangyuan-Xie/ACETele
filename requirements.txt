@@ -1,13 +1,7 @@
-coacd
 h5py
 loguru
-matplotlib
-mujoco
 numpy
 pin
 pygame
-pymavlink
 pyserial
-scipy
 tqdm
-trimesh
