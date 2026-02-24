@@ -6,7 +6,6 @@ from typing import Optional
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, ExecuteProcess, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
-from launch_ros.actions import Node
 
 
 def _detect_acetele_root() -> Path:
@@ -51,17 +50,10 @@ def _launch_setup(context):
         cmd=["python3", "-m", "acesim.fly"],
         output="screen",
     )
-    joystick_node = Node(
-        package="px4_sim_ros2",
-        executable="manual_control",
-        name="manual_control",
-        output="screen",
-    )
     return [
         micro_xrce_agent,
         px4_sitl,
         mujoco_sim,
-        joystick_node,
     ]
 
 
