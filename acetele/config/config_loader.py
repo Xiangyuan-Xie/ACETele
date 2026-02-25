@@ -20,25 +20,21 @@ __all__ = ["ConfigLoader"]
 
 
 class ConfigLoader:
-    def __init__(self, config_dir: Path = Path(__file__).parent, entry_config_name: str = "default.toml"):
-        self._config_dir = Path(config_dir).expanduser().resolve()
-        entry_config_path = self._config_dir / entry_config_name
+    def __init__(self, config_path: Path = Path(__file__).parent / "default.toml"):
+        config_path = Path(config_path).expanduser().resolve()
 
-        with open(entry_config_path, "rb") as f:
+        with open(config_path, "rb") as f:
             self._entry_config = tomli.load(f)
 
-        if "config_file" in self._entry_config["basic"]:
-            robot_config_path = self._config_dir / self._entry_config["basic"]["config_file"]
-            with open(robot_config_path, "rb") as f:
-                self._robot_config = tomli.load(f)
-        else:
-            raise RuntimeError("Robot config file not specified.")
+        robot_config_path = config_path.parent / self._entry_config["basic"]["config_file"]
+        with open(robot_config_path, "rb") as f:
+            self._robot_config = tomli.load(f)
 
     def get_robot_type(self) -> str:
         return self._robot_config["basic"]["robot_type"]
 
     def get_backend(self) -> str:
-        return self._robot_config["basic"].get("backend", "default")
+        return self._robot_config["basic"]["backend"]
 
     def get_robot_info(self) -> Tuple[str, str]:
         robot_type = self.get_robot_type()
