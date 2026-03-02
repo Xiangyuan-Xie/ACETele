@@ -5,17 +5,22 @@ import subprocess
 
 import rclpy
 from px4_msgs.msg import ManualControlSetpoint
+from rcl_interfaces.msg import ParameterDescriptor, ParameterType
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy
 
 
 class DataCollectorNode(Node):
     def __init__(self):
         super().__init__("data_collector_node")
         self.declare_parameter("save_path", "~/data/")
-        self.declare_parameter("topics", [])
-        self._topics = self.get_parameter("topics").value
+        topics_descriptor = ParameterDescriptor(type=ParameterType.PARAMETER_STRING_ARRAY)
+        self.declare_parameter("topics", None, topics_descriptor)
+        self._topics = self.get_parameter("topics").value or []
         self._save_path = self.get_parameter("save_path").value
 
+        # expand '~' and ensure absolute
+        self._save_path = os.path.expanduser(self._save_path)
         if not os.path.isabs(self._save_path):
             self._save_path = os.path.abspath(self._save_path)
         os.makedirs(self._save_path, exist_ok=True)
@@ -23,8 +28,12 @@ class DataCollectorNode(Node):
         self._recording_process = None
         self._is_recording = False
 
+        qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
         self._subscription = self.create_subscription(
-            ManualControlSetpoint, "/fmu/out/manual_control_setpoint", self._manual_control_callback, 10
+            ManualControlSetpoint,
+            "/fmu/out/manual_control_setpoint",
+            self._manual_control_callback,
+            qos,
         )
 
         self.get_logger().info("DataCollector node started.")
