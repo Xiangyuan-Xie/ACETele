@@ -27,27 +27,37 @@ VisualizationNode::VisualizationNode() : Node("visualization")
 
     std::string color_transport = this->get_parameter("color_transport").as_string();
     std::string depth_transport = this->get_parameter("depth_transport").as_string();
+    std::string effective_color_transport = color_transport;
+    std::string effective_depth_transport = depth_transport;
+    if (effective_color_transport == "compressedDepth") {
+        RCLCPP_WARN(this->get_logger(), "color_transport is compressedDepth, fallback to compressed");
+        effective_color_transport = "compressed";
+    }
+    if (effective_depth_transport == "compressed" || effective_depth_transport == "theora") {
+        RCLCPP_WARN(this->get_logger(), "depth_transport is %s, fallback to compressedDepth", effective_depth_transport.c_str());
+        effective_depth_transport = "compressedDepth";
+    }
 
     // Setup ROS 2 Subscribers
     auto qos = rclcpp::SensorDataQoS();
 
     // Always use Best Effort QoS for image transport to prevent disconnection
     // especially for compressed streams over network/WiFi
-    RCLCPP_INFO(this->get_logger(), "Using SensorDataQoS (Best Effort) for color transport: %s", color_transport.c_str());
+    RCLCPP_INFO(this->get_logger(), "Using SensorDataQoS (Best Effort) for color transport: %s", effective_color_transport.c_str());
     color_sub_ = image_transport::create_subscription(
-        this, front_color_topic, std::bind(&VisualizationNode::color_callback, this, _1), color_transport, qos.get_rmw_qos_profile());
+        this, front_color_topic, std::bind(&VisualizationNode::color_callback, this, _1), effective_color_transport, qos.get_rmw_qos_profile());
 
-    RCLCPP_INFO(this->get_logger(), "Using SensorDataQoS (Best Effort) for depth transport: %s", depth_transport.c_str());
+    RCLCPP_INFO(this->get_logger(), "Using SensorDataQoS (Best Effort) for depth transport: %s", effective_depth_transport.c_str());
     depth_sub_ = image_transport::create_subscription(
-        this, front_depth_topic, std::bind(&VisualizationNode::depth_callback, this, _1), depth_transport, qos.get_rmw_qos_profile());
+        this, front_depth_topic, std::bind(&VisualizationNode::depth_callback, this, _1), effective_depth_transport, qos.get_rmw_qos_profile());
 
-    RCLCPP_INFO(this->get_logger(), "Using SensorDataQoS (Best Effort) for wrist color transport: %s", color_transport.c_str());
+    RCLCPP_INFO(this->get_logger(), "Using SensorDataQoS (Best Effort) for wrist color transport: %s", effective_color_transport.c_str());
     wrist_color_sub_ = image_transport::create_subscription(
-        this, wrist_color_topic, std::bind(&VisualizationNode::wrist_color_callback, this, _1), color_transport, qos.get_rmw_qos_profile());
+        this, wrist_color_topic, std::bind(&VisualizationNode::wrist_color_callback, this, _1), effective_color_transport, qos.get_rmw_qos_profile());
 
-    RCLCPP_INFO(this->get_logger(), "Using SensorDataQoS (Best Effort) for wrist depth transport: %s", depth_transport.c_str());
+    RCLCPP_INFO(this->get_logger(), "Using SensorDataQoS (Best Effort) for wrist depth transport: %s", effective_depth_transport.c_str());
     wrist_depth_sub_ = image_transport::create_subscription(
-        this, wrist_depth_topic, std::bind(&VisualizationNode::wrist_depth_callback, this, _1), depth_transport, qos.get_rmw_qos_profile());
+        this, wrist_depth_topic, std::bind(&VisualizationNode::wrist_depth_callback, this, _1), effective_depth_transport, qos.get_rmw_qos_profile());
 
     front_metadata_sub_ = this->create_subscription<realsense2_camera_msgs::msg::Metadata>(
         front_color_metadata_topic, qos, std::bind(&VisualizationNode::front_metadata_callback, this, _1));
@@ -59,7 +69,7 @@ VisualizationNode::VisualizationNode() : Node("visualization")
         arm_state_topic, qos, std::bind(&VisualizationNode::arm_state_callback, this, _1));
 
     RCLCPP_INFO(this->get_logger(), "Visualization Node Started.");
-    RCLCPP_INFO(this->get_logger(), "Transport - Color: %s, Depth: %s", color_transport.c_str(), depth_transport.c_str());
+    RCLCPP_INFO(this->get_logger(), "Transport - Color: %s, Depth: %s", effective_color_transport.c_str(), effective_depth_transport.c_str());
 }
 
 VisualizationNode::~VisualizationNode()

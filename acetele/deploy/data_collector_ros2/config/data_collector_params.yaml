@@ -2,7 +2,7 @@ data_collector_node:
   ros__parameters:
     save_path: "~/data/"
     topics:
-      - "^/arm/*"
+      - "^/arm/.*"
       - "^/fmu/.*"
       - "^/camera/.*"
       - "^/Xie_1/.*"
