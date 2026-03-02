@@ -1,5 +1,5 @@
 import time
-from typing import Sequence, Tuple
+from typing import Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -23,7 +23,12 @@ class AceFollowerMockRobot(BaseRobot):
     def set_position(self, positions: Sequence[float]):
         self.current_positions = np.asarray(positions)
 
-    def move_position(self, positions: Sequence[float]):
+    def move_position(
+        self,
+        positions: Sequence[float],
+        ids: Optional[Sequence[int]] = None,
+        torque: Optional[Sequence[float]] = None,
+    ):
         self.set_position(positions)
 
 

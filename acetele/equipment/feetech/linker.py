@@ -187,6 +187,7 @@ class Linker(BaseEquipment):
         self,
         positions: Sequence[float],
         ids: Optional[Sequence[int]] = None,
+        torque: Optional[Sequence[float]] = None,
         step_size: float = 0.01,
         min_steps: int = 2,
         max_steps: int = 100,
@@ -199,6 +200,13 @@ class Linker(BaseEquipment):
         assert len(ids) == len(positions_array), "ids and positions must have the same length."
         assert np.all(np.isin(ids, self._ids)), "ids is illegal."
 
+        torque_array = None
+        if torque is not None:
+            torque_array = np.asarray(torque, dtype=float)
+            if torque_array.ndim == 0:
+                torque_array = np.full(len(ids), float(torque_array))
+            assert len(torque_array) == len(ids), "ids and torques must have the same length."
+
         current_pos, _, _ = self.act()
         indices = np.searchsorted(self._ids, ids)
         current_pos = current_pos[indices]
@@ -208,7 +216,10 @@ class Linker(BaseEquipment):
 
         max_error = np.max(np.abs(errors))
         if max_error < 0.001:
-            self.set_position(ids=ids, positions=positions_array)
+            if torque_array is None:
+                self.set_position(ids=ids, positions=positions_array)
+            else:
+                self.set_position_and_torque(ids=ids, positions=positions_array, torques=torque_array)
             return 1
 
         num_steps = int(np.ceil(max_error / step_size))
@@ -217,7 +228,10 @@ class Linker(BaseEquipment):
         for i in range(num_steps + 1):
             t = i / num_steps
             interp_pos = current_pos + errors * t
-            self.set_position(ids=ids, positions=interp_pos)
+            if torque_array is None:
+                self.set_position(ids=ids, positions=interp_pos)
+            else:
+                self.set_position_and_torque(ids=ids, positions=interp_pos, torques=torque_array)
 
         return num_steps
 

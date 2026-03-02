@@ -1,5 +1,7 @@
+import numpy as np
+from px4_msgs.msg import VehicleLandDetected
 from rclpy.node import Node
-from rclpy.qos import QoSProfile
+from rclpy.qos import QoSProfile, qos_profile_sensor_data
 from sensor_msgs.msg import JointState
 
 from acetele.config.config_loader import ConfigLoader
@@ -25,34 +27,70 @@ class AceLeaderROS2Robot(Node, AceLeaderRobot):
             self._state_callback,
             qos,
         )
+        self._land_detected_sub = self.create_subscription(
+            VehicleLandDetected,
+            "/fmu/out/vehicle_land_detected",
+            self._landed_callback,
+            qos_profile_sensor_data,
+        )
 
         period = 1.0 / self._control_rate
         self._timer = self.create_timer(period, self._control_loop)
 
         self._is_synced = False
         self._is_started = False
+        self._is_landed = False
+        self._is_ended = False
+        self._max_torque = 0.0
+
+        try:
+            pin_model = self.get_pin_model()
+            if pin_model.effortLimit.size > 0:
+                self._max_torque = float(np.max(pin_model.effortLimit))
+        except RuntimeError:
+            self._max_torque = 0.0
 
         self.get_logger().info("Leader arm controller node started.")
 
     def _state_callback(self, msg: JointState):
         if not self._is_started:
             if self._is_synced:
-                self.set_position(ids=self._equipments.single_arm.ids[:-1], positions=msg.position[:-1])
+                positions = msg.position[:-1]
+                torques = [self._max_torque] * len(positions)
+                self.set_position_and_torque(
+                    ids=self._equipments.single_arm.ids[:-1],
+                    positions=positions,
+                    torques=torques,
+                )
             else:
                 self.get_logger().info("Synchronizing to the follower arm...")
-                self.move_position(ids=self._equipments.single_arm.ids[:-1], positions=msg.position[:-1])
+                torques = [self._max_torque] * len(msg.position[:-1])
+                self.move_position(
+                    ids=self._equipments.single_arm.ids[:-1],
+                    positions=msg.position[:-1],
+                    torque=torques,
+                )
                 self._is_synced = True
                 self._equipments.single_arm.start_control_loop()
                 self.get_logger().info("Synchronization completed.")
         self._external_torque = msg.effort
 
+    def _landed_callback(self, msg: VehicleLandDetected):
+        self._is_landed = msg.landed
+
     def _control_loop(self):
         if self._is_synced:
             joint_pos, joint_vel, joint_effort = self.act()
             if self._is_started:
+                if self._is_ended:
+                    return
+                if self._is_landed:
+                    self._is_ended = True
+                    self.get_logger().info("Landing detected. Teleoperation command publishing stopped.")
+                    return
                 self._publish_command(joint_pos, joint_vel, joint_effort)
             else:
-                if joint_pos[-1] <= 0.0:
+                if not self._is_ended and joint_pos[-1] <= 0.0:
                     self._is_started = True
                     self.get_logger().info("Leader arm control started.")
 
