@@ -1,8 +1,10 @@
 #include "visualization_gui.hpp"
 #include <QDateTime>
 #include <QDir>
+#include <QGuiApplication>
 #include <QHeaderView>
 #include <QResizeEvent>
+#include <QScreen>
 
 // --- AspectRatioLabel Implementation ---
 
@@ -48,7 +50,17 @@ VisualizationWindow::VisualizationWindow(std::shared_ptr<VisualizationNode> node
     : QMainWindow(parent), node_(node)
 {
     this->setWindowTitle("ACETele Visualization");
-    this->resize(1600, 900);
+    const QScreen *screen = QGuiApplication::primaryScreen();
+    if (screen) {
+        const QRect available_geometry = screen->availableGeometry();
+        this->resize(available_geometry.size());
+        base_width_ = available_geometry.width();
+        base_height_ = available_geometry.height();
+    } else {
+        this->resize(1920, 1080);
+        base_width_ = 1920.0;
+        base_height_ = 1080.0;
+    }
 
     setupUI();
 

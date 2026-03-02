@@ -60,8 +60,8 @@ private:
 
     std::shared_ptr<VisualizationNode> node_;
     QTimer *timer_;
-    double base_width_ = 1600.0;
-    double base_height_ = 900.0;
+    double base_width_ = 1920.0;
+    double base_height_ = 1080.0;
 
     // UI Elements
     QLabel *image_title_;
