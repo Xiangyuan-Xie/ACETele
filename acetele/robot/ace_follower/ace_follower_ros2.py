@@ -12,6 +12,9 @@ class AceFollowerROS2Robot(Node, AceFollowerRobot):
         AceFollowerRobot.__init__(self, config_loader)
         self.declare_parameter("control_rate", 250.0)
         self._control_rate = self.get_parameter("control_rate").value
+        self.declare_parameter("heartbeat_timeout", 1.0)
+        self._heartbeat_timeout = self.get_parameter("heartbeat_timeout").value
+        self._heartbeat_timeout_ns = int(self._heartbeat_timeout * 1e9)
 
         qos = QoSProfile(depth=10)
         self._state_pub = self.create_publisher(
@@ -32,10 +35,14 @@ class AceFollowerROS2Robot(Node, AceFollowerRobot):
         current_pos, _, _ = self.act()
         self.move_position(current_pos)
         self._is_synced = False
+        self._last_command_ns = None
+        self._heartbeat_lost = False
 
         self.get_logger().info("Follower arm controller node started.")
 
     def _command_callback(self, msg: JointState):
+        self._last_command_ns = self.get_clock().now().nanoseconds
+        self._heartbeat_lost = False
         if self._is_synced:
             self.set_position(msg.position)
         else:
@@ -46,6 +53,13 @@ class AceFollowerROS2Robot(Node, AceFollowerRobot):
             self.get_logger().info("Synchronization completed.")
 
     def _control_loop(self):
+        if self._is_synced and self._last_command_ns is not None:
+            now_ns = self.get_clock().now().nanoseconds
+            if now_ns - self._last_command_ns > self._heartbeat_timeout_ns:
+                if not self._heartbeat_lost:
+                    self.get_logger().info("Heartbeat lost. Resetting sync state.")
+                self._is_synced = False
+                self._heartbeat_lost = True
         joint_pos, joint_vel, joint_effort = self.act()
         self._publish_state(joint_pos, joint_vel, joint_effort)
 
