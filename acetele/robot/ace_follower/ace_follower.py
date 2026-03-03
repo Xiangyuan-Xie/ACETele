@@ -25,8 +25,15 @@ class AceFollowerRobot(BaseRobot):
             ),
         )
 
-    def act(self) -> Tuple[Sequence[float], Sequence[float], Sequence[float]]:
-        return self._equipments.single_arm.act()
+    def act(
+        self,
+        encode_gripper: bool = True,
+        cal_torque_sign: bool = False,
+    ) -> Tuple[Sequence[float], Sequence[float], Sequence[float]]:
+        return self._equipments.single_arm.act(
+            encode_gripper=encode_gripper,
+            cal_torque_sign=cal_torque_sign,
+        )
 
     def set_position(self, positions: Sequence[float], ids: Optional[Sequence[int]] = None):
         self._equipments.single_arm.set_position(positions=positions, ids=ids)
@@ -36,8 +43,14 @@ class AceFollowerRobot(BaseRobot):
         positions: Sequence[float],
         ids: Optional[Sequence[int]] = None,
         torque: Optional[Sequence[float]] = None,
+        encode_gripper: bool = True,
     ):
-        self._equipments.single_arm.move_position(positions=positions, ids=ids, torque=torque)
+        self._equipments.single_arm.move_position(
+            positions=positions,
+            ids=ids,
+            torque=torque,
+            encode_gripper=encode_gripper,
+        )
 
 
 if __name__ == "__main__":

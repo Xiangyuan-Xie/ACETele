@@ -194,6 +194,7 @@ class Linker(BaseEquipment):
         step_size: float = 0.01,
         min_steps: int = 2,
         max_steps: int = 100,
+        encode_gripper: bool = True,
     ) -> float:
         if ids is None:
             ids = self._ids
@@ -210,7 +211,7 @@ class Linker(BaseEquipment):
                 torque_array = np.full(len(ids), float(torque_array))
             assert len(torque_array) == len(ids), "ids and torques must have the same length."
 
-        current_pos, _, _ = self.act()
+        current_pos, _, _ = self.act(encode_gripper=encode_gripper)
         indices = np.searchsorted(self._ids, ids)
         current_pos = current_pos[indices]
 
@@ -220,9 +221,14 @@ class Linker(BaseEquipment):
         max_error = np.max(np.abs(errors))
         if max_error < 0.001:
             if torque_array is None:
-                self.set_position(ids=ids, positions=positions_array)
+                self.set_position(ids=ids, positions=positions_array, encode_gripper=encode_gripper)
             else:
-                self.set_position_and_torque(ids=ids, positions=positions_array, torques=torque_array)
+                self.set_position_and_torque(
+                    ids=ids,
+                    positions=positions_array,
+                    torques=torque_array,
+                    encode_gripper=encode_gripper,
+                )
             return 1
 
         num_steps = int(np.ceil(max_error / step_size))
@@ -232,9 +238,14 @@ class Linker(BaseEquipment):
             t = i / num_steps
             interp_pos = current_pos + errors * t
             if torque_array is None:
-                self.set_position(ids=ids, positions=interp_pos)
+                self.set_position(ids=ids, positions=interp_pos, encode_gripper=encode_gripper)
             else:
-                self.set_position_and_torque(ids=ids, positions=interp_pos, torques=torque_array)
+                self.set_position_and_torque(
+                    ids=ids,
+                    positions=interp_pos,
+                    torques=torque_array,
+                    encode_gripper=encode_gripper,
+                )
 
         return num_steps
 
