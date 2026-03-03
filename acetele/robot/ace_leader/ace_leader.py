@@ -55,13 +55,11 @@ class AceLeaderRobot(BaseRobot):
         positions: Sequence[float],
         ids: Optional[Sequence[int]] = None,
         torque: Optional[Sequence[float]] = None,
-        encode_gripper: bool = True,
     ):
         self._equipments.single_arm.move_position(
             positions=positions,
             ids=ids,
             torque=torque,
-            encode_gripper=encode_gripper,
         )
 
 

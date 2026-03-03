@@ -32,8 +32,8 @@ class AceFollowerROS2Robot(Node, AceFollowerRobot):
         period = 1.0 / self._control_rate
         self._timer = self.create_timer(period, self._control_loop)
 
-        current_pos, _, _ = self.act(encode_gripper=False)
-        self.move_position(current_pos, encode_gripper=False)
+        current_pos, _, _ = self.act()
+        self.move_position(current_pos)
         self._is_synced = False
         self._last_command_ns = None
         self._heartbeat_lost = False

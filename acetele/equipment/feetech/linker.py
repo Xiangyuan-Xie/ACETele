@@ -194,7 +194,6 @@ class Linker(BaseEquipment):
         step_size: float = 0.01,
         min_steps: int = 2,
         max_steps: int = 100,
-        encode_gripper: bool = True,
     ) -> float:
         if ids is None:
             ids = self._ids
@@ -211,23 +210,25 @@ class Linker(BaseEquipment):
                 torque_array = np.full(len(ids), float(torque_array))
             assert len(torque_array) == len(ids), "ids and torques must have the same length."
 
-        current_pos, _, _ = self.act(encode_gripper=encode_gripper)
+        current_pos, _, _ = self.act()
         indices = np.searchsorted(self._ids, ids)
         current_pos = current_pos[indices]
 
         target_pos = positions_array
         errors = (target_pos - current_pos + np.pi / 2) % (2 * np.pi) - np.pi / 2
+        if self._gripper_id >= 0 and self._gripper_id in ids:
+            gripper_index = int(np.where(ids == self._gripper_id)[0][0])
+            errors[gripper_index] = target_pos[gripper_index] - current_pos[gripper_index]
 
         max_error = np.max(np.abs(errors))
         if max_error < 0.001:
             if torque_array is None:
-                self.set_position(ids=ids, positions=positions_array, encode_gripper=encode_gripper)
+                self.set_position(ids=ids, positions=positions_array)
             else:
                 self.set_position_and_torque(
                     ids=ids,
                     positions=positions_array,
                     torques=torque_array,
-                    encode_gripper=encode_gripper,
                 )
             return 1
 
@@ -237,14 +238,15 @@ class Linker(BaseEquipment):
         for i in range(num_steps + 1):
             t = i / num_steps
             interp_pos = current_pos + errors * t
+            if self._gripper_id >= 0 and self._gripper_id in ids:
+                interp_pos[gripper_index] = np.clip(interp_pos[gripper_index], 0.0, 1.0)
             if torque_array is None:
-                self.set_position(ids=ids, positions=interp_pos, encode_gripper=encode_gripper)
+                self.set_position(ids=ids, positions=interp_pos)
             else:
                 self.set_position_and_torque(
                     ids=ids,
                     positions=interp_pos,
                     torques=torque_array,
-                    encode_gripper=encode_gripper,
                 )
 
         return num_steps
