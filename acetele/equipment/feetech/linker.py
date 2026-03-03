@@ -131,9 +131,10 @@ class Linker(BaseEquipment):
 
         torques_Nm = np.asarray(torques)
         torques_kgcmf = torques_Nm / 0.0981
-        currents = (
-            (self._torque_current_mapping * np.abs(torques_kgcmf) + self._no_load_current) * np.sign(torques_kgcmf)
-        ) * self._signs
+        torque_current_mapping = self._torque_current_mapping[np.searchsorted(self._ids, ids)]
+        no_load_current = self._no_load_current[np.searchsorted(self._ids, ids)]
+        signs = self._signs[np.searchsorted(self._ids, ids)]
+        currents = ((torque_current_mapping * np.abs(torques_kgcmf) + no_load_current) * np.sign(torques_kgcmf)) * signs
         encoded_currents = np.around(currents / -6.5).astype(int)
         self._driver.set_current(ids[:-2], encoded_currents[:-2])
 
@@ -178,7 +179,9 @@ class Linker(BaseEquipment):
 
         torques_Nm = np.asarray(torques)
         torques_kgcmf = torques_Nm / 0.0981
-        currents = self._torque_current_mapping * np.abs(torques_kgcmf) + self._no_load_current
+        torque_current_mapping = self._torque_current_mapping[np.searchsorted(self._ids, ids)]
+        no_load_current = self._no_load_current[np.searchsorted(self._ids, ids)]
+        currents = torque_current_mapping * np.abs(torques_kgcmf) + no_load_current
         encoded_currents = np.around(currents / 6.5).astype(int)
 
         self._driver.set_position_and_current(ids, encoded_positions, encoded_currents)
