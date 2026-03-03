@@ -4,5 +4,5 @@ data_collector_node:
     topics:
       - "^/arm/.*"
       - "^/fmu/.*"
-      - "^/camera/.*"
+      - "^/camera/(?!.*(compressed|theora)).*"
       - "^/Xie_1/.*"
