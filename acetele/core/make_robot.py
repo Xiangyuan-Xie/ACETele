@@ -1,6 +1,5 @@
 import importlib
 import time
-from pathlib import Path
 from typing import Optional
 
 import numpy as np
@@ -9,10 +8,8 @@ from acetele.config.config_loader import ConfigLoader
 from acetele.robot.base_robot import BaseRobot
 
 
-def make_robot(config_path: Optional[Path] = None) -> BaseRobot:
-    if config_path:
-        config_loader = ConfigLoader(config_path=config_path)
-    else:
+def make_robot(config_loader: Optional[ConfigLoader] = None) -> BaseRobot:
+    if not config_loader:
         config_loader = ConfigLoader()
 
     module_name, class_name = config_loader.get_robot_info()
