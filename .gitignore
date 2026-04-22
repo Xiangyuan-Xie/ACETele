@@ -185,3 +185,6 @@ image/
 
 # vscode
 .vscode/
+
+# Codex
+.codex
