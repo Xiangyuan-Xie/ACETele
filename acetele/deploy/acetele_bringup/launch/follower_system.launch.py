@@ -1,4 +1,5 @@
 import os
+from importlib.resources import files
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -7,6 +8,8 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 
 
 def generate_launch_description():
+    robot_config = str(files("acetele.config").joinpath("ace_follower.toml"))
+
     follower_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(
@@ -15,6 +18,7 @@ def generate_launch_description():
                 "ace_robot.launch.py",
             )
         ),
+        launch_arguments={"config_path": robot_config}.items(),
     )
 
     realsense_launch = IncludeLaunchDescription(

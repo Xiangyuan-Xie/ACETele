@@ -10,7 +10,12 @@ setup(
         ("share/ament_index/resource_index/packages", ["resource/" + package_name]),
         ("share/" + package_name, ["package.xml"]),
         ("share/" + package_name + "/launch", ["launch/ace_robot.launch.py"]),
-        ("share/" + package_name + "/config", ["config/ace_robot_params.yaml"]),
+        (
+            "share/" + package_name + "/config",
+            [
+                "config/ace_robot_params.yaml",
+            ],
+        ),
     ],
     install_requires=["setuptools"],
     zip_safe=True,

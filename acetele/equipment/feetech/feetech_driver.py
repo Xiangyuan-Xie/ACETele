@@ -36,6 +36,14 @@ class TorqueEnable(Enum):
     Enable = 1
 
 
+class FeeTechCalibrationError(RuntimeError):
+    pass
+
+
+class FeeTechStateTimeoutError(RuntimeError):
+    pass
+
+
 class FeeTechDriver:
     def __init__(self, ids: Sequence[int], port: str, baudrate: int = 1000000):
         self._ids = ids
@@ -119,21 +127,32 @@ class FeeTechDriver:
 
         self._groupSyncReadHandler.clearParam()
 
-    def calibrate(self, ids: Sequence[int], home_poses: Sequence[int]) -> bool:
+    def calibrate(self, ids: Sequence[int], home_poses: Sequence[int]) -> None:
         assert len(ids) == len(home_poses), "ids and home_poses must have the same length."
         assert all(ft_id in self._ids for ft_id in ids), "some ids are not registered in FeeTechDriver."
+        calibrated_ids: list[int] = []
         self.close()
-        for ft_id, pose in zip(ids, home_poses):
-            comm_result, error = self._packetHandler.reOfsCal(ft_id, pose)
-            if comm_result != COMM_SUCCESS:
-                logger.error(self._packetHandler.getTxRxResult(comm_result))
-                return False
-            if error != 0:
-                logger.error(self._packetHandler.getRxPacketError(error))
-                return False
-        self.open()
-        time.sleep(0.1)
-        return True
+        try:
+            for ft_id, pose in zip(ids, home_poses):
+                comm_result, error = self._packetHandler.reOfsCal(ft_id, pose)
+                if comm_result != COMM_SUCCESS:
+                    error_message = self._packetHandler.getTxRxResult(comm_result)
+                    logger.error(error_message)
+                    raise FeeTechCalibrationError(
+                        f"Failed to calibrate ID {ft_id} at pose {pose}: {error_message}. "
+                        f"Calibration may be partially written; already calibrated IDs: {calibrated_ids}"
+                    )
+                if error != 0:
+                    error_message = self._packetHandler.getRxPacketError(error)
+                    logger.error(error_message)
+                    raise FeeTechCalibrationError(
+                        f"Failed to calibrate ID {ft_id} at pose {pose}: {error_message}. "
+                        f"Calibration may be partially written; already calibrated IDs: {calibrated_ids}"
+                    )
+                calibrated_ids.append(ft_id)
+        finally:
+            self.open()
+            time.sleep(0.1)
 
     def set_torque_enable(self, ids: Sequence[int], enables: Sequence[TorqueEnable]):
         assert len(ids) == len(enables), "ids and enables must have the same length."
@@ -244,7 +263,7 @@ class FeeTechDriver:
 
         set_mode_waiting_list = []
         for ft_id in ids:
-            if self._mode[ft_id] != Mode.Torque:
+            if self._mode[ft_id] != Mode.Position:
                 set_mode_waiting_list.append(ft_id)
         self.set_mode(set_mode_waiting_list, [Mode.Position] * len(set_mode_waiting_list))
 
@@ -261,7 +280,7 @@ class FeeTechDriver:
                 self._groupSyncWriteGoalPositionHandler.avail_condition.wait()
 
         self._groupSyncWriteGoalPositionHandler.avail_flag.clear()
-        for ft_id, position in zip(ids, goal_positions):
+        for ft_id, position in zip(ids, goal_positions_array):
             position = self._packetHandler.scs_toscs(position, 15)
             if not self._groupSyncWriteGoalPositionHandler.addParam(
                 ft_id, [self._packetHandler.scs_lobyte(position), self._packetHandler.scs_hibyte(position)]
@@ -288,7 +307,7 @@ class FeeTechDriver:
 
         set_mode_waiting_list = []
         for ft_id in ids:
-            if self._mode[ft_id] != Mode.Torque:
+            if self._mode[ft_id] != Mode.Position:
                 set_mode_waiting_list.append(ft_id)
         self.set_mode(set_mode_waiting_list, [Mode.Position] * len(set_mode_waiting_list))
 
@@ -305,7 +324,7 @@ class FeeTechDriver:
                 self._groupSyncWriteGoalPositionAndCurrentHandler.avail_condition.wait()
 
         self._groupSyncWriteGoalPositionAndCurrentHandler.avail_flag.clear()
-        for ft_id, position, current in zip(ids, goal_positions, goal_currents):
+        for ft_id, position, current in zip(ids, goal_positions_array, goal_currents):
             position = self._packetHandler.scs_toscs(position, 15)
             if not self._groupSyncWriteGoalPositionAndCurrentHandler.addParam(
                 ft_id,
@@ -326,11 +345,22 @@ class FeeTechDriver:
 
         self._comm_task_queue.put(task)
 
-    def get_state(self) -> Tuple[Dict[int, int], Dict[int, int], Dict[int, int]]:
+    def get_state(self, timeout: float = 1.0) -> Tuple[Dict[int, int], Dict[int, int], Dict[int, int]]:
+        deadline = None if timeout is None else time.monotonic() + timeout
         while True:
             with self._lock:
                 if len(self._ids) == len(self._position) == len(self._velocity) == len(self._current):
                     return self._position, self._velocity, self._current
+                missing_ids = [
+                    ft_id
+                    for ft_id in self._ids
+                    if ft_id not in self._position or ft_id not in self._velocity or ft_id not in self._current
+                ]
+            if deadline is not None and time.monotonic() >= deadline:
+                raise FeeTechStateTimeoutError(
+                    f"Timed out waiting for complete FeeTech state; missing IDs: {missing_ids}"
+                )
+            time.sleep(0.001)
 
     def get_frequency(self) -> float:
         if len(self._time_windows) == 0:

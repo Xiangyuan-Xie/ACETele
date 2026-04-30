@@ -23,8 +23,16 @@ dependencies = [
     "pin",
     "pygame",
     "pyserial",
+    "tomli",
     "tqdm",
 ]
 
 [tool.setuptools.packages.find]
 where = ["."]
+
+[tool.setuptools.package-data]
+"acetele.config" = ["*.toml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = ["acetele/deploy/realsense-ros"]

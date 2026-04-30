@@ -22,7 +22,7 @@ NO_LOAD_CURRENT = {
 }
 
 GRIPPER_ENCODING_SCALE = {
-    "ace_leader": np.pi / 4.0,
+    "ace_leader": 4.0 / np.pi,
 }
 GRIPPER_DECODING_SCALE = {k: 1.0 / v for k, v in GRIPPER_ENCODING_SCALE.items()}
 
@@ -37,6 +37,7 @@ class Linker(BaseEquipment):
         self._home_poses = np.array(config["home_poses"])
         self._enable_gravity_compensation = config["enable_gravity_compensation"]
         self._enable_estimate_external_torque = config["enable_estimate_external_torque"]
+        self._control_period = float(config.get("control_period", 0.004))
         self._driver = driver if driver is not None else FeeTechDriver(self._ids, config["port"])
 
         self._gripper_id = config["gripper_id"]
@@ -125,6 +126,7 @@ class Linker(BaseEquipment):
     def set_torque(self, torques: Sequence[float], ids: Optional[Sequence[int]] = None):
         if ids is None:
             ids = self._ids
+        ids = np.asarray(ids)
 
         assert len(ids) == len(torques), "ids and torques must have the same length."
         assert np.all(np.isin(ids, self._ids)), "ids is illegal."
@@ -136,21 +138,32 @@ class Linker(BaseEquipment):
         signs = self._signs[np.searchsorted(self._ids, ids)]
         currents = ((torque_current_mapping * np.abs(torques_kgcmf) + no_load_current) * np.sign(torques_kgcmf)) * signs
         encoded_currents = np.around(currents / -6.5).astype(int)
-        self._driver.set_current(ids[:-2], encoded_currents[:-2])
+        if self._gripper_id >= 0:
+            mask = ids != self._gripper_id
+            target_ids = ids[mask]
+            target_currents = encoded_currents[mask]
+        else:
+            target_ids = ids
+            target_currents = encoded_currents
+        self._driver.set_current(target_ids, target_currents)
 
     def set_position(
         self, positions: Sequence[float], ids: Optional[Sequence[int]] = None, encode_gripper: bool = True
     ):
         if ids is None:
             ids = self._ids
+        ids = np.asarray(ids)
 
         assert len(ids) == len(positions), "ids and positions must have the same length."
         assert np.all(np.isin(ids, self._ids)), "ids is illegal."
 
-        positions_array = np.asarray(positions)
+        positions_array = np.asarray(positions, dtype=float).copy()
         signs = self._signs[np.searchsorted(self._ids, ids)]
         if encode_gripper and self._gripper_id >= 0 and self._gripper_id in ids:
-            positions_array[-1] *= self._gripper_decoding_scale * signs[-1]
+            gripper_index = int(np.where(ids == self._gripper_id)[0][0])
+            positions_array[gripper_index] = (
+                (1.0 - positions_array[gripper_index]) * self._gripper_decoding_scale * signs[gripper_index]
+            )
         encoded_positions = np.around(positions_array * signs * 2048.0 / np.pi).astype(int)
         self._driver.set_position(ids, encoded_positions)
 
@@ -163,14 +176,18 @@ class Linker(BaseEquipment):
     ):
         if ids is None:
             ids = self._ids
+        ids = np.asarray(ids)
 
         assert len(ids) == len(positions) == len(torques), "ids, positions and torques must have the same length."
         assert np.all(np.isin(ids, self._ids)), "ids is illegal."
 
-        positions_array = np.asarray(positions)
+        positions_array = np.asarray(positions, dtype=float).copy()
         signs = self._signs[np.searchsorted(self._ids, ids)]
         if encode_gripper and self._gripper_id >= 0 and self._gripper_id in ids:
-            positions_array[-1] *= self._gripper_decoding_scale * signs[-1]
+            gripper_index = int(np.where(ids == self._gripper_id)[0][0])
+            positions_array[gripper_index] = (
+                (1.0 - positions_array[gripper_index]) * self._gripper_decoding_scale * signs[gripper_index]
+            )
         encoded_positions = np.around(positions_array * signs * 2048.0 / np.pi).astype(int)
 
         current_positions_dict, _, _ = self._driver.get_state()
@@ -193,7 +210,9 @@ class Linker(BaseEquipment):
         torque: Optional[Sequence[float]] = None,
         step_size: float = 0.01,
         min_steps: int = 2,
-        max_steps: int = 100,
+        max_steps: Optional[int] = None,
+        max_velocity: float = 1.0,
+        control_period: float = 0.004,
     ) -> float:
         if ids is None:
             ids = self._ids
@@ -202,6 +221,16 @@ class Linker(BaseEquipment):
         positions_array = np.asarray(positions)
         assert len(ids) == len(positions_array), "ids and positions must have the same length."
         assert np.all(np.isin(ids, self._ids)), "ids is illegal."
+        if step_size <= 0:
+            raise ValueError("step_size must be positive.")
+        if max_velocity <= 0:
+            raise ValueError("max_velocity must be positive.")
+        if control_period <= 0:
+            raise ValueError("control_period must be positive.")
+        if min_steps < 1:
+            raise ValueError("min_steps must be at least 1.")
+        if max_steps is not None and max_steps < min_steps:
+            raise ValueError("max_steps must be greater than or equal to min_steps.")
 
         torque_array = None
         if torque is not None:
@@ -215,7 +244,7 @@ class Linker(BaseEquipment):
         current_pos = current_pos[indices]
 
         target_pos = positions_array
-        errors = (target_pos - current_pos + np.pi / 2) % (2 * np.pi) - np.pi / 2
+        errors = (target_pos - current_pos + np.pi) % (2 * np.pi) - np.pi
         if self._gripper_id >= 0 and self._gripper_id in ids:
             gripper_index = int(np.where(ids == self._gripper_id)[0][0])
             errors[gripper_index] = target_pos[gripper_index] - current_pos[gripper_index]
@@ -232,8 +261,11 @@ class Linker(BaseEquipment):
                 )
             return 1
 
-        num_steps = int(np.ceil(max_error / step_size))
-        num_steps = max(min_steps, min(num_steps, max_steps))
+        max_step = min(step_size, max_velocity * control_period)
+        num_steps = int(np.ceil(max_error / max_step - 1e-12))
+        if max_steps is not None and num_steps > max_steps:
+            raise ValueError("max_steps is too small to satisfy the max_velocity limit.")
+        num_steps = max(min_steps, num_steps)
 
         for i in range(num_steps + 1):
             t = i / num_steps
@@ -248,6 +280,7 @@ class Linker(BaseEquipment):
                     positions=interp_pos,
                     torques=torque_array,
                 )
+            time.sleep(control_period)
 
         return num_steps
 
@@ -281,6 +314,7 @@ class Linker(BaseEquipment):
 
     def _control_loop(self):
         while not self._stop_flag.is_set():
+            loop_start = time.perf_counter()
             joint_pos, joint_vel, _ = self.act(encode_gripper=False)
 
             tau_n = self._null_space_regulation(joint_pos, joint_vel)  # 零空间投影
@@ -290,6 +324,9 @@ class Linker(BaseEquipment):
             tau = tau_n + tau_g + tau_ss + tau_fb
             self.set_torque(tau)
             # self.set_position_and_torque(positions=joint_pos, torques=tau, encode_gripper=False)
+            sleep_time = self._control_period - (time.perf_counter() - loop_start)
+            if sleep_time > 0.0:
+                time.sleep(sleep_time)
 
     def _null_space_regulation(self, joint_pos, joint_vel):
         J = pin.computeJointJacobian(self._pin_model, self._pin_data, joint_pos, self._dof)

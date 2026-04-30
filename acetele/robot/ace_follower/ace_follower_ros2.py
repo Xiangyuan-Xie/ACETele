@@ -1,3 +1,5 @@
+from typing import Optional
+
 from rclpy.node import Node
 from rclpy.qos import QoSProfile
 from sensor_msgs.msg import JointState
@@ -37,6 +39,7 @@ class AceFollowerROS2Robot(Node, AceFollowerRobot):
         self._is_synced = False
         self._last_command_ns = None
         self._heartbeat_lost = False
+        self._pending_sync_position: Optional[list[float]] = None
 
         self.get_logger().info("Follower arm controller node started.")
 
@@ -46,11 +49,7 @@ class AceFollowerROS2Robot(Node, AceFollowerRobot):
         if self._is_synced:
             self.set_position(msg.position)
         else:
-            self.get_logger().info("Synchronizing to the leader arm...")
-            self.get_logger().info("Please keep the leader arm still.")
-            self.move_position(msg.position)
-            self._is_synced = True
-            self.get_logger().info("Synchronization completed.")
+            self._pending_sync_position = list(msg.position)
 
     def _control_loop(self):
         if self._is_synced and self._last_command_ns is not None:
@@ -60,6 +59,13 @@ class AceFollowerROS2Robot(Node, AceFollowerRobot):
                     self.get_logger().info("Heartbeat lost. Resetting sync state.")
                 self._is_synced = False
                 self._heartbeat_lost = True
+        if not self._is_synced and self._pending_sync_position is not None:
+            self.get_logger().info("Synchronizing to the leader arm...")
+            self.get_logger().info("Please keep the leader arm still.")
+            self.move_position(self._pending_sync_position)
+            self._pending_sync_position = None
+            self._is_synced = True
+            self.get_logger().info("Synchronization completed.")
         joint_pos, joint_vel, joint_effort = self.act()
         self._publish_state(joint_pos, joint_vel, joint_effort)
 

@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import tomli
 
@@ -20,15 +20,26 @@ __all__ = ["ConfigLoader"]
 
 
 class ConfigLoader:
-    def __init__(self, config_path: Path = Path(__file__).parent / "default.toml"):
+    def __init__(
+        self,
+        config_path: Path = Path(__file__).parent / "default.toml",
+        backend_override: Optional[str] = None,
+    ):
         config_path = Path(config_path).expanduser().resolve()
 
         with open(config_path, "rb") as f:
             self._entry_config = tomli.load(f)
 
-        robot_config_path = config_path.parent / self._entry_config["basic"]["config_file"]
-        with open(robot_config_path, "rb") as f:
-            self._robot_config = tomli.load(f)
+        config_file = self._entry_config.get("basic", {}).get("config_file")
+        if config_file:
+            robot_config_path = config_path.parent / config_file
+            with open(robot_config_path, "rb") as f:
+                self._robot_config = tomli.load(f)
+        else:
+            self._robot_config = self._entry_config
+
+        if backend_override is not None:
+            self._robot_config["basic"]["backend"] = backend_override
 
     def get_robot_type(self) -> str:
         return self._robot_config["basic"]["robot_type"]

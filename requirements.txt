@@ -4,4 +4,5 @@ numpy
 pin
 pygame
 pyserial
+tomli
 tqdm

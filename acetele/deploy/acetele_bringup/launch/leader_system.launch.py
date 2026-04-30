@@ -14,7 +14,7 @@ def generate_launch_description():
                 "launch",
                 "ace_robot.launch.py",
             )
-        ),
+        )
     )
 
     visualization_launch = IncludeLaunchDescription(
