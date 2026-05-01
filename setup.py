@@ -1,3 +1,41 @@
-from setuptools import setup
+from pathlib import Path
 
-setup()
+from setuptools import find_packages, setup
+
+ROOT = Path(__file__).parent
+
+
+def read_readme() -> str:
+    readme = ROOT / "README.md"
+    if not readme.exists():
+        return ""
+    return readme.read_text(encoding="utf-8")
+
+
+setup(
+    name="acetele",
+    version="0.1.0",
+    description="A real-time remote teleoperation system for controlling robotic platforms.",
+    long_description=read_readme(),
+    long_description_content_type="text/markdown",
+    author="Xiangyuan Xie",
+    author_email="dragonboat_xxy@163.com",
+    packages=find_packages(where="."),
+    package_data={"acetele.config": ["*.toml"]},
+    python_requires=">=3.9",
+    install_requires=[
+        "h5py",
+        "loguru",
+        "numpy",
+        "pin",
+        "pygame",
+        "pyserial",
+        "tomli",
+        "tqdm",
+    ],
+    keywords=["python", "robotic", "teleoperation"],
+    classifiers=[
+        "Programming Language :: Python :: 3",
+        "Operating System :: OS Independent",
+    ],
+)
