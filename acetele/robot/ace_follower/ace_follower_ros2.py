@@ -1,5 +1,6 @@
 from typing import Optional
 
+from px4_msgs.msg import ArmJointState
 from rclpy.node import Node
 from rclpy.qos import QoSProfile
 from sensor_msgs.msg import JointState
@@ -24,6 +25,11 @@ class AceFollowerROS2Robot(Node, AceFollowerRobot):
             "/arm/state",
             qos,
         )
+        self._px4_arm_state_pub = self.create_publisher(
+            ArmJointState,
+            "/fmu/in/arm_joint_state",
+            qos,
+        )
         self._command_sub = self.create_subscription(
             JointState,
             "/arm/command",
@@ -40,6 +46,7 @@ class AceFollowerROS2Robot(Node, AceFollowerRobot):
         self._last_command_ns = None
         self._heartbeat_lost = False
         self._pending_sync_position: Optional[list[float]] = None
+        self._warned_invalid_px4_arm_state_length = False
 
         self.get_logger().info("Follower arm controller node started.")
 
@@ -70,10 +77,25 @@ class AceFollowerROS2Robot(Node, AceFollowerRobot):
         self._publish_state(joint_pos, joint_vel, joint_effort)
 
     def _publish_state(self, joint_pos, joint_vel, joint_effort):
+        now = self.get_clock().now()
         msg = JointState()
-        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.stamp = now.to_msg()
         msg.name = [f"joint_{i+1}" for i in self._equipments.single_arm.ids]
         msg.position = joint_pos.tolist()
         msg.velocity = joint_vel.tolist()
         msg.effort = joint_effort.tolist()
         self._state_pub.publish(msg)
+
+        if len(msg.position) != 5 or len(msg.velocity) != 5:
+            if not self._warned_invalid_px4_arm_state_length:
+                self.get_logger().warn(
+                    "Skipping PX4 arm joint state publish: ArmJointState expects 5 joints."
+                )
+                self._warned_invalid_px4_arm_state_length = True
+            return
+
+        px4_msg = ArmJointState()
+        px4_msg.timestamp = now.nanoseconds // 1000
+        px4_msg.arm_position = msg.position
+        px4_msg.arm_velocity = msg.velocity
+        self._px4_arm_state_pub.publish(px4_msg)
