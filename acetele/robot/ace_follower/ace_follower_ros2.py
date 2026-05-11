@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Sequence, Tuple
 
 from px4_msgs.msg import ArmJointState
 from rclpy.node import Node
@@ -15,6 +15,8 @@ class AceFollowerROS2Robot(Node, AceFollowerRobot):
         AceFollowerRobot.__init__(self, config_loader)
         self.declare_parameter("control_rate", 250.0)
         self._control_rate = self.get_parameter("control_rate").value
+        self.declare_parameter("publish_rate", 100.0)
+        self._publish_rate = self.get_parameter("publish_rate").value
         self.declare_parameter("heartbeat_timeout", 1.0)
         self._heartbeat_timeout = self.get_parameter("heartbeat_timeout").value
         self._heartbeat_timeout_ns = int(self._heartbeat_timeout * 1e9)
@@ -37,8 +39,10 @@ class AceFollowerROS2Robot(Node, AceFollowerRobot):
             qos,
         )
 
-        period = 1.0 / self._control_rate
-        self._timer = self.create_timer(period, self._control_loop)
+        control_period = 1.0 / self._control_rate
+        self._timer = self.create_timer(control_period, self._control_loop)
+        publish_period = 1.0 / self._publish_rate
+        self._publish_timer = self.create_timer(publish_period, self._publish_state_loop)
 
         current_pos, _, _ = self.act()
         self.move_position(current_pos)
@@ -46,6 +50,9 @@ class AceFollowerROS2Robot(Node, AceFollowerRobot):
         self._last_command_ns = None
         self._heartbeat_lost = False
         self._pending_sync_position: Optional[list[float]] = None
+        self._latest_state: Optional[
+            Tuple[Sequence[float], Sequence[float], Sequence[float]]
+        ] = None
         self._warned_invalid_px4_arm_state_length = False
 
         self.get_logger().info("Follower arm controller node started.")
@@ -74,7 +81,12 @@ class AceFollowerROS2Robot(Node, AceFollowerRobot):
             self._is_synced = True
             self.get_logger().info("Synchronization completed.")
         joint_pos, joint_vel, joint_effort = self.act()
-        self._publish_state(joint_pos, joint_vel, joint_effort)
+        self._latest_state = (joint_pos, joint_vel, joint_effort)
+
+    def _publish_state_loop(self):
+        if self._latest_state is None:
+            return
+        self._publish_state(*self._latest_state)
 
     def _publish_state(self, joint_pos, joint_vel, joint_effort):
         now = self.get_clock().now()

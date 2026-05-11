@@ -1,3 +1,5 @@
+from typing import Optional, Sequence, Tuple
+
 from px4_msgs.msg import VehicleLandDetected
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, qos_profile_sensor_data
@@ -13,6 +15,8 @@ class AceLeaderROS2Robot(Node, AceLeaderRobot):
         AceLeaderRobot.__init__(self, config_loader)
         self.declare_parameter("control_rate", 250.0)
         self._control_rate = self.get_parameter("control_rate").value
+        self.declare_parameter("publish_rate", 100.0)
+        self._publish_rate = self.get_parameter("publish_rate").value
 
         qos = QoSProfile(depth=10)
         self._command_pub = self.create_publisher(
@@ -33,12 +37,17 @@ class AceLeaderROS2Robot(Node, AceLeaderRobot):
             qos_profile_sensor_data,
         )
 
-        period = 1.0 / self._control_rate
-        self._timer = self.create_timer(period, self._control_loop)
+        control_period = 1.0 / self._control_rate
+        self._timer = self.create_timer(control_period, self._control_loop)
+        publish_period = 1.0 / self._publish_rate
+        self._publish_timer = self.create_timer(publish_period, self._publish_command_loop)
 
         self._is_started = False
         self._is_landed = False
         self._is_ended = False
+        self._latest_command: Optional[
+            Tuple[Sequence[float], Sequence[float], Sequence[float]]
+        ] = None
 
         self.get_logger().info("Leader arm controller node started.")
 
@@ -55,13 +64,19 @@ class AceLeaderROS2Robot(Node, AceLeaderRobot):
                 return
             if self._is_landed:
                 self._is_ended = True
+                self._latest_command = None
                 self.get_logger().info("Landing detected. Teleoperation command publishing stopped.")
                 return
-            self._publish_command(joint_pos, joint_vel, joint_effort)
+            self._latest_command = (joint_pos, joint_vel, joint_effort)
         else:
             if not self._is_ended and joint_pos[-1] <= 0.0:
                 self._is_started = True
                 self.get_logger().info("Leader arm control started.")
+
+    def _publish_command_loop(self):
+        if self._latest_command is None or self._is_ended:
+            return
+        self._publish_command(*self._latest_command)
 
     def _publish_command(self, joint_pos, joint_vel, joint_effort):
         msg = JointState()

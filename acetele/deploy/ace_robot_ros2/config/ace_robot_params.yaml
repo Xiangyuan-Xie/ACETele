@@ -1,3 +1,4 @@
 ace_robot_node:
   ros__parameters:
     control_rate: 250.0
+    publish_rate: 100.0

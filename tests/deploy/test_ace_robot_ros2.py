@@ -11,6 +11,24 @@ def install_fake_ros_modules(monkeypatch):
         def __init__(self, *_args, **_kwargs):
             pass
 
+        def declare_parameter(self, *_args, **_kwargs):
+            pass
+
+        def get_parameter(self, *_args, **_kwargs):
+            pass
+
+        def create_publisher(self, *_args, **_kwargs):
+            pass
+
+        def create_subscription(self, *_args, **_kwargs):
+            pass
+
+        def create_timer(self, *_args, **_kwargs):
+            pass
+
+        def get_logger(self, *_args, **_kwargs):
+            pass
+
     rclpy_module = types.ModuleType("rclpy")
     rclpy_module.init = lambda: None
     rclpy_module.spin = lambda _node: None
@@ -20,6 +38,7 @@ def install_fake_ros_modules(monkeypatch):
 
     rclpy_qos_module = types.ModuleType("rclpy.qos")
     rclpy_qos_module.QoSProfile = lambda depth: ("qos", depth)
+    rclpy_qos_module.qos_profile_sensor_data = ("qos", "sensor_data")
 
     sensor_msgs_module = types.ModuleType("sensor_msgs")
     sensor_msgs_msg_module = types.ModuleType("sensor_msgs.msg")
@@ -136,6 +155,7 @@ def test_follower_command_callback_defers_initial_sync(monkeypatch):
     robot._last_command_ns = None
     robot._heartbeat_lost = True
     robot._heartbeat_timeout_ns = int(1e9)
+    robot._latest_state = None
     robot.move_calls = []
     robot.set_calls = []
     robot.state_published = False
@@ -167,7 +187,151 @@ def test_follower_command_callback_defers_initial_sync(monkeypatch):
     assert robot.move_calls == [[1.0, 2.0]]
     assert robot._is_synced
     assert robot._pending_sync_position is None
+    assert robot._latest_state is not None
+    assert not robot.state_published
+
+    module.AceFollowerROS2Robot._publish_state_loop(robot)
+
     assert robot.state_published
+
+
+def test_follower_uses_100hz_publish_timer_without_changing_control_rate(monkeypatch):
+    install_fake_ros_modules(monkeypatch)
+    module = importlib.reload(importlib.import_module("acetele.robot.ace_follower.ace_follower_ros2"))
+    timers = []
+    declared = []
+    parameters = {
+        "control_rate": 250.0,
+        "publish_rate": 100.0,
+        "heartbeat_timeout": 1.0,
+    }
+
+    monkeypatch.setattr(module.AceFollowerRobot, "__init__", lambda self, _config_loader: None)
+    monkeypatch.setattr(
+        module.AceFollowerRobot,
+        "act",
+        lambda self: (np.zeros(5), np.zeros(5), np.zeros(5)),
+    )
+    monkeypatch.setattr(module.AceFollowerRobot, "move_position", lambda self, _positions: None)
+    monkeypatch.setattr(
+        module.AceFollowerROS2Robot,
+        "declare_parameter",
+        lambda self, name, default: declared.append((name, default)),
+    )
+    monkeypatch.setattr(
+        module.AceFollowerROS2Robot,
+        "get_parameter",
+        lambda self, name: types.SimpleNamespace(value=parameters[name]),
+    )
+    monkeypatch.setattr(
+        module.AceFollowerROS2Robot,
+        "create_publisher",
+        lambda self, *_args: types.SimpleNamespace(publish=lambda _msg: None),
+    )
+    monkeypatch.setattr(
+        module.AceFollowerROS2Robot,
+        "create_subscription",
+        lambda self, *_args: object(),
+    )
+    monkeypatch.setattr(
+        module.AceFollowerROS2Robot,
+        "create_timer",
+        lambda self, period, callback: timers.append((period, callback.__name__)),
+    )
+    monkeypatch.setattr(
+        module.AceFollowerROS2Robot,
+        "get_logger",
+        lambda self: types.SimpleNamespace(info=lambda _message: None),
+    )
+
+    robot = module.AceFollowerROS2Robot(config_loader=None)
+
+    assert ("publish_rate", 100.0) in declared
+    assert robot._control_rate == 250.0
+    assert robot._publish_rate == 100.0
+    assert (1.0 / 250.0, "_control_loop") in timers
+    assert (1.0 / 100.0, "_publish_state_loop") in timers
+
+
+def test_leader_uses_100hz_publish_timer_without_changing_control_rate(monkeypatch):
+    install_fake_ros_modules(monkeypatch)
+    module = importlib.reload(importlib.import_module("acetele.robot.ace_leader.ace_leader_ros2"))
+    timers = []
+    declared = []
+    parameters = {
+        "control_rate": 250.0,
+        "publish_rate": 100.0,
+    }
+
+    monkeypatch.setattr(module.AceLeaderRobot, "__init__", lambda self, _config_loader: None)
+    monkeypatch.setattr(
+        module.AceLeaderROS2Robot,
+        "declare_parameter",
+        lambda self, name, default: declared.append((name, default)),
+    )
+    monkeypatch.setattr(
+        module.AceLeaderROS2Robot,
+        "get_parameter",
+        lambda self, name: types.SimpleNamespace(value=parameters[name]),
+    )
+    monkeypatch.setattr(
+        module.AceLeaderROS2Robot,
+        "create_publisher",
+        lambda self, *_args: types.SimpleNamespace(publish=lambda _msg: None),
+    )
+    monkeypatch.setattr(
+        module.AceLeaderROS2Robot,
+        "create_subscription",
+        lambda self, *_args: object(),
+    )
+    monkeypatch.setattr(
+        module.AceLeaderROS2Robot,
+        "create_timer",
+        lambda self, period, callback: timers.append((period, callback.__name__)),
+    )
+    monkeypatch.setattr(
+        module.AceLeaderROS2Robot,
+        "get_logger",
+        lambda self: types.SimpleNamespace(info=lambda _message: None),
+    )
+
+    robot = module.AceLeaderROS2Robot(config_loader=None)
+
+    assert ("publish_rate", 100.0) in declared
+    assert robot._control_rate == 250.0
+    assert robot._publish_rate == 100.0
+    assert (1.0 / 250.0, "_control_loop") in timers
+    assert (1.0 / 100.0, "_publish_command_loop") in timers
+
+
+def test_leader_control_loop_caches_command_for_publish_timer(monkeypatch):
+    install_fake_ros_modules(monkeypatch)
+    module = importlib.reload(importlib.import_module("acetele.robot.ace_leader.ace_leader_ros2"))
+    robot = module.AceLeaderROS2Robot.__new__(module.AceLeaderROS2Robot)
+    robot._is_started = True
+    robot._is_landed = False
+    robot._is_ended = False
+    robot._latest_command = None
+    robot.command_published = False
+
+    joint_pos = np.array([0.1, 0.2])
+    joint_vel = np.array([1.1, 1.2])
+    joint_effort = np.array([2.1, 2.2])
+
+    robot.act = lambda: (joint_pos, joint_vel, joint_effort)
+    robot._publish_command = lambda *_args: setattr(robot, "command_published", True)
+
+    module.AceLeaderROS2Robot._control_loop(robot)
+
+    assert not robot.command_published
+    cached_pos, cached_vel, cached_effort = robot._latest_command
+    assert cached_pos is joint_pos
+    assert cached_vel is joint_vel
+    assert cached_effort is joint_effort
+
+    module.AceLeaderROS2Robot._publish_command_loop(robot)
+
+    assert robot.command_published
 
 
 def test_follower_publish_state_dual_publishes_joint_state_and_px4_arm_state(monkeypatch):
