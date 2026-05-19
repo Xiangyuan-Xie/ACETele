@@ -60,7 +60,6 @@ def install_fake_ros_modules(monkeypatch):
         def __init__(self):
             self.timestamp = 0
             self.arm_position = []
-            self.arm_velocity = []
 
     px4_msgs_msg_module.ArmJointState = FakeArmJointState
     px4_msgs_msg_module.VehicleLandDetected = type("VehicleLandDetected", (), {})
@@ -372,7 +371,65 @@ def test_follower_publish_state_dual_publishes_joint_state_and_px4_arm_state(mon
     px4_msg = published["px4"][0]
     assert px4_msg.timestamp == 1_234_567
     assert px4_msg.arm_position == joint_pos.tolist()
-    assert px4_msg.arm_velocity == joint_vel.tolist()
+    assert not hasattr(px4_msg, "arm_velocity")
+    assert logged == []
+
+
+def test_follower_publish_state_keeps_joint_state_velocity_off_px4_arm_state(monkeypatch):
+    install_fake_ros_modules(monkeypatch)
+    module = importlib.reload(importlib.import_module("acetele.robot.ace_follower.ace_follower_ros2"))
+    robot = module.AceFollowerROS2Robot.__new__(module.AceFollowerROS2Robot)
+    published = {"state": [], "px4": []}
+    logged = []
+    now_ns = [1_000_000_000, 1_100_000_000]
+
+    class FakeNow:
+        def __init__(self, nanoseconds):
+            self.nanoseconds = nanoseconds
+
+        def to_msg(self):
+            return f"stamp-{self.nanoseconds}"
+
+    robot.get_clock = lambda: types.SimpleNamespace(
+        now=lambda: FakeNow(now_ns[len(published["state"])])
+    )
+    robot.get_logger = lambda: types.SimpleNamespace(warn=lambda message: logged.append(message))
+    robot._equipments = types.SimpleNamespace(single_arm=types.SimpleNamespace(ids=[0, 1, 2, 3, 4]))
+    robot._state_pub = types.SimpleNamespace(publish=lambda msg: published["state"].append(msg))
+    robot._px4_arm_state_pub = types.SimpleNamespace(publish=lambda msg: published["px4"].append(msg))
+    robot._warned_invalid_px4_arm_state_length = False
+
+    joint_pos = np.zeros(5)
+    joint_effort = np.zeros(5)
+
+    module.AceFollowerROS2Robot._publish_state(
+        robot,
+        joint_pos,
+        np.array([0.2, 0.4, 2.0, np.nan, -2.0]),
+        joint_effort,
+    )
+    module.AceFollowerROS2Robot._publish_state(
+        robot,
+        joint_pos,
+        np.array([0.8, 1.0, 2.0, 0.4, -2.0]),
+        joint_effort,
+    )
+
+    np.testing.assert_allclose(
+        published["state"][0].velocity,
+        [0.2, 0.4, 2.0, np.nan, -2.0],
+        equal_nan=True,
+    )
+    np.testing.assert_allclose(
+        published["state"][1].velocity,
+        [0.8, 1.0, 2.0, 0.4, -2.0],
+    )
+    assert [msg.arm_position for msg in published["px4"]] == [
+        joint_pos.tolist(),
+        joint_pos.tolist(),
+    ]
+    assert not hasattr(published["px4"][0], "arm_velocity")
+    assert not hasattr(published["px4"][1], "arm_velocity")
     assert logged == []
 
 

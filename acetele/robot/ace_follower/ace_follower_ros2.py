@@ -20,7 +20,6 @@ class AceFollowerROS2Robot(Node, AceFollowerRobot):
         self.declare_parameter("heartbeat_timeout", 1.0)
         self._heartbeat_timeout = self.get_parameter("heartbeat_timeout").value
         self._heartbeat_timeout_ns = int(self._heartbeat_timeout * 1e9)
-
         qos = QoSProfile(depth=10)
         self._state_pub = self.create_publisher(
             JointState,
@@ -98,7 +97,7 @@ class AceFollowerROS2Robot(Node, AceFollowerRobot):
         msg.effort = joint_effort.tolist()
         self._state_pub.publish(msg)
 
-        if len(msg.position) != 5 or len(msg.velocity) != 5:
+        if len(msg.position) != 5:
             if not self._warned_invalid_px4_arm_state_length:
                 self.get_logger().warn(
                     "Skipping PX4 arm joint state publish: ArmJointState expects 5 joints."
@@ -109,5 +108,4 @@ class AceFollowerROS2Robot(Node, AceFollowerRobot):
         px4_msg = ArmJointState()
         px4_msg.timestamp = now.nanoseconds // 1000
         px4_msg.arm_position = msg.position
-        px4_msg.arm_velocity = msg.velocity
         self._px4_arm_state_pub.publish(px4_msg)
