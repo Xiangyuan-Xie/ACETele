@@ -6,6 +6,7 @@ import numpy as np
 
 from acetele.config.config_loader import ConfigLoader
 from acetele.core.make_robot import make_robot
+from acetele.equipment.feetech.feetech_driver import TorqueEnable
 from acetele.equipment.feetech.linker import Linker
 from acetele.robot.base_robot import BaseEquipmentLibrary, BaseRobot
 
@@ -41,6 +42,9 @@ class AceLeaderRobot(BaseRobot):
 
     def set_position(self, positions: Sequence[float], ids: Optional[Sequence[int]] = None):
         self._equipments.single_arm.set_position(positions=positions, ids=ids)
+
+    def set_torque_enable(self, enable: TorqueEnable, ids: Optional[Sequence[int]] = None):
+        self._equipments.single_arm.set_torque_enable(enable=enable, ids=ids)
 
     def set_position_and_torque(
         self,

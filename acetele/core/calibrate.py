@@ -7,6 +7,7 @@ import tomli
 
 from acetele.config.config_loader import ConfigLoader
 from acetele.equipment.feetech.feetech_driver import FeeTechDriver
+from acetele.utils.gripper import decode_normalized_gripper_home_pose
 
 
 class CalibrationError(RuntimeError):
@@ -62,7 +63,12 @@ class Calibration:
 
     @staticmethod
     def _encode_home_poses(linker_config):
-        home_poses = np.array(linker_config["home_poses"], dtype=float)
+        home_poses = decode_normalized_gripper_home_pose(
+            linker_config["home_poses"],
+            linker_config["joint_ids"],
+            linker_config["gripper_id"],
+            linker_config["gripper_type"],
+        )
         joint_signs = np.array(linker_config["joint_signs"], dtype=float)
         return np.rint(home_poses * joint_signs * 2048.0 / np.pi).astype(int)
 

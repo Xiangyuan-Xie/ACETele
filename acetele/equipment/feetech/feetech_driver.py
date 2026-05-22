@@ -1,7 +1,7 @@
 import time
 from collections import deque
 from enum import Enum
-from queue import Queue
+from queue import Empty, Queue
 from threading import Event, Lock, Thread
 from typing import Callable, Deque, Dict, Sequence, Tuple
 
@@ -79,18 +79,34 @@ class FeeTechDriver:
         print("FeeTechDriver warmup...")
         for _ in tqdm(range(100)):
             self.get_state()
-        self.set_torque_enable(self._ids, [TorqueEnable.Disable] * len(self._ids))
-        self.set_mode(self._ids, [Mode.Position for _ in self._ids])
+        self.set_torque_enable(self._ids, [TorqueEnable.Disable] * len(self._ids), force=True)
+        self.set_mode(self._ids, [Mode.Position for _ in self._ids], force=True)
 
     def _comm_worker(self):
         while not self._stop_flag.is_set():
             start_time = time.perf_counter()
             self._read_state()
-            if not self._comm_task_queue.empty():
-                self._comm_task_queue.get()()
+            try:
+                task = self._comm_task_queue.get_nowait()
+            except Empty:
+                pass
+            else:
+                task()
             end_time = time.perf_counter()
             self._time_windows.append(end_time - start_time)
             time.sleep(0.001)
+
+    def _write_sync_params(self, handler: GroupSyncWrite, params: Sequence[Tuple[int, Sequence[int]]], label: str):
+        if not handler.avail_flag.is_set():
+            with handler.avail_condition:
+                handler.avail_condition.wait()
+
+        handler.avail_flag.clear()
+        for ft_id, data in params:
+            if not handler.addParam(ft_id, list(data)):
+                logger.error(f"[ID:{ft_id}] {label} addparam failed")
+        handler.txPacket()
+        handler.clearParam()
 
     def _read_state(self):
         position = {}
@@ -154,62 +170,50 @@ class FeeTechDriver:
             self.open()
             time.sleep(0.1)
 
-    def set_torque_enable(self, ids: Sequence[int], enables: Sequence[TorqueEnable]):
+    def set_torque_enable(self, ids: Sequence[int], enables: Sequence[TorqueEnable], force: bool = False):
         assert len(ids) == len(enables), "ids and enables must have the same length."
 
-        index = [i for i, (ft_id, enable) in enumerate(zip(ids, enables)) if self._torque_enable[ft_id] != enable]
+        index = [
+            i
+            for i, (ft_id, enable) in enumerate(zip(ids, enables))
+            if force or self._torque_enable.get(ft_id) != enable
+        ]
         target_ids = np.array([ids[i] for i in index])
         target_enables = np.array([enables[i] for i in index])
+        if len(target_ids) == 0:
+            return
 
-        if not self._groupSyncWriteTorqueEnableHandler.avail_flag.is_set():
-            with self._groupSyncWriteTorqueEnableHandler.avail_condition:
-                self._groupSyncWriteTorqueEnableHandler.avail_condition.wait()
-
-        self._groupSyncWriteTorqueEnableHandler.avail_flag.clear()
-        for ft_id, enable in zip(target_ids, target_enables):
-            if not self._groupSyncWriteTorqueEnableHandler.addParam(ft_id, [enable.value]):
-                logger.error(f"[ID:{ft_id}] groupSyncWriteTorqueEnable addparam failed")
+        params = [(int(ft_id), [enable.value]) for ft_id, enable in zip(target_ids, target_enables)]
 
         def task():
-            self._groupSyncWriteTorqueEnableHandler.txPacket()
-            # if comm_result != COMM_SUCCESS:
-            #     logger.error(self._packetHandler.getTxRxResult(comm_result))
-            self._groupSyncWriteTorqueEnableHandler.clearParam()
+            self._write_sync_params(self._groupSyncWriteTorqueEnableHandler, params, "groupSyncWriteTorqueEnable")
 
         self._comm_task_queue.put(task)
 
         for ft_id, enable in zip(target_ids, target_enables):
             self._torque_enable[ft_id] = enable
 
-    def set_mode(self, ids: Sequence[int], modes: Sequence[Mode]):
+    def set_mode(self, ids: Sequence[int], modes: Sequence[Mode], force: bool = False):
         assert len(ids) == len(modes), "ids and modes must have the same length."
 
-        index = [i for i, (ft_id, mode) in enumerate(zip(ids, modes)) if self._mode[ft_id] != mode]
+        index = [i for i, (ft_id, mode) in enumerate(zip(ids, modes)) if force or self._mode[ft_id] != mode]
         target_ids = np.array([ids[i] for i in index])
         target_modes = np.array([modes[i] for i in index])
+        if len(target_ids) == 0:
+            return
 
         set_torque_enable_waiting_list = []
         for ft_id in target_ids:
-            if self._torque_enable[ft_id] == TorqueEnable.Enable:
+            if self._torque_enable.get(ft_id) != TorqueEnable.Disable:
                 set_torque_enable_waiting_list.append(ft_id)
         self.set_torque_enable(
             set_torque_enable_waiting_list, [TorqueEnable.Disable] * len(set_torque_enable_waiting_list)
         )
 
-        if not self._groupSyncWriteModeHandler.avail_flag.is_set():
-            with self._groupSyncWriteModeHandler.avail_condition:
-                self._groupSyncWriteModeHandler.avail_condition.wait()
-
-        self._groupSyncWriteModeHandler.avail_flag.clear()
-        for ft_id, mode in zip(target_ids, target_modes):
-            if not self._groupSyncWriteModeHandler.addParam(ft_id, [mode.value]):
-                logger.error(f"[ID:{ft_id}] groupSyncWriteMode addparam failed")
+        params = [(int(ft_id), [mode.value]) for ft_id, mode in zip(target_ids, target_modes)]
 
         def task():
-            self._groupSyncWriteModeHandler.txPacket()
-            # if comm_result != COMM_SUCCESS:
-            #     logger.error(self._packetHandler.getTxRxResult(comm_result))
-            self._groupSyncWriteModeHandler.clearParam()
+            self._write_sync_params(self._groupSyncWriteModeHandler, params, "groupSyncWriteMode")
 
         self._comm_task_queue.put(task)
 
@@ -218,80 +222,64 @@ class FeeTechDriver:
 
     def set_current(self, ids: Sequence[int], goal_currents: Sequence[int]):
         assert len(ids) == len(goal_currents), "ids and currents must have the same length."
+        if len(ids) == 0:
+            return
 
         set_mode_waiting_list = []
         for ft_id in ids:
-            if self._mode[ft_id] != Mode.Torque:
+            if self._mode.get(ft_id) != Mode.Torque:
                 set_mode_waiting_list.append(ft_id)
         self.set_mode(set_mode_waiting_list, [Mode.Torque] * len(set_mode_waiting_list))
 
         set_torque_enable_waiting_list = []
         for ft_id in ids:
-            if not self._torque_enable[ft_id] == TorqueEnable.Enable:
+            if not self._torque_enable.get(ft_id) == TorqueEnable.Enable:
                 set_torque_enable_waiting_list.append(ft_id)
         self.set_torque_enable(
             set_torque_enable_waiting_list, [TorqueEnable.Enable] * len(set_torque_enable_waiting_list)
         )
 
-        if not self._groupSyncWriteGoalCurrentHandler.avail_flag.is_set():
-            with self._groupSyncWriteGoalCurrentHandler.avail_condition:
-                self._groupSyncWriteGoalCurrentHandler.avail_condition.wait()
-
-        self._groupSyncWriteGoalCurrentHandler.avail_flag.clear()
+        params = []
         for ft_id, current in zip(ids, goal_currents):
             current = self._packetHandler.scs_toscs(current, 15)
-            if not self._groupSyncWriteGoalCurrentHandler.addParam(
-                ft_id, [self._packetHandler.scs_lobyte(current), self._packetHandler.scs_hibyte(current)]
-            ):
-                logger.error(f"[ID:{ft_id}] groupSyncWriteGoalCurrent addparam failed")
+            params.append((ft_id, [self._packetHandler.scs_lobyte(current), self._packetHandler.scs_hibyte(current)]))
 
         def task():
-            self._groupSyncWriteGoalCurrentHandler.txPacket()
-            # if comm_result != COMM_SUCCESS:
-            #     logger.error(self._packetHandler.getTxRxResult(comm_result))
-            self._groupSyncWriteGoalCurrentHandler.clearParam()
+            self._write_sync_params(self._groupSyncWriteGoalCurrentHandler, params, "groupSyncWriteGoalCurrent")
 
         self._comm_task_queue.put(task)
 
     def set_position(self, ids: Sequence[int], goal_positions: Sequence[int]):
         assert len(ids) == len(goal_positions), "ids and positions must have the same length."
+        if len(ids) == 0:
+            return
 
         current_positions_dict, _, _ = self.get_state()
         current_positions_array = np.array([current_positions_dict[ft_id] for ft_id in ids])
-        goal_positions_array = np.asarray(goal_positions)
+        goal_positions_array = np.asarray(goal_positions).copy()
         goal_positions_array += np.round((current_positions_array - goal_positions_array) / 4096).astype(int) * 4096
 
         set_mode_waiting_list = []
         for ft_id in ids:
-            if self._mode[ft_id] != Mode.Position:
+            if self._mode.get(ft_id) != Mode.Position:
                 set_mode_waiting_list.append(ft_id)
         self.set_mode(set_mode_waiting_list, [Mode.Position] * len(set_mode_waiting_list))
 
         set_torque_enable_waiting_list = []
         for ft_id in ids:
-            if not self._torque_enable[ft_id] == TorqueEnable.Enable:
+            if not self._torque_enable.get(ft_id) == TorqueEnable.Enable:
                 set_torque_enable_waiting_list.append(ft_id)
         self.set_torque_enable(
             set_torque_enable_waiting_list, [TorqueEnable.Enable] * len(set_torque_enable_waiting_list)
         )
 
-        if not self._groupSyncWriteGoalPositionHandler.avail_flag.is_set():
-            with self._groupSyncWriteGoalPositionHandler.avail_condition:
-                self._groupSyncWriteGoalPositionHandler.avail_condition.wait()
-
-        self._groupSyncWriteGoalPositionHandler.avail_flag.clear()
+        params = []
         for ft_id, position in zip(ids, goal_positions_array):
             position = self._packetHandler.scs_toscs(position, 15)
-            if not self._groupSyncWriteGoalPositionHandler.addParam(
-                ft_id, [self._packetHandler.scs_lobyte(position), self._packetHandler.scs_hibyte(position)]
-            ):
-                logger.error(f"[ID:{ft_id}] groupSyncWriteGoalPosition addparam failed")
+            params.append((ft_id, [self._packetHandler.scs_lobyte(position), self._packetHandler.scs_hibyte(position)]))
 
         def task():
-            self._groupSyncWriteGoalPositionHandler.txPacket()
-            # if comm_result != COMM_SUCCESS:
-            #     logger.error(self._packetHandler.getTxRxResult(comm_result))
-            self._groupSyncWriteGoalPositionHandler.clearParam()
+            self._write_sync_params(self._groupSyncWriteGoalPositionHandler, params, "groupSyncWriteGoalPosition")
 
         self._comm_task_queue.put(task)
 
@@ -299,49 +287,49 @@ class FeeTechDriver:
         assert (
             len(ids) == len(goal_positions) == len(goal_currents)
         ), "ids, positions, and currents must have the same length."
+        if len(ids) == 0:
+            return
 
         current_positions_dict, _, _ = self.get_state()
         current_positions_array = np.array([current_positions_dict[ft_id] for ft_id in ids])
-        goal_positions_array = np.asarray(goal_positions)
+        goal_positions_array = np.asarray(goal_positions).copy()
         goal_positions_array += np.round((current_positions_array - goal_positions_array) / 4096).astype(int) * 4096
 
         set_mode_waiting_list = []
         for ft_id in ids:
-            if self._mode[ft_id] != Mode.Position:
+            if self._mode.get(ft_id) != Mode.Position:
                 set_mode_waiting_list.append(ft_id)
         self.set_mode(set_mode_waiting_list, [Mode.Position] * len(set_mode_waiting_list))
 
         set_torque_enable_waiting_list = []
         for ft_id in ids:
-            if not self._torque_enable[ft_id] == TorqueEnable.Enable:
+            if not self._torque_enable.get(ft_id) == TorqueEnable.Enable:
                 set_torque_enable_waiting_list.append(ft_id)
         self.set_torque_enable(
             set_torque_enable_waiting_list, [TorqueEnable.Enable] * len(set_torque_enable_waiting_list)
         )
 
-        if not self._groupSyncWriteGoalPositionAndCurrentHandler.avail_flag.is_set():
-            with self._groupSyncWriteGoalPositionAndCurrentHandler.avail_condition:
-                self._groupSyncWriteGoalPositionAndCurrentHandler.avail_condition.wait()
-
-        self._groupSyncWriteGoalPositionAndCurrentHandler.avail_flag.clear()
+        params = []
         for ft_id, position, current in zip(ids, goal_positions_array, goal_currents):
             position = self._packetHandler.scs_toscs(position, 15)
-            if not self._groupSyncWriteGoalPositionAndCurrentHandler.addParam(
-                ft_id,
-                [
-                    self._packetHandler.scs_lobyte(position),
-                    self._packetHandler.scs_hibyte(position),
-                    self._packetHandler.scs_lobyte(current),
-                    self._packetHandler.scs_hibyte(current),
-                ],
-            ):
-                logger.error(f"[ID:{ft_id}] groupSyncWriteGoalPositionAndCurrent addparam failed")
+            params.append(
+                (
+                    ft_id,
+                    [
+                        self._packetHandler.scs_lobyte(position),
+                        self._packetHandler.scs_hibyte(position),
+                        self._packetHandler.scs_lobyte(current),
+                        self._packetHandler.scs_hibyte(current),
+                    ],
+                )
+            )
 
         def task():
-            self._groupSyncWriteGoalPositionAndCurrentHandler.txPacket()
-            # if comm_result != COMM_SUCCESS:
-            #     logger.error(self._packetHandler.getTxRxResult(comm_result))
-            self._groupSyncWriteGoalPositionAndCurrentHandler.clearParam()
+            self._write_sync_params(
+                self._groupSyncWriteGoalPositionAndCurrentHandler,
+                params,
+                "groupSyncWriteGoalPositionAndCurrent",
+            )
 
         self._comm_task_queue.put(task)
 
@@ -369,6 +357,8 @@ class FeeTechDriver:
 
     def open(self):
         self._stop_flag.clear()
+        self._mode = {ft_id: None for ft_id in self._ids}
+        self._torque_enable = {ft_id: None for ft_id in self._ids}
         self._comm_thread = Thread(target=self._comm_worker, daemon=True)
         self._comm_thread.start()
 

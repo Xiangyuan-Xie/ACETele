@@ -84,6 +84,86 @@ servo_types = ["HL3915", "HL3915", "HL3915"]
     assert driver.closed
 
 
+def test_calibrate_decodes_normalized_follower_gripper_home_pose(tmp_path):
+    config_path = write_config(
+        tmp_path,
+        "robot.toml",
+        """
+[basic]
+robot_type = "ace_follower"
+backend = "default"
+
+[linker.single]
+port = "/dev/test"
+joint_ids = [0, 1, 4]
+joint_signs = [1, 1, 1]
+home_poses = [1.5707963267948966, -0.5, 1.0]
+gripper_id = 4
+gripper_type = "ace_follower"
+enable_gravity_compensation = false
+enable_estimate_external_torque = false
+servo_types = ["HL3915", "HL3915", "HL3915"]
+""",
+    )
+
+    results = Calibration(config_path=config_path, driver_factory=FakeDriver).calibrate()
+
+    assert results[0].encoded_home_poses == (1024, -326, 896)
+
+
+def test_calibrate_applies_joint_sign_to_decoded_follower_gripper_home_pose(tmp_path):
+    config_path = write_config(
+        tmp_path,
+        "robot.toml",
+        """
+[basic]
+robot_type = "ace_follower"
+backend = "default"
+
+[linker.single]
+port = "/dev/test"
+joint_ids = [0, 4]
+joint_signs = [1, -1]
+home_poses = [0.0, 1.0]
+gripper_id = 4
+gripper_type = "ace_follower"
+enable_gravity_compensation = false
+enable_estimate_external_torque = false
+servo_types = ["HL3915", "HL3915"]
+""",
+    )
+
+    results = Calibration(config_path=config_path, driver_factory=FakeDriver).calibrate()
+
+    assert results[0].encoded_home_poses == (0, -896)
+
+
+def test_calibrate_rejects_gripper_home_pose_outside_normalized_range(tmp_path):
+    config_path = write_config(
+        tmp_path,
+        "robot.toml",
+        """
+[basic]
+robot_type = "ace_follower"
+backend = "default"
+
+[linker.single]
+port = "/dev/test"
+joint_ids = [0, 4]
+joint_signs = [1, 1]
+home_poses = [0.0, 1.2]
+gripper_id = 4
+gripper_type = "ace_leader"
+enable_gravity_compensation = false
+enable_estimate_external_torque = false
+servo_types = ["HL3915", "HL3915"]
+""",
+    )
+
+    with pytest.raises(CalibrationError, match=r"Gripper home pose.*0\.0 and 1\.0"):
+        Calibration(config_path=config_path, driver_factory=FakeDriver).calibrate()
+
+
 def test_calibrate_returns_all_arm_results_for_dual_config(tmp_path):
     config_path = write_config(
         tmp_path,

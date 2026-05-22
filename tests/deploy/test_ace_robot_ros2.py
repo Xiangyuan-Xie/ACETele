@@ -4,6 +4,7 @@ import types
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 
 def install_fake_ros_modules(monkeypatch):
@@ -40,6 +41,15 @@ def install_fake_ros_modules(monkeypatch):
     rclpy_qos_module.QoSProfile = lambda depth: ("qos", depth)
     rclpy_qos_module.qos_profile_sensor_data = ("qos", "sensor_data")
 
+    std_msgs_module = types.ModuleType("std_msgs")
+    std_msgs_msg_module = types.ModuleType("std_msgs.msg")
+
+    class FakeString:
+        def __init__(self):
+            self.data = ""
+
+    std_msgs_msg_module.String = FakeString
+
     sensor_msgs_module = types.ModuleType("sensor_msgs")
     sensor_msgs_msg_module = types.ModuleType("sensor_msgs.msg")
 
@@ -67,6 +77,8 @@ def install_fake_ros_modules(monkeypatch):
     monkeypatch.setitem(sys.modules, "rclpy", rclpy_module)
     monkeypatch.setitem(sys.modules, "rclpy.node", rclpy_node_module)
     monkeypatch.setitem(sys.modules, "rclpy.qos", rclpy_qos_module)
+    monkeypatch.setitem(sys.modules, "std_msgs", std_msgs_module)
+    monkeypatch.setitem(sys.modules, "std_msgs.msg", std_msgs_msg_module)
     monkeypatch.setitem(sys.modules, "sensor_msgs", sensor_msgs_module)
     monkeypatch.setitem(sys.modules, "sensor_msgs.msg", sensor_msgs_msg_module)
     monkeypatch.setitem(sys.modules, "px4_msgs", px4_msgs_module)
@@ -146,61 +158,235 @@ def test_ace_robot_ros2_data_files_exist(monkeypatch):
     assert missing_files == []
 
 
-def test_follower_command_callback_defers_initial_sync(monkeypatch):
+def test_follower_holds_pose_during_sync_request(monkeypatch):
     install_fake_ros_modules(monkeypatch)
     module = importlib.reload(importlib.import_module("acetele.robot.ace_follower.ace_follower_ros2"))
+    sync = importlib.import_module("acetele.utils.teleop_sync")
     robot = module.AceFollowerROS2Robot.__new__(module.AceFollowerROS2Robot)
-    robot._is_synced = False
+    robot._sync_mode = sync.LeaderSyncMode.SYNC_REQUEST
+    robot._sync_status = sync.FollowerSyncStatus.READY
     robot._last_command_ns = None
     robot._heartbeat_lost = True
     robot._heartbeat_timeout_ns = int(1e9)
     robot._latest_state = None
+    robot._latest_command = None
     robot.move_calls = []
     robot.set_calls = []
-    robot.state_published = False
+    published = {"state": [], "px4": [], "status": []}
+
+    now_ns = [1_000_000_000]
 
     class FakeClock:
         @property
         def nanoseconds(self):
-            return 123
+            return now_ns[0]
+
+        def to_msg(self):
+            return f"stamp-{now_ns[0]}"
 
     robot.get_clock = lambda: types.SimpleNamespace(now=lambda: FakeClock())
-    robot.get_logger = lambda: types.SimpleNamespace(info=lambda _message: None)
+    robot.get_logger = lambda: types.SimpleNamespace(info=lambda _message: None, warn=lambda _message: None)
     robot.move_position = lambda positions: robot.move_calls.append(list(positions))
     robot.set_position = lambda positions: robot.set_calls.append(list(positions))
-    robot.act = lambda: (np.zeros(2), np.zeros(2), np.zeros(2))
-    robot._publish_state = lambda *_args: setattr(robot, "state_published", True)
+    robot.act = lambda: (np.array([1.0, 2.0]), np.zeros(2), np.zeros(2))
+    robot._equipments = types.SimpleNamespace(single_arm=types.SimpleNamespace(ids=[0, 1]))
+    robot._state_pub = types.SimpleNamespace(publish=lambda msg: published["state"].append(msg))
+    robot._px4_arm_state_pub = types.SimpleNamespace(publish=lambda msg: published["px4"].append(msg))
+    robot._sync_status_pub = types.SimpleNamespace(publish=lambda msg: published["status"].append(msg))
+    robot._warned_invalid_px4_arm_state_length = False
 
-    msg = types.SimpleNamespace(position=[1.0, 2.0])
+    msg = types.SimpleNamespace(position=[1.0, 2.0], velocity=[99.0, 99.0])
 
     module.AceFollowerROS2Robot._command_callback(robot, msg)
 
     assert robot.move_calls == []
     assert robot.set_calls == []
-    assert robot._pending_sync_position == [1.0, 2.0]
-    assert robot._last_command_ns == 123
-    assert not robot._heartbeat_lost
+    assert robot._latest_command is None
+    assert not hasattr(robot, "_latest_command_velocity")
+    assert robot._last_command_ns is None
+    assert robot._heartbeat_lost
 
     module.AceFollowerROS2Robot._control_loop(robot)
 
-    assert robot.move_calls == [[1.0, 2.0]]
-    assert robot._is_synced
-    assert robot._pending_sync_position is None
+    assert robot.move_calls == []
+    assert robot._sync_status == sync.FollowerSyncStatus.READY
     assert robot._latest_state is not None
-    assert not robot.state_published
+    assert published == {"state": [], "px4": [], "status": []}
+
+    now_ns[0] = 1_200_000_000
+    module.AceFollowerROS2Robot._control_loop(robot)
+
+    assert robot._sync_status == sync.FollowerSyncStatus.READY
 
     module.AceFollowerROS2Robot._publish_state_loop(robot)
 
-    assert robot.state_published
+    assert len(published["state"]) == 1
+    assert published["state"][0].position == [1.0, 2.0]
+    assert published["status"][0].data == "ready"
 
 
-def test_follower_uses_100hz_publish_timer_without_changing_control_rate(monkeypatch):
+def test_follower_ignores_commands_until_tracking_mode(monkeypatch):
+    install_fake_ros_modules(monkeypatch)
+    module = importlib.reload(importlib.import_module("acetele.robot.ace_follower.ace_follower_ros2"))
+    sync = importlib.import_module("acetele.utils.teleop_sync")
+    robot = module.AceFollowerROS2Robot.__new__(module.AceFollowerROS2Robot)
+    robot._sync_mode = sync.LeaderSyncMode.IDLE
+    robot._sync_status = sync.FollowerSyncStatus.IDLE
+    robot._last_command_ns = None
+    robot._heartbeat_lost = False
+    robot._heartbeat_timeout_ns = int(1e9)
+    robot._latest_state = None
+    robot._latest_command = None
+    robot.move_calls = []
+    robot.set_calls = []
+
+    now_ns = [1_000_000_000]
+
+    class FakeNow:
+        @property
+        def nanoseconds(self):
+            return now_ns[0]
+
+    robot.get_clock = lambda: types.SimpleNamespace(now=lambda: FakeNow())
+    robot.get_logger = lambda: types.SimpleNamespace(info=lambda _message: None)
+    robot.move_position = lambda positions: robot.move_calls.append(list(positions))
+    robot.set_position = lambda positions: robot.set_calls.append(list(positions))
+    robot.act = lambda: (np.array([0.5, 0.6]), np.zeros(2), np.zeros(2))
+
+    command = types.SimpleNamespace(position=[0.5, 0.6], velocity=[0.0, 0.0])
+    module.AceFollowerROS2Robot._command_callback(robot, command)
+    module.AceFollowerROS2Robot._control_loop(robot)
+
+    assert robot.move_calls == []
+    assert robot.set_calls == []
+    assert robot._sync_status == sync.FollowerSyncStatus.IDLE
+
+    module.AceFollowerROS2Robot._sync_mode_callback(
+        robot, types.SimpleNamespace(data=sync.LeaderSyncMode.SYNC_REQUEST.value)
+    )
+    module.AceFollowerROS2Robot._command_callback(robot, command)
+    module.AceFollowerROS2Robot._control_loop(robot)
+
+    assert robot.move_calls == []
+    assert robot.set_calls == []
+    assert robot._sync_status == sync.FollowerSyncStatus.READY
+
+    now_ns[0] = 1_200_000_000
+    module.AceFollowerROS2Robot._control_loop(robot)
+
+    assert robot.move_calls == []
+    assert robot.set_calls == []
+    assert robot._sync_status == sync.FollowerSyncStatus.READY
+
+    module.AceFollowerROS2Robot._sync_mode_callback(
+        robot, types.SimpleNamespace(data=sync.LeaderSyncMode.TRACKING.value)
+    )
+    module.AceFollowerROS2Robot._command_callback(robot, command)
+    module.AceFollowerROS2Robot._control_loop(robot)
+
+    assert robot.set_calls == [[0.5, 0.6]]
+    assert robot._sync_status == sync.FollowerSyncStatus.TRACKING
+
+
+def test_follower_command_timeout_enters_lost_and_requires_resync(monkeypatch):
+    install_fake_ros_modules(monkeypatch)
+    module = importlib.reload(importlib.import_module("acetele.robot.ace_follower.ace_follower_ros2"))
+    sync = importlib.import_module("acetele.utils.teleop_sync")
+    robot = module.AceFollowerROS2Robot.__new__(module.AceFollowerROS2Robot)
+    robot._sync_mode = sync.LeaderSyncMode.TRACKING
+    robot._sync_status = sync.FollowerSyncStatus.TRACKING
+    robot._last_command_ns = 0
+    robot._heartbeat_lost = False
+    robot._heartbeat_timeout_ns = int(1e9)
+    robot._latest_state = None
+    robot._latest_command = [0.5, 0.6]
+    robot.set_calls = []
+
+    class FakeNow:
+        nanoseconds = 2_000_000_001
+
+    robot.get_clock = lambda: types.SimpleNamespace(now=lambda: FakeNow())
+    robot.get_logger = lambda: types.SimpleNamespace(info=lambda _message: None)
+    robot.set_position = lambda positions: robot.set_calls.append(list(positions))
+    robot.move_position = lambda _positions: None
+    robot.act = lambda: (np.array([0.5, 0.6]), np.zeros(2), np.zeros(2))
+
+    module.AceFollowerROS2Robot._control_loop(robot)
+
+    assert robot._sync_status == sync.FollowerSyncStatus.LOST
+    assert robot._heartbeat_lost
+    assert robot.set_calls == []
+
+
+def test_follower_sync_request_keeps_ready_when_command_changes(monkeypatch):
+    install_fake_ros_modules(monkeypatch)
+    module = importlib.reload(importlib.import_module("acetele.robot.ace_follower.ace_follower_ros2"))
+    sync = importlib.import_module("acetele.utils.teleop_sync")
+    robot = module.AceFollowerROS2Robot.__new__(module.AceFollowerROS2Robot)
+    robot._sync_mode = sync.LeaderSyncMode.SYNC_REQUEST
+    robot._sync_status = sync.FollowerSyncStatus.READY
+    robot._last_command_ns = 1_000_000_000
+    robot._heartbeat_lost = False
+    robot._latest_command = None
+    robot.move_calls = []
+
+    class FakeNow:
+        nanoseconds = 1_100_000_000
+
+    robot.get_clock = lambda: types.SimpleNamespace(now=lambda: FakeNow())
+    robot.get_logger = lambda: types.SimpleNamespace(info=lambda _message: None)
+    robot.move_position = lambda positions: robot.move_calls.append(list(positions))
+    robot.act = lambda: (np.array([0.5, 0.6]), np.zeros(2), np.zeros(2))
+
+    module.AceFollowerROS2Robot._command_callback(
+        robot, types.SimpleNamespace(position=[0.7, 0.6], velocity=[0.0, 0.0])
+    )
+    module.AceFollowerROS2Robot._control_loop(robot)
+
+    assert robot._sync_status == sync.FollowerSyncStatus.READY
+    assert robot.move_calls == []
+
+
+def test_follower_rejects_invalid_sync_mode(monkeypatch):
+    install_fake_ros_modules(monkeypatch)
+    module = importlib.reload(importlib.import_module("acetele.robot.ace_follower.ace_follower_ros2"))
+    sync = importlib.import_module("acetele.utils.teleop_sync")
+    robot = module.AceFollowerROS2Robot.__new__(module.AceFollowerROS2Robot)
+    robot._sync_mode = sync.LeaderSyncMode.IDLE
+    logged = []
+    robot.get_logger = lambda: types.SimpleNamespace(warn=lambda message: logged.append(message))
+
+    module.AceFollowerROS2Robot._sync_mode_callback(robot, types.SimpleNamespace(data="bad-mode"))
+
+    assert robot._sync_mode == sync.LeaderSyncMode.IDLE
+    assert "Ignoring invalid sync mode" in logged[0]
+
+
+def test_follower_sync_request_logs_hold_still_prompt(monkeypatch):
+    install_fake_ros_modules(monkeypatch)
+    module = importlib.reload(importlib.import_module("acetele.robot.ace_follower.ace_follower_ros2"))
+    sync = importlib.import_module("acetele.utils.teleop_sync")
+    robot = module.AceFollowerROS2Robot.__new__(module.AceFollowerROS2Robot)
+    robot._sync_mode = sync.LeaderSyncMode.IDLE
+    robot._sync_status = sync.FollowerSyncStatus.IDLE
+    logged = []
+    robot.get_logger = lambda: types.SimpleNamespace(info=lambda message: logged.append(message))
+
+    module.AceFollowerROS2Robot._sync_mode_callback(
+        robot, types.SimpleNamespace(data=sync.LeaderSyncMode.SYNC_REQUEST.value)
+    )
+
+    assert robot._sync_status == sync.FollowerSyncStatus.READY
+    assert "Holding follower arm pose for leader synchronization." in logged
+
+
+def test_follower_uses_100hz_control_and_publish_timers(monkeypatch):
     install_fake_ros_modules(monkeypatch)
     module = importlib.reload(importlib.import_module("acetele.robot.ace_follower.ace_follower_ros2"))
     timers = []
     declared = []
     parameters = {
-        "control_rate": 250.0,
+        "control_rate": 100.0,
         "publish_rate": 100.0,
         "heartbeat_timeout": 1.0,
     }
@@ -245,21 +431,43 @@ def test_follower_uses_100hz_publish_timer_without_changing_control_rate(monkeyp
 
     robot = module.AceFollowerROS2Robot(config_loader=None)
 
+    assert hasattr(robot, "_control_timer")
+    assert hasattr(robot, "_state_publish_timer")
+    assert not hasattr(robot, "_timer")
+    assert not hasattr(robot, "_publish_timer")
+    assert not hasattr(robot, "_update_sync_state")
+    assert not hasattr(robot, "_heartbeat_timeout")
+    assert not hasattr(robot, "_sync_velocity_tolerance")
+    assert not hasattr(robot, "_sync_stable_duration")
+    assert not hasattr(robot, "_sync_position_tolerance")
+    assert not hasattr(robot, "_sync_stable_duration_ns")
+    assert not hasattr(robot, "_publish_state")
     assert ("publish_rate", 100.0) in declared
-    assert robot._control_rate == 250.0
+    assert ("sync_position_tolerance", 0.03) not in declared
+    assert ("sync_velocity_tolerance", 0.05) not in declared
+    assert ("control_rate", 100.0) in declared
+    assert robot._control_rate == 100.0
     assert robot._publish_rate == 100.0
-    assert (1.0 / 250.0, "_control_loop") in timers
+    assert (1.0 / 100.0, "_control_loop") in timers
     assert (1.0 / 100.0, "_publish_state_loop") in timers
 
 
-def test_leader_uses_100hz_publish_timer_without_changing_control_rate(monkeypatch):
+def test_leader_uses_100hz_control_and_publish_timers(monkeypatch):
     install_fake_ros_modules(monkeypatch)
     module = importlib.reload(importlib.import_module("acetele.robot.ace_leader.ace_leader_ros2"))
     timers = []
     declared = []
     parameters = {
-        "control_rate": 250.0,
+        "control_rate": 100.0,
         "publish_rate": 100.0,
+        "sync_status_timeout": 0.5,
+        "follower_state_timeout": 0.5,
+        "sync_position_tolerance": 0.03,
+        "sync_stable_duration": 0.2,
+        "sync_move_step_size": 0.2,
+        "sync_move_max_steps": 20,
+        "ready_lock_rate": 20.0,
+        "ready_resync_threshold": 0.08,
     }
 
     monkeypatch.setattr(module.AceLeaderRobot, "__init__", lambda self, _config_loader: None)
@@ -296,33 +504,59 @@ def test_leader_uses_100hz_publish_timer_without_changing_control_rate(monkeypat
 
     robot = module.AceLeaderROS2Robot(config_loader=None)
 
+    assert hasattr(robot, "_control_timer")
+    assert hasattr(robot, "_command_publish_timer")
+    assert not hasattr(robot, "_timer")
+    assert not hasattr(robot, "_publish_timer")
+    assert not hasattr(robot, "_publish_command")
+    assert not hasattr(robot, "_sync_status_timeout")
     assert ("publish_rate", 100.0) in declared
-    assert robot._control_rate == 250.0
+    assert ("sync_move_step_size", 0.2) in declared
+    assert ("sync_move_max_steps", 20) in declared
+    assert ("ready_lock_rate", 20.0) in declared
+    assert ("ready_resync_threshold", 0.08) in declared
+    assert robot._control_rate == 100.0
     assert robot._publish_rate == 100.0
-    assert (1.0 / 250.0, "_control_loop") in timers
+    assert robot._sync_move_step_size == 0.2
+    assert robot._sync_move_max_steps == 20
+    assert robot._ready_lock_period_ns == int(0.05e9)
+    assert robot._ready_resync_threshold == 0.08
+    assert (1.0 / 100.0, "_control_loop") in timers
     assert (1.0 / 100.0, "_publish_command_loop") in timers
 
 
 def test_leader_control_loop_caches_command_for_publish_timer(monkeypatch):
     install_fake_ros_modules(monkeypatch)
     module = importlib.reload(importlib.import_module("acetele.robot.ace_leader.ace_leader_ros2"))
+    sync = importlib.import_module("acetele.utils.teleop_sync")
     robot = module.AceLeaderROS2Robot.__new__(module.AceLeaderROS2Robot)
-    robot._is_started = True
+    robot._sync_mode = sync.LeaderSyncMode.TRACKING
+    robot._follower_sync_status = sync.FollowerSyncStatus.TRACKING
+    robot._last_follower_sync_status_ns = None
+    robot._sync_status_timeout_ns = int(0.5e9)
+    robot._last_follower_state_ns = None
     robot._is_landed = False
-    robot._is_ended = False
     robot._latest_command = None
-    robot.command_published = False
+    published = {"mode": [], "command": []}
 
     joint_pos = np.array([0.1, 0.2])
     joint_vel = np.array([1.1, 1.2])
     joint_effort = np.array([2.1, 2.2])
 
     robot.act = lambda: (joint_pos, joint_vel, joint_effort)
-    robot._publish_command = lambda *_args: setattr(robot, "command_published", True)
+    robot.get_clock = lambda: types.SimpleNamespace(
+        now=lambda: types.SimpleNamespace(
+            nanoseconds=1_000_000_000,
+            to_msg=lambda: "stamp",
+        )
+    )
+    robot._equipments = types.SimpleNamespace(single_arm=types.SimpleNamespace(ids=[0, 1]))
+    robot._sync_mode_pub = types.SimpleNamespace(publish=lambda msg: published["mode"].append(msg))
+    robot._command_pub = types.SimpleNamespace(publish=lambda msg: published["command"].append(msg))
 
     module.AceLeaderROS2Robot._control_loop(robot)
 
-    assert not robot.command_published
+    assert published == {"mode": [], "command": []}
     cached_pos, cached_vel, cached_effort = robot._latest_command
     assert cached_pos is joint_pos
     assert cached_vel is joint_vel
@@ -330,10 +564,428 @@ def test_leader_control_loop_caches_command_for_publish_timer(monkeypatch):
 
     module.AceLeaderROS2Robot._publish_command_loop(robot)
 
-    assert robot.command_published
+    assert published["mode"][0].data == "tracking"
+    assert published["command"][0].position == [0.1, 0.2]
+    assert published["command"][0].velocity == [1.1, 1.2]
+    assert published["command"][0].effort == [2.1, 2.2]
 
 
-def test_follower_publish_state_dual_publishes_joint_state_and_px4_arm_state(monkeypatch):
+def test_leader_auto_aligns_to_follower_state_without_gripper_axis(monkeypatch):
+    install_fake_ros_modules(monkeypatch)
+    module = importlib.reload(importlib.import_module("acetele.robot.ace_leader.ace_leader_ros2"))
+    sync = importlib.import_module("acetele.utils.teleop_sync")
+    robot = module.AceLeaderROS2Robot.__new__(module.AceLeaderROS2Robot)
+    robot._sync_mode = sync.LeaderSyncMode.IDLE
+    robot._follower_sync_status = sync.FollowerSyncStatus.IDLE
+    robot._last_follower_sync_status_ns = None
+    robot._sync_status_timeout_ns = int(0.5e9)
+    robot._follower_state_timeout_ns = int(0.5e9)
+    robot._sync_position_tolerance = 0.03
+    robot._sync_stable_duration_ns = int(0.2e9)
+    robot._sync_move_step_size = 0.2
+    robot._sync_move_max_steps = 20
+    robot._ready_lock_period_ns = int(0.05e9)
+    robot._ready_resync_threshold = 0.08
+    robot._last_ready_lock_ns = None
+    robot._sync_stable_since_ns = None
+    robot._sync_target_position = None
+    robot._last_follower_state_ns = 1_000_000_000
+    robot._is_landed = False
+    robot._latest_command = None
+    robot._latest_follower_state = ([0.2, 0.4, 0.6], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0])
+    robot.move_calls = []
+    robot.set_calls = []
+    logged = []
+
+    class FakeNow:
+        nanoseconds = 1_000_000_000
+
+    robot.get_clock = lambda: types.SimpleNamespace(now=lambda: FakeNow())
+    robot.get_logger = lambda: types.SimpleNamespace(info=lambda message: logged.append(message))
+    robot.act = lambda: (np.array([0.1, 0.3, 0.0]), np.zeros(3), np.zeros(3))
+    robot.move_position = lambda positions, ids=None: robot.move_calls.append((list(positions), list(ids)))
+    robot.set_position = lambda *_args, **_kwargs: pytest.fail("SYNC_REQUEST alignment must not call set_position")
+    robot._equipments = types.SimpleNamespace(single_arm=types.SimpleNamespace(ids=np.array([0, 1, 4])))
+
+    module.AceLeaderROS2Robot._control_loop(robot)
+
+    assert robot._sync_mode == sync.LeaderSyncMode.SYNC_REQUEST
+    assert robot._latest_command is not None
+    assert robot._sync_target_position == [0.2, 0.4]
+    assert robot.move_calls == [([0.2, 0.4], [0, 1])]
+
+    robot.act = lambda: (np.array([0.2, 0.4, 0.0]), np.zeros(3), np.zeros(3))
+    module.AceLeaderROS2Robot._control_loop(robot)
+    assert robot._sync_mode == sync.LeaderSyncMode.SYNC_REQUEST
+
+    class LaterNow:
+        nanoseconds = 1_200_000_000
+
+    robot.get_clock = lambda: types.SimpleNamespace(now=lambda: LaterNow())
+    module.AceLeaderROS2Robot._control_loop(robot)
+
+    assert robot._sync_mode == sync.LeaderSyncMode.READY
+    assert robot.move_calls[-1] == ([0.2, 0.4], [0, 1])
+
+
+def test_leader_sync_request_uses_shortest_angle_error_for_stability(monkeypatch):
+    install_fake_ros_modules(monkeypatch)
+    module = importlib.reload(importlib.import_module("acetele.robot.ace_leader.ace_leader_ros2"))
+    sync = importlib.import_module("acetele.utils.teleop_sync")
+    robot = module.AceLeaderROS2Robot.__new__(module.AceLeaderROS2Robot)
+    robot._sync_mode = sync.LeaderSyncMode.SYNC_REQUEST
+    robot._follower_sync_status = sync.FollowerSyncStatus.READY
+    robot._last_follower_sync_status_ns = None
+    robot._sync_status_timeout_ns = int(0.5e9)
+    robot._follower_state_timeout_ns = int(0.5e9)
+    robot._sync_position_tolerance = 0.03
+    robot._sync_stable_duration_ns = int(0.2e9)
+    robot._sync_move_step_size = 0.2
+    robot._sync_move_max_steps = 20
+    robot._ready_lock_period_ns = int(0.05e9)
+    robot._ready_resync_threshold = 0.08
+    robot._sync_stable_since_ns = 1_000_000_000
+    robot._last_ready_lock_ns = None
+    robot._sync_target_position = [-np.pi + 0.01, 0.4]
+    robot._last_follower_state_ns = 1_200_000_000
+    robot._is_landed = False
+    robot._latest_command = None
+    robot._latest_follower_state = ([-np.pi + 0.01, 0.4, 0.0], [], [])
+    robot.move_calls = []
+
+    robot.get_clock = lambda: types.SimpleNamespace(now=lambda: types.SimpleNamespace(nanoseconds=1_200_000_000))
+    robot.get_logger = lambda: types.SimpleNamespace(info=lambda _message: None)
+    robot.act = lambda: (np.array([np.pi + 0.01, 0.4, 0.0]), np.zeros(3), np.zeros(3))
+    robot.move_position = lambda positions, ids=None: robot.move_calls.append((list(positions), list(ids)))
+    robot._equipments = types.SimpleNamespace(single_arm=types.SimpleNamespace(ids=np.array([0, 1, 4])))
+
+    module.AceLeaderROS2Robot._control_loop(robot)
+
+    assert robot._sync_mode == sync.LeaderSyncMode.READY
+    assert robot.move_calls == [([-np.pi + 0.01, 0.4], [0, 1])]
+
+
+def test_leader_waits_for_gripper_one_before_tracking(monkeypatch):
+    install_fake_ros_modules(monkeypatch)
+    module = importlib.reload(importlib.import_module("acetele.robot.ace_leader.ace_leader_ros2"))
+    sync = importlib.import_module("acetele.utils.teleop_sync")
+    robot = module.AceLeaderROS2Robot.__new__(module.AceLeaderROS2Robot)
+    robot._sync_mode = sync.LeaderSyncMode.READY
+    robot._follower_sync_status = sync.FollowerSyncStatus.READY
+    robot._last_follower_sync_status_ns = 1_000_000_000
+    robot._sync_status_timeout_ns = int(0.5e9)
+    robot._follower_state_timeout_ns = int(0.5e9)
+    robot._sync_position_tolerance = 0.03
+    robot._sync_stable_duration_ns = int(0.2e9)
+    robot._sync_stable_since_ns = 1_000_000_000
+    robot._sync_target_position = [0.2, 0.4]
+    robot._sync_move_step_size = 0.2
+    robot._sync_move_max_steps = 20
+    robot._ready_lock_period_ns = int(0.05e9)
+    robot._ready_resync_threshold = 0.08
+    robot._last_ready_lock_ns = 1_000_000_000
+    robot._last_follower_state_ns = 1_000_000_000
+    robot._is_landed = False
+    robot._latest_command = None
+    robot._latest_follower_state = ([0.2, 0.4, 0.0], [], [])
+    robot.set_calls = []
+    robot.move_calls = []
+    robot.set_torque_enable_calls = []
+    logged = []
+
+    robot.get_clock = lambda: types.SimpleNamespace(now=lambda: types.SimpleNamespace(nanoseconds=1_100_000_000))
+    robot.get_logger = lambda: types.SimpleNamespace(info=lambda message: logged.append(message))
+    robot.act = lambda: (np.array([0.2, 0.4, 0.5]), np.zeros(3), np.zeros(3))
+    robot.move_position = lambda positions, ids=None: robot.move_calls.append((list(positions), list(ids)))
+    robot.set_position = lambda *_args, **_kwargs: pytest.fail("READY hold must use move_position")
+    robot.set_torque_enable = lambda enable, ids=None: robot.set_torque_enable_calls.append((enable, list(ids)))
+    robot._equipments = types.SimpleNamespace(single_arm=types.SimpleNamespace(ids=np.array([0, 1, 4])))
+
+    module.AceLeaderROS2Robot._control_loop(robot)
+
+    assert robot._sync_mode == sync.LeaderSyncMode.READY
+    assert robot.move_calls == [([0.2, 0.4], [0, 1])]
+
+    robot.act = lambda: (np.array([0.2, 0.4, 1.0]), np.zeros(3), np.zeros(3))
+    module.AceLeaderROS2Robot._control_loop(robot)
+
+    assert robot._sync_mode == sync.LeaderSyncMode.TRACKING
+    assert robot.set_torque_enable_calls == [(module.TorqueEnable.Disable, [0, 1])]
+
+
+def test_leader_ready_hold_waits_for_lock_period(monkeypatch):
+    install_fake_ros_modules(monkeypatch)
+    module = importlib.reload(importlib.import_module("acetele.robot.ace_leader.ace_leader_ros2"))
+    sync = importlib.import_module("acetele.utils.teleop_sync")
+    robot = module.AceLeaderROS2Robot.__new__(module.AceLeaderROS2Robot)
+    robot._sync_mode = sync.LeaderSyncMode.READY
+    robot._follower_sync_status = sync.FollowerSyncStatus.READY
+    robot._last_follower_sync_status_ns = 1_000_000_000
+    robot._sync_status_timeout_ns = int(0.5e9)
+    robot._follower_state_timeout_ns = int(0.5e9)
+    robot._sync_position_tolerance = 0.03
+    robot._sync_move_step_size = 0.2
+    robot._sync_move_max_steps = 20
+    robot._ready_lock_period_ns = int(0.05e9)
+    robot._ready_resync_threshold = 0.08
+    robot._last_ready_lock_ns = 1_000_000_000
+    robot._sync_target_position = [0.2, 0.4]
+    robot._last_follower_state_ns = 1_000_000_000
+    robot._is_landed = False
+    robot._latest_follower_state = ([0.2, 0.4, 0.0], [], [])
+    robot._latest_command = None
+    robot.move_calls = []
+    robot.set_torque_enable_calls = []
+
+    now_ns = [1_020_000_000, 1_060_000_000]
+    robot.get_clock = lambda: types.SimpleNamespace(
+        now=lambda: types.SimpleNamespace(nanoseconds=now_ns.pop(0))
+    )
+    robot.get_logger = lambda: types.SimpleNamespace(info=lambda _message: None)
+    robot.act = lambda: (np.array([0.2, 0.4, 0.5]), np.zeros(3), np.zeros(3))
+    robot.move_position = lambda positions, ids=None: robot.move_calls.append((list(positions), list(ids)))
+    robot.set_torque_enable = lambda enable, ids=None: robot.set_torque_enable_calls.append((enable, list(ids)))
+    robot._equipments = types.SimpleNamespace(single_arm=types.SimpleNamespace(ids=np.array([0, 1, 4])))
+
+    module.AceLeaderROS2Robot._control_loop(robot)
+    assert robot.move_calls == []
+
+    module.AceLeaderROS2Robot._control_loop(robot)
+    assert robot.move_calls == [([0.2, 0.4], [0, 1])]
+
+
+def test_leader_ready_large_error_returns_to_sync_request_without_hold(monkeypatch):
+    install_fake_ros_modules(monkeypatch)
+    module = importlib.reload(importlib.import_module("acetele.robot.ace_leader.ace_leader_ros2"))
+    sync = importlib.import_module("acetele.utils.teleop_sync")
+    robot = module.AceLeaderROS2Robot.__new__(module.AceLeaderROS2Robot)
+    robot._sync_mode = sync.LeaderSyncMode.READY
+    robot._follower_sync_status = sync.FollowerSyncStatus.READY
+    robot._last_follower_sync_status_ns = 1_000_000_000
+    robot._sync_status_timeout_ns = int(0.5e9)
+    robot._follower_state_timeout_ns = int(0.5e9)
+    robot._sync_position_tolerance = 0.03
+    robot._sync_move_step_size = 0.2
+    robot._sync_move_max_steps = 20
+    robot._ready_lock_period_ns = int(0.05e9)
+    robot._ready_resync_threshold = 0.08
+    robot._last_ready_lock_ns = 1_000_000_000
+    robot._sync_target_position = [0.2, 0.4]
+    robot._last_follower_state_ns = 1_000_000_000
+    robot._is_landed = False
+    robot._latest_follower_state = ([0.2, 0.4, 0.0], [], [])
+    robot._latest_command = None
+    robot.move_calls = []
+
+    robot.get_clock = lambda: types.SimpleNamespace(now=lambda: types.SimpleNamespace(nanoseconds=1_100_000_000))
+    robot.get_logger = lambda: types.SimpleNamespace(info=lambda _message: None)
+    robot.act = lambda: (np.array([0.6, 0.4, 0.5]), np.zeros(3), np.zeros(3))
+    robot.move_position = (
+        lambda *_args, **_kwargs: pytest.fail("READY large error must resync instead of holding")
+    )
+    robot.set_torque_enable = lambda *_args, **_kwargs: None
+    robot._equipments = types.SimpleNamespace(single_arm=types.SimpleNamespace(ids=np.array([0, 1, 4])))
+
+    module.AceLeaderROS2Robot._control_loop(robot)
+
+    assert robot._sync_mode == sync.LeaderSyncMode.SYNC_REQUEST
+    assert robot._sync_target_position is None
+
+
+def test_leader_publishes_idle_mode_without_command_before_follower_state(monkeypatch):
+    install_fake_ros_modules(monkeypatch)
+    module = importlib.reload(importlib.import_module("acetele.robot.ace_leader.ace_leader_ros2"))
+    sync = importlib.import_module("acetele.utils.teleop_sync")
+    robot = module.AceLeaderROS2Robot.__new__(module.AceLeaderROS2Robot)
+    robot._sync_mode = sync.LeaderSyncMode.IDLE
+    robot._follower_sync_status = sync.FollowerSyncStatus.IDLE
+    robot._last_follower_sync_status_ns = None
+    robot._sync_status_timeout_ns = int(0.5e9)
+    robot._follower_state_timeout_ns = int(0.5e9)
+    robot._latest_follower_state = None
+    robot._last_follower_state_ns = None
+    robot._is_landed = False
+    robot._latest_command = None
+    published_modes = []
+    published_commands = []
+
+    robot.get_clock = lambda: types.SimpleNamespace(
+        now=lambda: types.SimpleNamespace(
+            nanoseconds=1_000_000_000,
+            to_msg=lambda: "stamp",
+        )
+    )
+    robot.get_logger = lambda: types.SimpleNamespace(info=lambda _message: None)
+    robot.act = lambda: (np.array([0.1, 0.2, 0.3]), np.zeros(3), np.zeros(3))
+    robot._equipments = types.SimpleNamespace(single_arm=types.SimpleNamespace(ids=[0, 1, 2]))
+    robot._sync_mode_pub = types.SimpleNamespace(publish=lambda msg: published_modes.append(msg.data))
+    robot._command_pub = types.SimpleNamespace(publish=lambda msg: published_commands.append(msg))
+
+    module.AceLeaderROS2Robot._control_loop(robot)
+    module.AceLeaderROS2Robot._publish_command_loop(robot)
+
+    assert robot._sync_mode == sync.LeaderSyncMode.IDLE
+    assert robot._latest_command is not None
+    assert published_modes == ["idle"]
+    assert published_commands == []
+
+
+def test_leader_landing_publishes_stop_mode_without_command(monkeypatch):
+    install_fake_ros_modules(monkeypatch)
+    module = importlib.reload(importlib.import_module("acetele.robot.ace_leader.ace_leader_ros2"))
+    sync = importlib.import_module("acetele.utils.teleop_sync")
+    robot = module.AceLeaderROS2Robot.__new__(module.AceLeaderROS2Robot)
+    robot._sync_mode = sync.LeaderSyncMode.TRACKING
+    robot._follower_sync_status = sync.FollowerSyncStatus.TRACKING
+    robot._last_follower_sync_status_ns = 1_000_000_000
+    robot._sync_status_timeout_ns = int(0.5e9)
+    robot._is_landed = True
+    robot._latest_command = (np.zeros(3), np.zeros(3), np.zeros(3))
+    published_modes = []
+    published_commands = []
+
+    robot.get_clock = lambda: types.SimpleNamespace(
+        now=lambda: types.SimpleNamespace(
+            nanoseconds=1_000_000_000,
+            to_msg=lambda: "stamp",
+        )
+    )
+    robot.get_logger = lambda: types.SimpleNamespace(info=lambda _message: None)
+    robot.act = lambda: (np.array([0.1, 0.2, -0.1]), np.zeros(3), np.zeros(3))
+    robot._equipments = types.SimpleNamespace(single_arm=types.SimpleNamespace(ids=[0, 1, 2]))
+    robot._sync_mode_pub = types.SimpleNamespace(publish=lambda msg: published_modes.append(msg.data))
+    robot._command_pub = types.SimpleNamespace(publish=lambda msg: published_commands.append(msg))
+
+    module.AceLeaderROS2Robot._control_loop(robot)
+    module.AceLeaderROS2Robot._publish_command_loop(robot)
+
+    assert robot._sync_mode == sync.LeaderSyncMode.STOP
+    assert robot._latest_command is not None
+    assert published_modes == ["stop"]
+    assert published_commands == []
+
+
+def test_leader_status_timeout_returns_to_sync_request(monkeypatch):
+    install_fake_ros_modules(monkeypatch)
+    module = importlib.reload(importlib.import_module("acetele.robot.ace_leader.ace_leader_ros2"))
+    sync = importlib.import_module("acetele.utils.teleop_sync")
+    robot = module.AceLeaderROS2Robot.__new__(module.AceLeaderROS2Robot)
+    robot._sync_mode = sync.LeaderSyncMode.TRACKING
+    robot._follower_sync_status = sync.FollowerSyncStatus.TRACKING
+    robot._last_follower_sync_status_ns = 0
+    robot._sync_status_timeout_ns = int(0.5e9)
+    robot._is_landed = False
+    robot._latest_command = None
+
+    class FakeNow:
+        nanoseconds = 700_000_001
+
+    robot.get_clock = lambda: types.SimpleNamespace(now=lambda: FakeNow())
+    robot.get_logger = lambda: types.SimpleNamespace(info=lambda _message: None)
+    robot.act = lambda: (np.array([0.1, -0.2, -0.1]), np.zeros(3), np.zeros(3))
+
+    module.AceLeaderROS2Robot._control_loop(robot)
+
+    assert robot._sync_mode == sync.LeaderSyncMode.SYNC_REQUEST
+
+
+def test_leader_lost_status_returns_to_sync_request_immediately(monkeypatch):
+    install_fake_ros_modules(monkeypatch)
+    module = importlib.reload(importlib.import_module("acetele.robot.ace_leader.ace_leader_ros2"))
+    sync = importlib.import_module("acetele.utils.teleop_sync")
+    robot = module.AceLeaderROS2Robot.__new__(module.AceLeaderROS2Robot)
+    robot._sync_mode = sync.LeaderSyncMode.TRACKING
+    robot._follower_sync_status = sync.FollowerSyncStatus.LOST
+    robot._last_follower_sync_status_ns = 1_000_000_000
+    robot._sync_status_timeout_ns = int(0.5e9)
+    robot._is_landed = False
+    robot._latest_command = None
+
+    class FakeNow:
+        nanoseconds = 1_000_000_000
+
+    robot.get_clock = lambda: types.SimpleNamespace(now=lambda: FakeNow())
+    robot.get_logger = lambda: types.SimpleNamespace(info=lambda _message: None)
+    robot.act = lambda: (np.array([0.1, -0.2, -0.1]), np.zeros(3), np.zeros(3))
+
+    module.AceLeaderROS2Robot._control_loop(robot)
+
+    assert robot._sync_mode == sync.LeaderSyncMode.SYNC_REQUEST
+
+
+def test_leader_rejects_invalid_sync_status(monkeypatch):
+    install_fake_ros_modules(monkeypatch)
+    module = importlib.reload(importlib.import_module("acetele.robot.ace_leader.ace_leader_ros2"))
+    sync = importlib.import_module("acetele.utils.teleop_sync")
+    robot = module.AceLeaderROS2Robot.__new__(module.AceLeaderROS2Robot)
+    robot._follower_sync_status = sync.FollowerSyncStatus.IDLE
+    robot._last_follower_sync_status_ns = None
+    logged = []
+    robot.get_logger = lambda: types.SimpleNamespace(warn=lambda message: logged.append(message))
+
+    module.AceLeaderROS2Robot._sync_status_callback(robot, types.SimpleNamespace(data="bad-status"))
+
+    assert robot._follower_sync_status == sync.FollowerSyncStatus.IDLE
+    assert robot._last_follower_sync_status_ns is None
+    assert "Ignoring invalid sync status" in logged[0]
+
+
+def test_sync_mode_and_status_are_published_from_publish_loops(monkeypatch):
+    install_fake_ros_modules(monkeypatch)
+    leader_module = importlib.reload(importlib.import_module("acetele.robot.ace_leader.ace_leader_ros2"))
+    follower_module = importlib.reload(importlib.import_module("acetele.robot.ace_follower.ace_follower_ros2"))
+    sync = importlib.import_module("acetele.utils.teleop_sync")
+
+    leader = leader_module.AceLeaderROS2Robot.__new__(leader_module.AceLeaderROS2Robot)
+    follower = follower_module.AceFollowerROS2Robot.__new__(follower_module.AceFollowerROS2Robot)
+    published_modes = []
+    published_commands = []
+    published_states = []
+    published_px4_states = []
+    published_statuses = []
+    leader._sync_mode = sync.LeaderSyncMode.SYNC_REQUEST
+    follower._sync_status = sync.FollowerSyncStatus.READY
+    leader._latest_command = (np.zeros(2), np.zeros(2), np.zeros(2))
+    follower._latest_state = (np.zeros(2), np.zeros(2), np.zeros(2))
+    leader.get_clock = lambda: types.SimpleNamespace(
+        now=lambda: types.SimpleNamespace(to_msg=lambda: "leader-stamp")
+    )
+    follower.get_clock = lambda: types.SimpleNamespace(
+        now=lambda: types.SimpleNamespace(
+            nanoseconds=1_000_000_000,
+            to_msg=lambda: "follower-stamp",
+        )
+    )
+    follower.get_logger = lambda: types.SimpleNamespace(warn=lambda _message: None)
+    leader._equipments = types.SimpleNamespace(single_arm=types.SimpleNamespace(ids=[0, 1]))
+    follower._equipments = types.SimpleNamespace(single_arm=types.SimpleNamespace(ids=[0, 1]))
+    follower._warned_invalid_px4_arm_state_length = False
+    leader._sync_mode_pub = types.SimpleNamespace(publish=lambda msg: published_modes.append(msg.data))
+    leader._command_pub = types.SimpleNamespace(publish=lambda msg: published_commands.append(msg))
+    follower._state_pub = types.SimpleNamespace(publish=lambda msg: published_states.append(msg))
+    follower._px4_arm_state_pub = types.SimpleNamespace(publish=lambda msg: published_px4_states.append(msg))
+    follower._sync_status_pub = types.SimpleNamespace(publish=lambda msg: published_statuses.append(msg.data))
+
+    leader_module.AceLeaderROS2Robot._publish_command_loop(leader)
+    follower_module.AceFollowerROS2Robot._publish_state_loop(follower)
+
+    assert published_modes == ["sync_request"]
+    assert published_commands == []
+    assert len(published_states) == 1
+    assert published_px4_states == []
+    assert published_statuses == ["ready"]
+
+
+def test_teleop_sync_exports_only_state_enums():
+    sync = importlib.import_module("acetele.utils.teleop_sync")
+
+    assert hasattr(sync, "LeaderSyncMode")
+    assert hasattr(sync, "FollowerSyncStatus")
+    assert not hasattr(sync, "is_valid_leader_sync_mode")
+    assert not hasattr(sync, "is_valid_follower_sync_status")
+
+
+def test_follower_publish_state_loop_dual_publishes_joint_state_and_px4_arm_state(monkeypatch):
     install_fake_ros_modules(monkeypatch)
     module = importlib.reload(importlib.import_module("acetele.robot.ace_follower.ace_follower_ros2"))
     robot = module.AceFollowerROS2Robot.__new__(module.AceFollowerROS2Robot)
@@ -351,13 +1003,16 @@ def test_follower_publish_state_dual_publishes_joint_state_and_px4_arm_state(mon
     robot._equipments = types.SimpleNamespace(single_arm=types.SimpleNamespace(ids=[0, 1, 2, 3, 4]))
     robot._state_pub = types.SimpleNamespace(publish=lambda msg: published["state"].append(msg))
     robot._px4_arm_state_pub = types.SimpleNamespace(publish=lambda msg: published["px4"].append(msg))
+    robot._sync_status_pub = types.SimpleNamespace(publish=lambda msg: published.setdefault("status", []).append(msg))
+    robot._sync_status = importlib.import_module("acetele.utils.teleop_sync").FollowerSyncStatus.TRACKING
     robot._warned_invalid_px4_arm_state_length = False
 
     joint_pos = np.array([0.1, 0.2, 0.3, 0.4, 0.5])
     joint_vel = np.array([1.1, 1.2, 1.3, 1.4, 1.5])
     joint_effort = np.array([2.1, 2.2, 2.3, 2.4, 2.5])
+    robot._latest_state = (joint_pos, joint_vel, joint_effort)
 
-    module.AceFollowerROS2Robot._publish_state(robot, joint_pos, joint_vel, joint_effort)
+    module.AceFollowerROS2Robot._publish_state_loop(robot)
 
     assert len(published["state"]) == 1
     state_msg = published["state"][0]
@@ -372,10 +1027,12 @@ def test_follower_publish_state_dual_publishes_joint_state_and_px4_arm_state(mon
     assert px4_msg.timestamp == 1_234_567
     assert px4_msg.arm_position == joint_pos.tolist()
     assert not hasattr(px4_msg, "arm_velocity")
+    assert published["status"][0].data == "tracking"
     assert logged == []
+    assert not hasattr(robot, "_publish_state")
 
 
-def test_follower_publish_state_keeps_joint_state_velocity_off_px4_arm_state(monkeypatch):
+def test_follower_publish_state_loop_keeps_joint_state_velocity_off_px4_arm_state(monkeypatch):
     install_fake_ros_modules(monkeypatch)
     module = importlib.reload(importlib.import_module("acetele.robot.ace_follower.ace_follower_ros2"))
     robot = module.AceFollowerROS2Robot.__new__(module.AceFollowerROS2Robot)
@@ -397,23 +1054,17 @@ def test_follower_publish_state_keeps_joint_state_velocity_off_px4_arm_state(mon
     robot._equipments = types.SimpleNamespace(single_arm=types.SimpleNamespace(ids=[0, 1, 2, 3, 4]))
     robot._state_pub = types.SimpleNamespace(publish=lambda msg: published["state"].append(msg))
     robot._px4_arm_state_pub = types.SimpleNamespace(publish=lambda msg: published["px4"].append(msg))
+    robot._sync_status_pub = types.SimpleNamespace(publish=lambda _msg: None)
+    robot._sync_status = importlib.import_module("acetele.utils.teleop_sync").FollowerSyncStatus.TRACKING
     robot._warned_invalid_px4_arm_state_length = False
 
     joint_pos = np.zeros(5)
     joint_effort = np.zeros(5)
 
-    module.AceFollowerROS2Robot._publish_state(
-        robot,
-        joint_pos,
-        np.array([0.2, 0.4, 2.0, np.nan, -2.0]),
-        joint_effort,
-    )
-    module.AceFollowerROS2Robot._publish_state(
-        robot,
-        joint_pos,
-        np.array([0.8, 1.0, 2.0, 0.4, -2.0]),
-        joint_effort,
-    )
+    robot._latest_state = (joint_pos, np.array([0.2, 0.4, 2.0, np.nan, -2.0]), joint_effort)
+    module.AceFollowerROS2Robot._publish_state_loop(robot)
+    robot._latest_state = (joint_pos, np.array([0.8, 1.0, 2.0, 0.4, -2.0]), joint_effort)
+    module.AceFollowerROS2Robot._publish_state_loop(robot)
 
     np.testing.assert_allclose(
         published["state"][0].velocity,
@@ -433,7 +1084,7 @@ def test_follower_publish_state_keeps_joint_state_velocity_off_px4_arm_state(mon
     assert logged == []
 
 
-def test_follower_publish_state_skips_px4_arm_state_when_not_five_axis(monkeypatch):
+def test_follower_publish_state_loop_skips_px4_arm_state_when_not_five_axis(monkeypatch):
     install_fake_ros_modules(monkeypatch)
     module = importlib.reload(importlib.import_module("acetele.robot.ace_follower.ace_follower_ros2"))
     robot = module.AceFollowerROS2Robot.__new__(module.AceFollowerROS2Robot)
@@ -451,20 +1102,14 @@ def test_follower_publish_state_skips_px4_arm_state_when_not_five_axis(monkeypat
     robot._equipments = types.SimpleNamespace(single_arm=types.SimpleNamespace(ids=[0, 1]))
     robot._state_pub = types.SimpleNamespace(publish=lambda msg: published["state"].append(msg))
     robot._px4_arm_state_pub = types.SimpleNamespace(publish=lambda msg: published["px4"].append(msg))
+    robot._sync_status_pub = types.SimpleNamespace(publish=lambda _msg: None)
+    robot._sync_status = importlib.import_module("acetele.utils.teleop_sync").FollowerSyncStatus.TRACKING
     robot._warned_invalid_px4_arm_state_length = False
 
-    module.AceFollowerROS2Robot._publish_state(
-        robot,
-        np.array([0.1, 0.2]),
-        np.array([1.1, 1.2]),
-        np.array([2.1, 2.2]),
-    )
-    module.AceFollowerROS2Robot._publish_state(
-        robot,
-        np.array([0.3, 0.4]),
-        np.array([1.3, 1.4]),
-        np.array([2.3, 2.4]),
-    )
+    robot._latest_state = (np.array([0.1, 0.2]), np.array([1.1, 1.2]), np.array([2.1, 2.2]))
+    module.AceFollowerROS2Robot._publish_state_loop(robot)
+    robot._latest_state = (np.array([0.3, 0.4]), np.array([1.3, 1.4]), np.array([2.3, 2.4]))
+    module.AceFollowerROS2Robot._publish_state_loop(robot)
 
     assert len(published["state"]) == 2
     assert published["px4"] == []

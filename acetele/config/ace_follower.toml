@@ -5,10 +5,10 @@ backend = "ros2"
 [linker.single]
 port = "/dev/ttyCH341USB0"
 joint_ids = [0, 1, 2, 3, 4]
-joint_signs = [-1, 1, 1, -1, 1]
+joint_signs = [-1, 1, 1, -1, -1]
 home_poses = [0.0, 0.0, 0.0, 0.0, 0.0]
 gripper_id = 4
-gripper_type = "ace_leader"
+gripper_type = "ace_follower"
 enable_gravity_compensation = false
 enable_estimate_external_torque = false
 servo_types = ["HL3950", "HL3930", "HL3915", "HL3915", "HL3915"]
