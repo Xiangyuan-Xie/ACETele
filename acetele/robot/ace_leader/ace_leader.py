@@ -32,11 +32,9 @@ class AceLeaderRobot(BaseRobot):
     def act(
         self,
         encode_gripper: bool = True,
-        cal_torque_sign: bool = False,
     ) -> Tuple[Sequence[float], Sequence[float], Sequence[float]]:
         return self._equipments.single_arm.act(
             encode_gripper=encode_gripper,
-            cal_torque_sign=cal_torque_sign,
         )
 
     def apply_torque_feedback(self, external_torque: Sequence[float]):

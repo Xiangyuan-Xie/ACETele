@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
 from threading import Event, Lock, Thread
 from typing import Any, Dict, Optional, Sequence, Tuple
 
@@ -36,6 +37,15 @@ HLS_PROFILE_DEFAULTS_BY_SERVO = {
 
 PROFILE_VELOCITY_UNIT_RAD_PER_SEC = 0.732 * np.pi / 30.0
 PROFILE_ACCELERATION_UNIT_RAD_PER_SEC2 = 8.7 * np.pi / 180.0
+
+
+@dataclass
+class LinkerState:
+    public_positions: np.ndarray
+    raw_positions: np.ndarray
+    velocities: np.ndarray
+    motor_torque_magnitude: np.ndarray
+    motor_torque_signed: np.ndarray
 
 
 class Linker(BaseEquipment):
@@ -116,49 +126,68 @@ class Linker(BaseEquipment):
             self._control_thread = None
 
         if self._enable_estimate_external_torque:
-            self._K = np.eye(self._dof) * 15.0
+            if self._pin_model is None:
+                raise ValueError("Pinocchio model is None, please provide a valid model.")
+            if self._pin_model.nv != self._dof:
+                raise ValueError(
+                    f"Pinocchio model nv ({self._pin_model.nv}) must match joint_ids length ({self._dof})."
+                )
+
+            self._K = np.eye(self._dof) * float(config.get("external_torque_observer_gain", 15.0))
             self._p_hat = np.zeros(self._dof)
-            self._ee_frame_id = self._pin_model.getFrameId("link_5") if self._pin_model else None
-            self._viscous_friction_gain = 0.02
+            self._external_wrench_frame_name = config.get("external_wrench_frame", "link_5")
+            self._ee_frame_id = self._pin_model.getFrameId(self._external_wrench_frame_name)
+            if self._ee_frame_id == len(self._pin_model.frames):
+                raise ValueError(f"external_wrench_frame '{self._external_wrench_frame_name}' not found.")
+            self._observer_static_friction = float(config.get("external_torque_static_friction", 0.0))
+            self._viscous_friction_gain = float(config.get("external_torque_viscous_friction", 0.02))
+            self._max_observer_dt = float(config.get("external_torque_max_dt", self._control_period * 5.0))
+            self._observer_initialized = False
 
             # Low Pass Filter for external torque estimation
             self._estimated_external_torque = np.zeros(self._dof)
-            self._lpf_alpha = 0.2
+            self._lpf_alpha = float(config.get("external_torque_lpf_alpha", 0.2))
 
     @property
     def ids(self):
         return self._ids
 
     def act(
-        self, encode_gripper: bool = True, cal_torque_sign: bool = False
+        self, encode_gripper: bool = True
     ) -> Tuple[Sequence[float], Sequence[float], Sequence[float]]:
+        state = self.get_linker_state(encode_gripper=encode_gripper)
+        return state.public_positions, state.velocities, state.motor_torque_magnitude
+
+    def get_linker_state(self, encode_gripper: bool = True) -> LinkerState:
         encoded_pos, encoded_vel, encoded_current = self._driver.get_state()
 
-        positions = np.array(list(encoded_pos.values())) * self._signs * np.pi / 2048.0
+        raw_positions = np.array([encoded_pos[int(ft_id)] for ft_id in self._ids]) * self._signs * np.pi / 2048.0
+        public_positions = raw_positions.copy()
         if encode_gripper and self._gripper_id >= 0:
             gripper_index = int(np.where(self._ids == self._gripper_id)[0][0])
-            gripper = positions[gripper_index] % (2 * np.pi)
+            gripper = public_positions[gripper_index] % (2 * np.pi)
             if gripper > np.pi:
                 gripper -= 2 * np.pi
             elif gripper <= -np.pi:
                 gripper += 2 * np.pi
-            positions[gripper_index] = np.clip(gripper * self._gripper_encoding_scale, 0.0, 1.0)
+            public_positions[gripper_index] = np.clip(gripper * self._gripper_encoding_scale, 0.0, 1.0)
 
-        velocities = np.array(list(encoded_vel.values())) * self._signs * 0.732 * np.pi / 30
+        velocities = np.array([encoded_vel[int(ft_id)] for ft_id in self._ids]) * self._signs * 0.732 * np.pi / 30
 
-        currents = np.array(list(encoded_current.values())) * 6.5
+        raw_currents = np.array([encoded_current[int(ft_id)] for ft_id in self._ids], dtype=float)
+        currents = raw_currents * 6.5
         torques_kgcmf_mag = np.maximum(np.abs(currents) - self._no_load_current, 0.0) / self._torque_current_mapping
         torques_Nm_mag = torques_kgcmf_mag * 0.0981
+        torque_sign = np.sign(-raw_currents * self._signs)
+        torques_Nm_signed = torques_Nm_mag * torque_sign
 
-        if cal_torque_sign:
-            if self._pin_model is not None and self._pin_data is not None:
-                pin.rnea(self._pin_model, self._pin_data, positions, velocities, np.zeros_like(velocities))
-                torques_Nm = torques_Nm_mag * np.sign(self._pin_data.tau) * -self._signs
-            else:
-                torques_Nm = torques_Nm_mag * -self._signs
-            return positions, velocities, torques_Nm
-        else:
-            return positions, velocities, torques_Nm_mag
+        return LinkerState(
+            public_positions=public_positions,
+            raw_positions=raw_positions,
+            velocities=velocities,
+            motor_torque_magnitude=torques_Nm_mag,
+            motor_torque_signed=torques_Nm_signed,
+        )
 
     def set_torque(self, torques: Sequence[float], ids: Optional[Sequence[int]] = None):
         if ids is None:
@@ -334,6 +363,12 @@ class Linker(BaseEquipment):
         with self._lock:
             self._feedback_external_torque = external_torque
 
+    def reset_external_torque_estimator(self, joint_pos, joint_vel):
+        pin.computeAllTerms(self._pin_model, self._pin_data, joint_pos, joint_vel)
+        self._p_hat = self._pin_data.M @ joint_vel
+        self._estimated_external_torque = np.zeros(self._dof)
+        self._observer_initialized = True
+
     def update_momentum_observer(self, joint_pos, joint_vel, joint_effort, dt):
         pin.computeAllTerms(self._pin_model, self._pin_data, joint_pos, joint_vel)
         M = self._pin_data.M
@@ -341,7 +376,16 @@ class Linker(BaseEquipment):
         C = self._pin_data.C
         beta = C.T @ joint_vel
         p = M @ joint_vel
-        tau_f = self._stiction_comp_gain * np.sign(joint_vel) + self._viscous_friction_gain * joint_vel
+        if not self._observer_initialized:
+            self._p_hat = p.copy()
+            self._estimated_external_torque = np.zeros(self._dof)
+            self._observer_initialized = True
+            return self._estimated_external_torque
+        if dt <= 0.0 or dt > self._max_observer_dt:
+            self._p_hat = p.copy()
+            self._estimated_external_torque = np.zeros(self._dof)
+            return self._estimated_external_torque
+        tau_f = self._observer_static_friction * np.sign(joint_vel) + self._viscous_friction_gain * joint_vel
         p_hat_dot = joint_effort - tau_f - g + beta + self._K @ (p - self._p_hat)
         self._p_hat += p_hat_dot * dt
         tau_ext_raw = self._K @ (p - self._p_hat)
@@ -353,17 +397,13 @@ class Linker(BaseEquipment):
     def estimate_joint_external_torque(self, joint_pos, joint_vel, joint_effort, dt):
         return self.update_momentum_observer(joint_pos, joint_vel, joint_effort, dt)
 
-    def estimate_ee_external_wrench(self, joint_pos, joint_vel, joint_effort, dt, update_dynamics: bool = True):
-        if update_dynamics:
-            tau_ext = self.update_momentum_observer(joint_pos, joint_vel, joint_effort, dt)
-        else:
-            tau_ext = self._estimated_external_torque
+    def external_wrench_from_joint_torque(self, joint_pos, joint_torque):
         pin.computeJointJacobians(self._pin_model, self._pin_data, joint_pos)
         pin.updateFramePlacements(self._pin_model, self._pin_data)
         J = pin.getFrameJacobian(
             self._pin_model, self._pin_data, self._ee_frame_id, pin.ReferenceFrame.LOCAL_WORLD_ALIGNED
         )
-        f_ext = np.linalg.pinv(J.T) @ tau_ext
+        f_ext = np.linalg.pinv(J.T) @ joint_torque
         return f_ext
 
 

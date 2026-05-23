@@ -32,6 +32,8 @@ where = ["."]
 
 [tool.setuptools.package-data]
 "acetele.config" = ["*.toml"]
+"acetele.robot.ace_follower" = ["description/*.urdf", "description/meshes/*.STL"]
+"acetele.robot.ace_leader" = ["description/*.urdf", "description/*.xml", "description/meshes/*.STL"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

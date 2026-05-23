@@ -1,5 +1,7 @@
 from typing import Optional, Sequence, Tuple
 
+import numpy as np
+from geometry_msgs.msg import WrenchStamped
 from px4_msgs.msg import ArmJointState
 from rclpy.node import Node
 from rclpy.qos import QoSProfile
@@ -28,6 +30,16 @@ class AceFollowerROS2Robot(Node, AceFollowerRobot):
         self._state_pub = self.create_publisher(
             JointState,
             "/arm/state",
+            qos,
+        )
+        self._external_joint_torque_pub = self.create_publisher(
+            JointState,
+            "/arm/external_joint_torque",
+            qos,
+        )
+        self._external_wrench_pub = self.create_publisher(
+            WrenchStamped,
+            "/arm/external_wrench",
             qos,
         )
         self._px4_arm_state_pub = self.create_publisher(
@@ -68,6 +80,15 @@ class AceFollowerROS2Robot(Node, AceFollowerRobot):
         self._latest_state: Optional[
             Tuple[Sequence[float], Sequence[float], Sequence[float]]
         ] = None
+        self._last_external_estimate_ns: Optional[int] = None
+        self._external_joint_torque: Optional[np.ndarray] = None
+        self._external_wrench: Optional[np.ndarray] = None
+        single_arm = getattr(getattr(self, "_equipments", None), "single_arm", None)
+        self._external_wrench_frame_id = getattr(
+            single_arm,
+            "_external_wrench_frame_name",
+            "link_5",
+        )
         self._warned_invalid_px4_arm_state_length = False
 
         self.get_logger().info("Follower arm controller node started.")
@@ -104,8 +125,17 @@ class AceFollowerROS2Robot(Node, AceFollowerRobot):
                     self.get_logger().info("Heartbeat lost. Entering lost sync state.")
                 self._sync_status = FollowerSyncStatus.LOST
                 self._heartbeat_lost = True
-        joint_pos, joint_vel, joint_effort = self.act()
-        self._latest_state = (joint_pos, joint_vel, joint_effort)
+        single_arm = getattr(getattr(self, "_equipments", None), "single_arm", None)
+        if single_arm is not None and hasattr(single_arm, "get_linker_state"):
+            state = single_arm.get_linker_state()
+            joint_pos = state.public_positions
+            joint_vel = state.velocities
+            joint_effort = state.motor_torque_magnitude
+            self._latest_state = (joint_pos, joint_vel, joint_effort)
+            self._update_external_estimate(now_ns, state)
+        else:
+            joint_pos, joint_vel, joint_effort = self.act()
+            self._latest_state = (joint_pos, joint_vel, joint_effort)
         if self._sync_mode == LeaderSyncMode.STOP:
             self._sync_status = FollowerSyncStatus.LOST
             return
@@ -122,6 +152,29 @@ class AceFollowerROS2Robot(Node, AceFollowerRobot):
                 self.set_position(self._latest_command)
                 self._sync_status = FollowerSyncStatus.TRACKING
 
+    def _update_external_estimate(self, now_ns: int, state):
+        linker = self._equipments.single_arm
+        if not getattr(linker, "_enable_estimate_external_torque", False):
+            self._external_joint_torque = None
+            self._external_wrench = None
+            return
+        if self._last_external_estimate_ns is None:
+            dt = 0.0
+        else:
+            dt = (now_ns - self._last_external_estimate_ns) * 1e-9
+        self._last_external_estimate_ns = now_ns
+        external_joint_torque = linker.estimate_joint_external_torque(
+            state.raw_positions,
+            state.velocities,
+            state.motor_torque_signed,
+            dt,
+        )
+        self._external_joint_torque = np.asarray(external_joint_torque, dtype=float)
+        self._external_wrench = np.asarray(
+            linker.external_wrench_from_joint_torque(state.raw_positions, self._external_joint_torque),
+            dtype=float,
+        )
+
     def _publish_state_loop(self):
         if self._latest_state is None:
             return
@@ -135,6 +188,27 @@ class AceFollowerROS2Robot(Node, AceFollowerRobot):
         msg.velocity = joint_vel.tolist()
         msg.effort = joint_effort.tolist()
         self._state_pub.publish(msg)
+
+        external_joint_torque = getattr(self, "_external_joint_torque", None)
+        if external_joint_torque is not None:
+            external_msg = JointState()
+            external_msg.header.stamp = now.to_msg()
+            external_msg.name = msg.name
+            external_msg.effort = external_joint_torque.tolist()
+            self._external_joint_torque_pub.publish(external_msg)
+
+        external_wrench = getattr(self, "_external_wrench", None)
+        if external_wrench is not None:
+            wrench_msg = WrenchStamped()
+            wrench_msg.header.stamp = now.to_msg()
+            wrench_msg.header.frame_id = getattr(self, "_external_wrench_frame_id", "link_5")
+            wrench_msg.wrench.force.x = float(external_wrench[0])
+            wrench_msg.wrench.force.y = float(external_wrench[1])
+            wrench_msg.wrench.force.z = float(external_wrench[2])
+            wrench_msg.wrench.torque.x = float(external_wrench[3])
+            wrench_msg.wrench.torque.y = float(external_wrench[4])
+            wrench_msg.wrench.torque.z = float(external_wrench[5])
+            self._external_wrench_pub.publish(wrench_msg)
 
         status_msg = String()
         status_msg.data = self._sync_status.value

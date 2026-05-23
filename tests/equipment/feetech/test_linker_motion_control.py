@@ -78,7 +78,7 @@ class FakeLinker(Linker):
             )
         )
 
-    def act(self, encode_gripper=True, cal_torque_sign=False):
+    def act(self, encode_gripper=True):
         return self.current_pos.copy(), np.zeros(self._dof), np.zeros(self._dof)
 
 
@@ -1150,3 +1150,117 @@ def test_linker_set_position_broadcasts_metric_profile_scalars_to_raw_arrays():
     np.testing.assert_array_equal(kwargs["accelerations_raw"], np.array([20, 20]))
     expected_current = round(((1000.0 / 9.3) * (0.1 / 0.0981) + 260) / 6.5)
     np.testing.assert_array_equal(kwargs["currents_raw"], np.array([expected_current, expected_current]))
+
+
+def test_act_signed_torque_round_trips_set_torque_direction():
+    linker = make_linker_for_encoding(ids=(0, 1), gripper_id=-1)
+    linker._signs = np.array([1, -1])
+    current_driver = CurrentRecordingDriver()
+    linker._driver = current_driver
+
+    commanded_torque = np.array([0.1, -0.2])
+    linker.set_torque(commanded_torque)
+    sent_ids, sent_currents = current_driver.current_calls[0]
+
+    state_driver = PositionRecordingDriver(
+        (
+            {int(ft_id): 0 for ft_id in sent_ids},
+            {int(ft_id): 0 for ft_id in sent_ids},
+            {int(ft_id): int(current) for ft_id, current in zip(sent_ids, sent_currents)},
+        )
+    )
+    linker._driver = state_driver
+
+    _, _, default_effort = linker.act()
+    signed_effort = linker.get_linker_state().motor_torque_signed
+
+    assert np.all(default_effort >= 0.0)
+    assert signed_effort[0] > 0.0
+    assert signed_effort[1] < 0.0
+    np.testing.assert_allclose(signed_effort, commanded_torque, atol=0.004)
+
+
+def test_linker_state_keeps_raw_gripper_angle_for_dynamics():
+    driver = PositionRecordingDriver(
+        (
+            {0: 0, 4: 512},
+            {0: 0, 4: 0},
+            {0: 0, 4: 0},
+        )
+    )
+    linker = make_linker_for_encoding(ids=(0, 4), gripper_id=4)
+    linker._driver = driver
+
+    state = linker.get_linker_state()
+
+    assert state.public_positions[0] == pytest.approx(0.0)
+    assert state.public_positions[1] == pytest.approx(1.0)
+    assert state.raw_positions[1] == pytest.approx(512 * np.pi / 2048.0)
+
+
+def test_external_torque_estimation_requires_pin_model():
+    config = {
+        "joint_ids": [0, 1],
+        "joint_signs": [1, 1],
+        "home_poses": [0.0, 0.0],
+        "port": "/dev/test",
+        "gripper_id": -1,
+        "gripper_type": "ace_leader",
+        "enable_gravity_compensation": False,
+        "enable_estimate_external_torque": True,
+        "servo_types": ["HL3915", "HL3915"],
+    }
+    driver = PositionRecordingDriver(({0: 0, 1: 0}, {0: 0, 1: 0}, {0: 0, 1: 0}))
+
+    with pytest.raises(ValueError, match="Pinocchio model is None"):
+        Linker(config, driver=driver)
+
+
+def test_momentum_observer_initializes_and_guards_bad_dt(monkeypatch):
+    linker = make_linker_for_encoding(ids=(0, 1), gripper_id=-1)
+    linker._pin_data = types.SimpleNamespace(M=np.eye(2), g=np.zeros(2), C=np.zeros((2, 2)))
+    linker._K = np.eye(2) * 15.0
+    linker._p_hat = np.zeros(2)
+    linker._estimated_external_torque = np.zeros(2)
+    linker._observer_initialized = False
+    linker._observer_static_friction = 0.0
+    linker._viscous_friction_gain = 0.0
+    linker._max_observer_dt = 0.05
+    linker._lpf_alpha = 1.0
+
+    def fake_compute_all_terms(_model, data, _joint_pos, _joint_vel):
+        data.M = np.eye(2)
+        data.g = np.zeros(2)
+        data.C = np.zeros((2, 2))
+
+    monkeypatch.setattr("acetele.equipment.feetech.linker.pin.computeAllTerms", fake_compute_all_terms)
+
+    first = linker.update_momentum_observer(
+        np.array([0.0, 0.0]),
+        np.array([0.3, -0.4]),
+        np.array([10.0, -10.0]),
+        0.004,
+    )
+    second = linker.update_momentum_observer(
+        np.array([0.0, 0.0]),
+        np.array([0.3, -0.4]),
+        np.array([10.0, -10.0]),
+        0.0,
+    )
+    third = linker.update_momentum_observer(
+        np.array([0.0, 0.0]),
+        np.array([0.3, -0.4]),
+        np.array([10.0, -10.0]),
+        0.5,
+    )
+
+    np.testing.assert_allclose(first, np.zeros(2))
+    np.testing.assert_allclose(second, np.zeros(2))
+    np.testing.assert_allclose(third, np.zeros(2))
+    np.testing.assert_allclose(linker._p_hat, np.array([0.3, -0.4]))
+
+
+def test_linker_exposes_single_wrench_mapping_api():
+    removed_api = "estimate_ee_external" + "_wrench"
+    assert not hasattr(Linker, removed_api)
+    assert hasattr(Linker, "external_wrench_from_joint_torque")

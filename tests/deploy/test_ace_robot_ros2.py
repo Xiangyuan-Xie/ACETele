@@ -64,6 +64,19 @@ def install_fake_ros_modules(monkeypatch):
 
     sensor_msgs_msg_module.JointState = FakeJointState
 
+    geometry_msgs_module = types.ModuleType("geometry_msgs")
+    geometry_msgs_msg_module = types.ModuleType("geometry_msgs.msg")
+
+    class FakeWrenchStamped:
+        def __init__(self):
+            self.header = types.SimpleNamespace(stamp=None, frame_id="")
+            self.wrench = types.SimpleNamespace(
+                force=types.SimpleNamespace(x=0.0, y=0.0, z=0.0),
+                torque=types.SimpleNamespace(x=0.0, y=0.0, z=0.0),
+            )
+
+    geometry_msgs_msg_module.WrenchStamped = FakeWrenchStamped
+
     px4_msgs_module = types.ModuleType("px4_msgs")
     px4_msgs_msg_module = types.ModuleType("px4_msgs.msg")
 
@@ -82,6 +95,8 @@ def install_fake_ros_modules(monkeypatch):
     monkeypatch.setitem(sys.modules, "std_msgs.msg", std_msgs_msg_module)
     monkeypatch.setitem(sys.modules, "sensor_msgs", sensor_msgs_module)
     monkeypatch.setitem(sys.modules, "sensor_msgs.msg", sensor_msgs_msg_module)
+    monkeypatch.setitem(sys.modules, "geometry_msgs", geometry_msgs_module)
+    monkeypatch.setitem(sys.modules, "geometry_msgs.msg", geometry_msgs_msg_module)
     monkeypatch.setitem(sys.modules, "px4_msgs", px4_msgs_module)
     monkeypatch.setitem(sys.modules, "px4_msgs.msg", px4_msgs_msg_module)
     return FakeNode
@@ -395,6 +410,7 @@ def test_follower_uses_100hz_control_and_publish_timers(monkeypatch):
         "act",
         lambda self: (np.zeros(5), np.zeros(5), np.zeros(5)),
     )
+    monkeypatch.setattr(module.AceFollowerROS2Robot, "_update_external_estimate", lambda self, _now_ns: None)
     monkeypatch.setattr(module.AceFollowerRobot, "set_position", lambda self, _positions, **_kwargs: None)
     monkeypatch.setattr(
         module.AceFollowerROS2Robot,
@@ -406,10 +422,12 @@ def test_follower_uses_100hz_control_and_publish_timers(monkeypatch):
         "get_parameter",
         lambda self, name: types.SimpleNamespace(value=parameters[name]),
     )
+    publishers = []
     monkeypatch.setattr(
         module.AceFollowerROS2Robot,
         "create_publisher",
-        lambda self, *_args: types.SimpleNamespace(publish=lambda _msg: None),
+        lambda self, msg_type, topic, qos: publishers.append((msg_type, topic, qos))
+        or types.SimpleNamespace(publish=lambda _msg: None),
     )
     monkeypatch.setattr(
         module.AceFollowerROS2Robot,
@@ -448,6 +466,8 @@ def test_follower_uses_100hz_control_and_publish_timers(monkeypatch):
     assert robot._publish_rate == 100.0
     assert (1.0 / 100.0, "_control_loop") in timers
     assert (1.0 / 100.0, "_publish_state_loop") in timers
+    assert any(topic == "/arm/external_joint_torque" for _msg_type, topic, _qos in publishers)
+    assert any(topic == "/arm/external_wrench" for _msg_type, topic, _qos in publishers)
 
 
 def test_leader_uses_100hz_control_and_publish_timers(monkeypatch):
@@ -1172,6 +1192,49 @@ def test_follower_publish_state_loop_keeps_joint_state_velocity_off_px4_arm_stat
     assert not hasattr(published["px4"][0], "arm_velocity")
     assert not hasattr(published["px4"][1], "arm_velocity")
     assert logged == []
+
+
+def test_follower_publish_state_loop_publishes_external_estimates(monkeypatch):
+    install_fake_ros_modules(monkeypatch)
+    module = importlib.reload(importlib.import_module("acetele.robot.ace_follower.ace_follower_ros2"))
+    robot = module.AceFollowerROS2Robot.__new__(module.AceFollowerROS2Robot)
+    published = {"state": [], "px4": [], "joint_torque": [], "wrench": []}
+
+    class FakeNow:
+        nanoseconds = 1_234_567_890
+
+        def to_msg(self):
+            return "stamp"
+
+    robot.get_clock = lambda: types.SimpleNamespace(now=lambda: FakeNow())
+    robot.get_logger = lambda: types.SimpleNamespace(warn=lambda _message: None)
+    robot._equipments = types.SimpleNamespace(single_arm=types.SimpleNamespace(ids=[0, 1, 2, 3, 4]))
+    robot._state_pub = types.SimpleNamespace(publish=lambda msg: published["state"].append(msg))
+    robot._px4_arm_state_pub = types.SimpleNamespace(publish=lambda msg: published["px4"].append(msg))
+    robot._sync_status_pub = types.SimpleNamespace(publish=lambda _msg: None)
+    robot._external_joint_torque_pub = types.SimpleNamespace(
+        publish=lambda msg: published["joint_torque"].append(msg)
+    )
+    robot._external_wrench_pub = types.SimpleNamespace(publish=lambda msg: published["wrench"].append(msg))
+    robot._sync_status = importlib.import_module("acetele.utils.teleop_sync").FollowerSyncStatus.TRACKING
+    robot._warned_invalid_px4_arm_state_length = False
+    robot._external_joint_torque = np.array([0.1, 0.2, 0.3, 0.4, 0.5])
+    robot._external_wrench = np.array([1.0, 2.0, 3.0, 0.1, 0.2, 0.3])
+    robot._external_wrench_frame_id = "link_5"
+    robot._latest_state = (np.zeros(5), np.zeros(5), np.array([9.0, 8.0, 7.0, 6.0, 5.0]))
+
+    module.AceFollowerROS2Robot._publish_state_loop(robot)
+
+    assert published["state"][0].effort == [9.0, 8.0, 7.0, 6.0, 5.0]
+    assert published["joint_torque"][0].effort == [0.1, 0.2, 0.3, 0.4, 0.5]
+    wrench_msg = published["wrench"][0]
+    assert wrench_msg.header.frame_id == "link_5"
+    assert wrench_msg.wrench.force.x == pytest.approx(1.0)
+    assert wrench_msg.wrench.force.y == pytest.approx(2.0)
+    assert wrench_msg.wrench.force.z == pytest.approx(3.0)
+    assert wrench_msg.wrench.torque.x == pytest.approx(0.1)
+    assert wrench_msg.wrench.torque.y == pytest.approx(0.2)
+    assert wrench_msg.wrench.torque.z == pytest.approx(0.3)
 
 
 def test_follower_publish_state_loop_skips_px4_arm_state_when_not_five_axis(monkeypatch):

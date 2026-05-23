@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from acetele.config.config_loader import ConfigLoader
+from acetele.robot.base_robot import BaseRobot
 
 
 def test_config_loader_accepts_direct_robot_config(tmp_path):
@@ -59,3 +60,19 @@ servo_types = ["HL3915"]
     assert loader.get_robot_type() == "ace_leader"
     assert loader.get_backend() == "ros2"
     assert loader.get_linker_config()[0]["port"] == "/dev/test"
+
+
+def test_ace_follower_pin_model_path_exists_and_loads():
+    loader = ConfigLoader(Path("acetele/config/ace_follower.toml"))
+
+    class TestRobot(BaseRobot):
+        def act(self):
+            raise NotImplementedError
+
+    robot = TestRobot(loader)
+
+    model = robot.get_pin_model()
+
+    assert robot._urdf_model_path.endswith("ace_follower/description/ace_follower.urdf")
+    assert model.nv == 5
+    assert model.getFrameId("link_5") < len(model.frames)

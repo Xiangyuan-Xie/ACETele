@@ -21,7 +21,11 @@ setup(
     author="Xiangyuan Xie",
     author_email="dragonboat_xxy@163.com",
     packages=find_packages(where="."),
-    package_data={"acetele.config": ["*.toml"]},
+    package_data={
+        "acetele.config": ["*.toml"],
+        "acetele.robot.ace_follower": ["description/*.urdf", "description/meshes/*.STL"],
+        "acetele.robot.ace_leader": ["description/*.urdf", "description/*.xml", "description/meshes/*.STL"],
+    },
     python_requires=">=3.9",
     install_requires=[
         "h5py",

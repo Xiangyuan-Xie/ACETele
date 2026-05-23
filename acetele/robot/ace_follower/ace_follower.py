@@ -21,20 +21,20 @@ class AceFollowerRobot(BaseRobot):
     def __init__(self, config_loader: ConfigLoader):
         super().__init__(config_loader)
         (single_arm_config,) = self._config_loader.get_linker_config()
+        pin_model = self.get_pin_model() if single_arm_config["enable_estimate_external_torque"] else None
         self._equipments: AceFollowerEquipmentLibrary = AceFollowerEquipmentLibrary(
             single_arm=Linker(
                 config=single_arm_config,
+                pin_model=pin_model,
             ),
         )
 
     def act(
         self,
         encode_gripper: bool = True,
-        cal_torque_sign: bool = False,
     ) -> Tuple[Sequence[float], Sequence[float], Sequence[float]]:
         return self._equipments.single_arm.act(
             encode_gripper=encode_gripper,
-            cal_torque_sign=cal_torque_sign,
         )
 
     def set_position(
