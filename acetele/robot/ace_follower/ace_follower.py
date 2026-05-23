@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import time
 from dataclasses import dataclass
 from typing import Optional, Sequence, Tuple
@@ -35,18 +37,19 @@ class AceFollowerRobot(BaseRobot):
             cal_torque_sign=cal_torque_sign,
         )
 
-    def set_position(self, positions: Sequence[float], ids: Optional[Sequence[int]] = None):
-        self._equipments.single_arm.set_position(positions=positions, ids=ids)
-
-    def move_position(
+    def set_position(
         self,
         positions: Sequence[float],
         ids: Optional[Sequence[int]] = None,
-        torque: Optional[Sequence[float]] = None,
+        velocities: Optional[Sequence[float] | float] = None,
+        accelerations: Optional[Sequence[float] | float] = None,
+        torque: Optional[Sequence[float] | float] = None,
     ):
-        self._equipments.single_arm.move_position(
+        self._equipments.single_arm.set_position(
             positions=positions,
             ids=ids,
+            velocities=velocities,
+            accelerations=accelerations,
             torque=torque,
         )
 

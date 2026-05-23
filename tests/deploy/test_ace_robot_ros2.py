@@ -5,6 +5,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import yaml
 
 
 def install_fake_ros_modules(monkeypatch):
@@ -158,6 +159,16 @@ def test_ace_robot_ros2_data_files_exist(monkeypatch):
     assert missing_files == []
 
 
+def test_ace_robot_ros2_default_params_use_profile_sync_keys():
+    params_path = Path("acetele/deploy/ace_robot_ros2/config/ace_robot_params.yaml")
+    params = yaml.safe_load(params_path.read_text())["ace_robot_node"]["ros__parameters"]
+
+    assert params["sync_profile_velocity"] == 2.0
+    assert params["sync_profile_acceleration"] == 3.0
+    assert "sync_move_step_size" not in params
+    assert "sync_move_max_steps" not in params
+
+
 def test_follower_holds_pose_during_sync_request(monkeypatch):
     install_fake_ros_modules(monkeypatch)
     module = importlib.reload(importlib.import_module("acetele.robot.ace_follower.ace_follower_ros2"))
@@ -170,7 +181,6 @@ def test_follower_holds_pose_during_sync_request(monkeypatch):
     robot._heartbeat_timeout_ns = int(1e9)
     robot._latest_state = None
     robot._latest_command = None
-    robot.move_calls = []
     robot.set_calls = []
     published = {"state": [], "px4": [], "status": []}
 
@@ -186,7 +196,6 @@ def test_follower_holds_pose_during_sync_request(monkeypatch):
 
     robot.get_clock = lambda: types.SimpleNamespace(now=lambda: FakeClock())
     robot.get_logger = lambda: types.SimpleNamespace(info=lambda _message: None, warn=lambda _message: None)
-    robot.move_position = lambda positions: robot.move_calls.append(list(positions))
     robot.set_position = lambda positions: robot.set_calls.append(list(positions))
     robot.act = lambda: (np.array([1.0, 2.0]), np.zeros(2), np.zeros(2))
     robot._equipments = types.SimpleNamespace(single_arm=types.SimpleNamespace(ids=[0, 1]))
@@ -199,7 +208,6 @@ def test_follower_holds_pose_during_sync_request(monkeypatch):
 
     module.AceFollowerROS2Robot._command_callback(robot, msg)
 
-    assert robot.move_calls == []
     assert robot.set_calls == []
     assert robot._latest_command is None
     assert not hasattr(robot, "_latest_command_velocity")
@@ -208,7 +216,6 @@ def test_follower_holds_pose_during_sync_request(monkeypatch):
 
     module.AceFollowerROS2Robot._control_loop(robot)
 
-    assert robot.move_calls == []
     assert robot._sync_status == sync.FollowerSyncStatus.READY
     assert robot._latest_state is not None
     assert published == {"state": [], "px4": [], "status": []}
@@ -237,7 +244,6 @@ def test_follower_ignores_commands_until_tracking_mode(monkeypatch):
     robot._heartbeat_timeout_ns = int(1e9)
     robot._latest_state = None
     robot._latest_command = None
-    robot.move_calls = []
     robot.set_calls = []
 
     now_ns = [1_000_000_000]
@@ -249,7 +255,6 @@ def test_follower_ignores_commands_until_tracking_mode(monkeypatch):
 
     robot.get_clock = lambda: types.SimpleNamespace(now=lambda: FakeNow())
     robot.get_logger = lambda: types.SimpleNamespace(info=lambda _message: None)
-    robot.move_position = lambda positions: robot.move_calls.append(list(positions))
     robot.set_position = lambda positions: robot.set_calls.append(list(positions))
     robot.act = lambda: (np.array([0.5, 0.6]), np.zeros(2), np.zeros(2))
 
@@ -257,7 +262,6 @@ def test_follower_ignores_commands_until_tracking_mode(monkeypatch):
     module.AceFollowerROS2Robot._command_callback(robot, command)
     module.AceFollowerROS2Robot._control_loop(robot)
 
-    assert robot.move_calls == []
     assert robot.set_calls == []
     assert robot._sync_status == sync.FollowerSyncStatus.IDLE
 
@@ -267,14 +271,12 @@ def test_follower_ignores_commands_until_tracking_mode(monkeypatch):
     module.AceFollowerROS2Robot._command_callback(robot, command)
     module.AceFollowerROS2Robot._control_loop(robot)
 
-    assert robot.move_calls == []
     assert robot.set_calls == []
     assert robot._sync_status == sync.FollowerSyncStatus.READY
 
     now_ns[0] = 1_200_000_000
     module.AceFollowerROS2Robot._control_loop(robot)
 
-    assert robot.move_calls == []
     assert robot.set_calls == []
     assert robot._sync_status == sync.FollowerSyncStatus.READY
 
@@ -308,7 +310,6 @@ def test_follower_command_timeout_enters_lost_and_requires_resync(monkeypatch):
     robot.get_clock = lambda: types.SimpleNamespace(now=lambda: FakeNow())
     robot.get_logger = lambda: types.SimpleNamespace(info=lambda _message: None)
     robot.set_position = lambda positions: robot.set_calls.append(list(positions))
-    robot.move_position = lambda _positions: None
     robot.act = lambda: (np.array([0.5, 0.6]), np.zeros(2), np.zeros(2))
 
     module.AceFollowerROS2Robot._control_loop(robot)
@@ -328,14 +329,12 @@ def test_follower_sync_request_keeps_ready_when_command_changes(monkeypatch):
     robot._last_command_ns = 1_000_000_000
     robot._heartbeat_lost = False
     robot._latest_command = None
-    robot.move_calls = []
 
     class FakeNow:
         nanoseconds = 1_100_000_000
 
     robot.get_clock = lambda: types.SimpleNamespace(now=lambda: FakeNow())
     robot.get_logger = lambda: types.SimpleNamespace(info=lambda _message: None)
-    robot.move_position = lambda positions: robot.move_calls.append(list(positions))
     robot.act = lambda: (np.array([0.5, 0.6]), np.zeros(2), np.zeros(2))
 
     module.AceFollowerROS2Robot._command_callback(
@@ -344,7 +343,6 @@ def test_follower_sync_request_keeps_ready_when_command_changes(monkeypatch):
     module.AceFollowerROS2Robot._control_loop(robot)
 
     assert robot._sync_status == sync.FollowerSyncStatus.READY
-    assert robot.move_calls == []
 
 
 def test_follower_rejects_invalid_sync_mode(monkeypatch):
@@ -397,7 +395,7 @@ def test_follower_uses_100hz_control_and_publish_timers(monkeypatch):
         "act",
         lambda self: (np.zeros(5), np.zeros(5), np.zeros(5)),
     )
-    monkeypatch.setattr(module.AceFollowerRobot, "move_position", lambda self, _positions: None)
+    monkeypatch.setattr(module.AceFollowerRobot, "set_position", lambda self, _positions, **_kwargs: None)
     monkeypatch.setattr(
         module.AceFollowerROS2Robot,
         "declare_parameter",
@@ -464,8 +462,8 @@ def test_leader_uses_100hz_control_and_publish_timers(monkeypatch):
         "follower_state_timeout": 0.5,
         "sync_position_tolerance": 0.03,
         "sync_stable_duration": 0.2,
-        "sync_move_step_size": 0.2,
-        "sync_move_max_steps": 20,
+        "sync_profile_velocity": 2.0,
+        "sync_profile_acceleration": 3.0,
         "ready_lock_rate": 20.0,
         "ready_resync_threshold": 0.08,
     }
@@ -511,14 +509,18 @@ def test_leader_uses_100hz_control_and_publish_timers(monkeypatch):
     assert not hasattr(robot, "_publish_command")
     assert not hasattr(robot, "_sync_status_timeout")
     assert ("publish_rate", 100.0) in declared
-    assert ("sync_move_step_size", 0.2) in declared
-    assert ("sync_move_max_steps", 20) in declared
+    assert ("sync_move_step_size", 0.2) not in declared
+    assert ("sync_move_max_steps", 20) not in declared
+    assert ("sync_profile_velocity", 2.0) in declared
+    assert ("sync_profile_acceleration", 3.0) in declared
     assert ("ready_lock_rate", 20.0) in declared
     assert ("ready_resync_threshold", 0.08) in declared
     assert robot._control_rate == 100.0
     assert robot._publish_rate == 100.0
-    assert robot._sync_move_step_size == 0.2
-    assert robot._sync_move_max_steps == 20
+    assert not hasattr(robot, "_sync_move_step_size")
+    assert not hasattr(robot, "_sync_move_max_steps")
+    assert robot._sync_profile_velocity == 2.0
+    assert robot._sync_profile_acceleration == 3.0
     assert robot._ready_lock_period_ns == int(0.05e9)
     assert robot._ready_resync_threshold == 0.08
     assert (1.0 / 100.0, "_control_loop") in timers
@@ -582,8 +584,8 @@ def test_leader_auto_aligns_to_follower_state_without_gripper_axis(monkeypatch):
     robot._follower_state_timeout_ns = int(0.5e9)
     robot._sync_position_tolerance = 0.03
     robot._sync_stable_duration_ns = int(0.2e9)
-    robot._sync_move_step_size = 0.2
-    robot._sync_move_max_steps = 20
+    robot._sync_profile_velocity = 2.0
+    robot._sync_profile_acceleration = 3.0
     robot._ready_lock_period_ns = int(0.05e9)
     robot._ready_resync_threshold = 0.08
     robot._last_ready_lock_ns = None
@@ -593,7 +595,6 @@ def test_leader_auto_aligns_to_follower_state_without_gripper_axis(monkeypatch):
     robot._is_landed = False
     robot._latest_command = None
     robot._latest_follower_state = ([0.2, 0.4, 0.6], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0])
-    robot.move_calls = []
     robot.set_calls = []
     logged = []
 
@@ -603,8 +604,9 @@ def test_leader_auto_aligns_to_follower_state_without_gripper_axis(monkeypatch):
     robot.get_clock = lambda: types.SimpleNamespace(now=lambda: FakeNow())
     robot.get_logger = lambda: types.SimpleNamespace(info=lambda message: logged.append(message))
     robot.act = lambda: (np.array([0.1, 0.3, 0.0]), np.zeros(3), np.zeros(3))
-    robot.move_position = lambda positions, ids=None: robot.move_calls.append((list(positions), list(ids)))
-    robot.set_position = lambda *_args, **_kwargs: pytest.fail("SYNC_REQUEST alignment must not call set_position")
+    robot.set_position = lambda positions, ids=None, **kwargs: robot.set_calls.append(
+        (list(positions), list(ids), kwargs)
+    )
     robot._equipments = types.SimpleNamespace(single_arm=types.SimpleNamespace(ids=np.array([0, 1, 4])))
 
     module.AceLeaderROS2Robot._control_loop(robot)
@@ -612,7 +614,7 @@ def test_leader_auto_aligns_to_follower_state_without_gripper_axis(monkeypatch):
     assert robot._sync_mode == sync.LeaderSyncMode.SYNC_REQUEST
     assert robot._latest_command is not None
     assert robot._sync_target_position == [0.2, 0.4]
-    assert robot.move_calls == [([0.2, 0.4], [0, 1])]
+    assert robot.set_calls == [([0.2, 0.4], [0, 1], {"velocities": 2.0, "accelerations": 3.0})]
 
     robot.act = lambda: (np.array([0.2, 0.4, 0.0]), np.zeros(3), np.zeros(3))
     module.AceLeaderROS2Robot._control_loop(robot)
@@ -625,7 +627,48 @@ def test_leader_auto_aligns_to_follower_state_without_gripper_axis(monkeypatch):
     module.AceLeaderROS2Robot._control_loop(robot)
 
     assert robot._sync_mode == sync.LeaderSyncMode.READY
-    assert robot.move_calls[-1] == ([0.2, 0.4], [0, 1])
+    assert robot.set_calls[-1] == ([0.2, 0.4], [0, 1], {"velocities": 2.0, "accelerations": 3.0})
+
+
+def test_leader_sync_uses_configured_gripper_id_when_not_last(monkeypatch):
+    install_fake_ros_modules(monkeypatch)
+    module = importlib.reload(importlib.import_module("acetele.robot.ace_leader.ace_leader_ros2"))
+    sync = importlib.import_module("acetele.utils.teleop_sync")
+    robot = module.AceLeaderROS2Robot.__new__(module.AceLeaderROS2Robot)
+    robot._sync_mode = sync.LeaderSyncMode.IDLE
+    robot._follower_sync_status = sync.FollowerSyncStatus.IDLE
+    robot._last_follower_sync_status_ns = None
+    robot._sync_status_timeout_ns = int(0.5e9)
+    robot._follower_state_timeout_ns = int(0.5e9)
+    robot._sync_position_tolerance = 0.03
+    robot._sync_stable_duration_ns = int(0.2e9)
+    robot._sync_profile_velocity = 2.0
+    robot._sync_profile_acceleration = 3.0
+    robot._ready_lock_period_ns = int(0.05e9)
+    robot._ready_resync_threshold = 0.08
+    robot._last_ready_lock_ns = None
+    robot._sync_stable_since_ns = None
+    robot._sync_target_position = None
+    robot._last_follower_state_ns = 1_000_000_000
+    robot._is_landed = False
+    robot._latest_command = None
+    robot._latest_follower_state = ([1.0, 0.2, 0.4], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0])
+    robot.set_calls = []
+
+    robot.get_clock = lambda: types.SimpleNamespace(now=lambda: types.SimpleNamespace(nanoseconds=1_000_000_000))
+    robot.get_logger = lambda: types.SimpleNamespace(info=lambda _message: None)
+    robot.act = lambda: (np.array([0.0, 0.1, 0.3]), np.zeros(3), np.zeros(3))
+    robot.set_position = lambda positions, ids=None, **kwargs: robot.set_calls.append(
+        (list(positions), list(ids), kwargs)
+    )
+    robot._equipments = types.SimpleNamespace(
+        single_arm=types.SimpleNamespace(ids=np.array([4, 0, 1]), _gripper_id=4)
+    )
+
+    module.AceLeaderROS2Robot._control_loop(robot)
+
+    assert robot._sync_target_position == [0.2, 0.4]
+    assert robot.set_calls == [([0.2, 0.4], [0, 1], {"velocities": 2.0, "accelerations": 3.0})]
 
 
 def test_leader_sync_request_uses_shortest_angle_error_for_stability(monkeypatch):
@@ -640,8 +683,8 @@ def test_leader_sync_request_uses_shortest_angle_error_for_stability(monkeypatch
     robot._follower_state_timeout_ns = int(0.5e9)
     robot._sync_position_tolerance = 0.03
     robot._sync_stable_duration_ns = int(0.2e9)
-    robot._sync_move_step_size = 0.2
-    robot._sync_move_max_steps = 20
+    robot._sync_profile_velocity = 2.0
+    robot._sync_profile_acceleration = 3.0
     robot._ready_lock_period_ns = int(0.05e9)
     robot._ready_resync_threshold = 0.08
     robot._sync_stable_since_ns = 1_000_000_000
@@ -651,18 +694,20 @@ def test_leader_sync_request_uses_shortest_angle_error_for_stability(monkeypatch
     robot._is_landed = False
     robot._latest_command = None
     robot._latest_follower_state = ([-np.pi + 0.01, 0.4, 0.0], [], [])
-    robot.move_calls = []
+    robot.set_calls = []
 
     robot.get_clock = lambda: types.SimpleNamespace(now=lambda: types.SimpleNamespace(nanoseconds=1_200_000_000))
     robot.get_logger = lambda: types.SimpleNamespace(info=lambda _message: None)
     robot.act = lambda: (np.array([np.pi + 0.01, 0.4, 0.0]), np.zeros(3), np.zeros(3))
-    robot.move_position = lambda positions, ids=None: robot.move_calls.append((list(positions), list(ids)))
+    robot.set_position = lambda positions, ids=None, **kwargs: robot.set_calls.append(
+        (list(positions), list(ids), kwargs)
+    )
     robot._equipments = types.SimpleNamespace(single_arm=types.SimpleNamespace(ids=np.array([0, 1, 4])))
 
     module.AceLeaderROS2Robot._control_loop(robot)
 
     assert robot._sync_mode == sync.LeaderSyncMode.READY
-    assert robot.move_calls == [([-np.pi + 0.01, 0.4], [0, 1])]
+    assert robot.set_calls == [([-np.pi + 0.01, 0.4], [0, 1], {"velocities": 2.0, "accelerations": 3.0})]
 
 
 def test_leader_waits_for_gripper_one_before_tracking(monkeypatch):
@@ -677,10 +722,10 @@ def test_leader_waits_for_gripper_one_before_tracking(monkeypatch):
     robot._follower_state_timeout_ns = int(0.5e9)
     robot._sync_position_tolerance = 0.03
     robot._sync_stable_duration_ns = int(0.2e9)
+    robot._sync_profile_velocity = 2.0
+    robot._sync_profile_acceleration = 3.0
     robot._sync_stable_since_ns = 1_000_000_000
     robot._sync_target_position = [0.2, 0.4]
-    robot._sync_move_step_size = 0.2
-    robot._sync_move_max_steps = 20
     robot._ready_lock_period_ns = int(0.05e9)
     robot._ready_resync_threshold = 0.08
     robot._last_ready_lock_ns = 1_000_000_000
@@ -689,24 +734,67 @@ def test_leader_waits_for_gripper_one_before_tracking(monkeypatch):
     robot._latest_command = None
     robot._latest_follower_state = ([0.2, 0.4, 0.0], [], [])
     robot.set_calls = []
-    robot.move_calls = []
     robot.set_torque_enable_calls = []
     logged = []
 
     robot.get_clock = lambda: types.SimpleNamespace(now=lambda: types.SimpleNamespace(nanoseconds=1_100_000_000))
     robot.get_logger = lambda: types.SimpleNamespace(info=lambda message: logged.append(message))
     robot.act = lambda: (np.array([0.2, 0.4, 0.5]), np.zeros(3), np.zeros(3))
-    robot.move_position = lambda positions, ids=None: robot.move_calls.append((list(positions), list(ids)))
-    robot.set_position = lambda *_args, **_kwargs: pytest.fail("READY hold must use move_position")
+    robot.set_position = lambda positions, ids=None, **kwargs: robot.set_calls.append(
+        (list(positions), list(ids), kwargs)
+    )
     robot.set_torque_enable = lambda enable, ids=None: robot.set_torque_enable_calls.append((enable, list(ids)))
     robot._equipments = types.SimpleNamespace(single_arm=types.SimpleNamespace(ids=np.array([0, 1, 4])))
 
     module.AceLeaderROS2Robot._control_loop(robot)
 
     assert robot._sync_mode == sync.LeaderSyncMode.READY
-    assert robot.move_calls == [([0.2, 0.4], [0, 1])]
+    assert robot.set_calls == [([0.2, 0.4], [0, 1], {"velocities": 2.0, "accelerations": 3.0})]
 
     robot.act = lambda: (np.array([0.2, 0.4, 1.0]), np.zeros(3), np.zeros(3))
+    module.AceLeaderROS2Robot._control_loop(robot)
+
+    assert robot._sync_mode == sync.LeaderSyncMode.TRACKING
+    assert robot.set_torque_enable_calls == [(module.TorqueEnable.Disable, [0, 1])]
+
+
+def test_leader_without_gripper_enters_tracking_without_release_gate(monkeypatch):
+    install_fake_ros_modules(monkeypatch)
+    module = importlib.reload(importlib.import_module("acetele.robot.ace_leader.ace_leader_ros2"))
+    sync = importlib.import_module("acetele.utils.teleop_sync")
+    robot = module.AceLeaderROS2Robot.__new__(module.AceLeaderROS2Robot)
+    robot._sync_mode = sync.LeaderSyncMode.READY
+    robot._follower_sync_status = sync.FollowerSyncStatus.READY
+    robot._last_follower_sync_status_ns = 1_000_000_000
+    robot._sync_status_timeout_ns = int(0.5e9)
+    robot._follower_state_timeout_ns = int(0.5e9)
+    robot._sync_position_tolerance = 0.03
+    robot._sync_stable_duration_ns = int(0.2e9)
+    robot._sync_profile_velocity = 2.0
+    robot._sync_profile_acceleration = 3.0
+    robot._sync_stable_since_ns = 1_000_000_000
+    robot._sync_target_position = [0.2, 0.4]
+    robot._ready_lock_period_ns = int(0.05e9)
+    robot._ready_resync_threshold = 0.08
+    robot._last_ready_lock_ns = 1_000_000_000
+    robot._last_follower_state_ns = 1_000_000_000
+    robot._is_landed = False
+    robot._latest_command = None
+    robot._latest_follower_state = ([0.2, 0.4], [], [])
+    robot.set_calls = []
+    robot.set_torque_enable_calls = []
+
+    robot.get_clock = lambda: types.SimpleNamespace(now=lambda: types.SimpleNamespace(nanoseconds=1_100_000_000))
+    robot.get_logger = lambda: types.SimpleNamespace(info=lambda _message: None)
+    robot.act = lambda: (np.array([0.2, 0.4]), np.zeros(2), np.zeros(2))
+    robot.set_position = lambda positions, ids=None, **kwargs: robot.set_calls.append(
+        (list(positions), list(ids), kwargs)
+    )
+    robot.set_torque_enable = lambda enable, ids=None: robot.set_torque_enable_calls.append((enable, list(ids)))
+    robot._equipments = types.SimpleNamespace(
+        single_arm=types.SimpleNamespace(ids=np.array([0, 1]), _gripper_id=-1)
+    )
+
     module.AceLeaderROS2Robot._control_loop(robot)
 
     assert robot._sync_mode == sync.LeaderSyncMode.TRACKING
@@ -724,8 +812,8 @@ def test_leader_ready_hold_waits_for_lock_period(monkeypatch):
     robot._sync_status_timeout_ns = int(0.5e9)
     robot._follower_state_timeout_ns = int(0.5e9)
     robot._sync_position_tolerance = 0.03
-    robot._sync_move_step_size = 0.2
-    robot._sync_move_max_steps = 20
+    robot._sync_profile_velocity = 2.0
+    robot._sync_profile_acceleration = 3.0
     robot._ready_lock_period_ns = int(0.05e9)
     robot._ready_resync_threshold = 0.08
     robot._last_ready_lock_ns = 1_000_000_000
@@ -734,7 +822,7 @@ def test_leader_ready_hold_waits_for_lock_period(monkeypatch):
     robot._is_landed = False
     robot._latest_follower_state = ([0.2, 0.4, 0.0], [], [])
     robot._latest_command = None
-    robot.move_calls = []
+    robot.set_calls = []
     robot.set_torque_enable_calls = []
 
     now_ns = [1_020_000_000, 1_060_000_000]
@@ -743,15 +831,17 @@ def test_leader_ready_hold_waits_for_lock_period(monkeypatch):
     )
     robot.get_logger = lambda: types.SimpleNamespace(info=lambda _message: None)
     robot.act = lambda: (np.array([0.2, 0.4, 0.5]), np.zeros(3), np.zeros(3))
-    robot.move_position = lambda positions, ids=None: robot.move_calls.append((list(positions), list(ids)))
+    robot.set_position = lambda positions, ids=None, **kwargs: robot.set_calls.append(
+        (list(positions), list(ids), kwargs)
+    )
     robot.set_torque_enable = lambda enable, ids=None: robot.set_torque_enable_calls.append((enable, list(ids)))
     robot._equipments = types.SimpleNamespace(single_arm=types.SimpleNamespace(ids=np.array([0, 1, 4])))
 
     module.AceLeaderROS2Robot._control_loop(robot)
-    assert robot.move_calls == []
+    assert robot.set_calls == []
 
     module.AceLeaderROS2Robot._control_loop(robot)
-    assert robot.move_calls == [([0.2, 0.4], [0, 1])]
+    assert robot.set_calls == [([0.2, 0.4], [0, 1], {"velocities": 2.0, "accelerations": 3.0})]
 
 
 def test_leader_ready_large_error_returns_to_sync_request_without_hold(monkeypatch):
@@ -765,8 +855,8 @@ def test_leader_ready_large_error_returns_to_sync_request_without_hold(monkeypat
     robot._sync_status_timeout_ns = int(0.5e9)
     robot._follower_state_timeout_ns = int(0.5e9)
     robot._sync_position_tolerance = 0.03
-    robot._sync_move_step_size = 0.2
-    robot._sync_move_max_steps = 20
+    robot._sync_profile_velocity = 2.0
+    robot._sync_profile_acceleration = 3.0
     robot._ready_lock_period_ns = int(0.05e9)
     robot._ready_resync_threshold = 0.08
     robot._last_ready_lock_ns = 1_000_000_000
@@ -775,12 +865,12 @@ def test_leader_ready_large_error_returns_to_sync_request_without_hold(monkeypat
     robot._is_landed = False
     robot._latest_follower_state = ([0.2, 0.4, 0.0], [], [])
     robot._latest_command = None
-    robot.move_calls = []
+    robot.set_calls = []
 
     robot.get_clock = lambda: types.SimpleNamespace(now=lambda: types.SimpleNamespace(nanoseconds=1_100_000_000))
     robot.get_logger = lambda: types.SimpleNamespace(info=lambda _message: None)
     robot.act = lambda: (np.array([0.6, 0.4, 0.5]), np.zeros(3), np.zeros(3))
-    robot.move_position = (
+    robot.set_position = (
         lambda *_args, **_kwargs: pytest.fail("READY large error must resync instead of holding")
     )
     robot.set_torque_enable = lambda *_args, **_kwargs: None

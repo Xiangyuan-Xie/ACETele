@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import time
 from dataclasses import dataclass
 from typing import Optional, Sequence, Tuple
@@ -40,31 +42,24 @@ class AceLeaderRobot(BaseRobot):
     def apply_torque_feedback(self, external_torque: Sequence[float]):
         self._equipments.single_arm.apply_torque_feedback(external_torque)
 
-    def set_position(self, positions: Sequence[float], ids: Optional[Sequence[int]] = None):
-        self._equipments.single_arm.set_position(positions=positions, ids=ids)
+    def set_position(
+        self,
+        positions: Sequence[float],
+        ids: Optional[Sequence[int]] = None,
+        velocities: Optional[Sequence[float] | float] = None,
+        accelerations: Optional[Sequence[float] | float] = None,
+        torque: Optional[Sequence[float] | float] = None,
+    ):
+        self._equipments.single_arm.set_position(
+            positions=positions,
+            ids=ids,
+            velocities=velocities,
+            accelerations=accelerations,
+            torque=torque,
+        )
 
     def set_torque_enable(self, enable: TorqueEnable, ids: Optional[Sequence[int]] = None):
         self._equipments.single_arm.set_torque_enable(enable=enable, ids=ids)
-
-    def set_position_and_torque(
-        self,
-        positions: Sequence[float],
-        torques: Sequence[float],
-        ids: Optional[Sequence[int]] = None,
-    ):
-        self._equipments.single_arm.set_position_and_torque(positions=positions, torques=torques, ids=ids)
-
-    def move_position(
-        self,
-        positions: Sequence[float],
-        ids: Optional[Sequence[int]] = None,
-        torque: Optional[Sequence[float]] = None,
-    ):
-        self._equipments.single_arm.move_position(
-            positions=positions,
-            ids=ids,
-            torque=torque,
-        )
 
 
 if __name__ == "__main__":

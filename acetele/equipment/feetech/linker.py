@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import time
 from threading import Event, Lock, Thread
 from typing import Any, Dict, Optional, Sequence, Tuple
@@ -26,6 +28,15 @@ NO_LOAD_CURRENT = {
     "HL3915": 260,
 }
 
+HLS_PROFILE_DEFAULTS_BY_SERVO = {
+    "HL3950": {"acceleration": 0, "current": 1000, "velocity": 110},
+    "HL3930": {"acceleration": 250, "current": 1000, "velocity": 100},
+    "HL3915": {"acceleration": 0, "current": 500, "velocity": 250},
+}
+
+PROFILE_VELOCITY_UNIT_RAD_PER_SEC = 0.732 * np.pi / 30.0
+PROFILE_ACCELERATION_UNIT_RAD_PER_SEC2 = 8.7 * np.pi / 180.0
+
 
 class Linker(BaseEquipment):
     def __init__(self, config: Dict[str, Any], driver: Optional[FeeTechDriver] = None, pin_model: pin.Model = None):
@@ -37,7 +48,28 @@ class Linker(BaseEquipment):
         self._enable_gravity_compensation = config["enable_gravity_compensation"]
         self._enable_estimate_external_torque = config["enable_estimate_external_torque"]
         self._control_period = float(config.get("control_period", 0.004))
-        self._driver = driver if driver is not None else FeeTechDriver(self._ids, config["port"])
+        if "servo_types" not in config:
+            raise ValueError("servo_types must be specified.")
+        self._servo_types = np.array(config["servo_types"])
+        if len(self._servo_types) != len(self._ids):
+            raise ValueError("servo_types must have the same length as joint_ids.")
+        unknown_servo_types = sorted(set(self._servo_types) - set(HLS_PROFILE_DEFAULTS_BY_SERVO))
+        if unknown_servo_types:
+            raise ValueError(f"unsupported servo_types: {unknown_servo_types}")
+        self._profile_acceleration_defaults = np.array(
+            [HLS_PROFILE_DEFAULTS_BY_SERVO[servo_type]["acceleration"] for servo_type in self._servo_types]
+        )
+        self._profile_current_defaults = np.array(
+            [HLS_PROFILE_DEFAULTS_BY_SERVO[servo_type]["current"] for servo_type in self._servo_types]
+        )
+        self._profile_velocity_defaults = np.array(
+            [HLS_PROFILE_DEFAULTS_BY_SERVO[servo_type]["velocity"] for servo_type in self._servo_types]
+        )
+        self._driver = (
+            driver
+            if driver is not None
+            else FeeTechDriver(self._ids, config["port"])
+        )
 
         self._gripper_id = config["gripper_id"]
         if self._gripper_id >= 0:
@@ -51,7 +83,6 @@ class Linker(BaseEquipment):
             config["gripper_type"],
         )
 
-        self._servo_types = np.array(config["servo_types"])
         self._torque_current_mapping = np.array([KT_MAPPING[servo] * 1000.0 for servo in self._servo_types])
         self._no_load_current = np.array([NO_LOAD_CURRENT[servo] for servo in self._servo_types])
 
@@ -73,7 +104,7 @@ class Linker(BaseEquipment):
             self._gravity_comp_modifier = 1.2
 
             self._stiction_dither_flag = np.ones(self._dof, dtype=bool)
-            self._stiction_comp_enable_speed = 0.9
+            self._stiction_comp_enable_velocity = 0.9
             self._stiction_comp_gain = 0.6
 
             self._feedback_external_torque = np.zeros(self._dof)
@@ -104,13 +135,14 @@ class Linker(BaseEquipment):
         encoded_pos, encoded_vel, encoded_current = self._driver.get_state()
 
         positions = np.array(list(encoded_pos.values())) * self._signs * np.pi / 2048.0
-        if encode_gripper:
-            gripper = positions[-1] % (2 * np.pi)
+        if encode_gripper and self._gripper_id >= 0:
+            gripper_index = int(np.where(self._ids == self._gripper_id)[0][0])
+            gripper = positions[gripper_index] % (2 * np.pi)
             if gripper > np.pi:
                 gripper -= 2 * np.pi
             elif gripper <= -np.pi:
                 gripper += 2 * np.pi
-            positions[-1] = np.clip(gripper * self._gripper_encoding_scale, 0.0, 1.0)
+            positions[gripper_index] = np.clip(gripper * self._gripper_encoding_scale, 0.0, 1.0)
 
         velocities = np.array(list(encoded_vel.values())) * self._signs * 0.732 * np.pi / 30
 
@@ -135,12 +167,13 @@ class Linker(BaseEquipment):
 
         assert len(ids) == len(torques), "ids and torques must have the same length."
         assert np.all(np.isin(ids, self._ids)), "ids is illegal."
+        indices = np.array([int(np.where(self._ids == int(ft_id))[0][0]) for ft_id in ids])
 
         torques_Nm = np.asarray(torques)
         torques_kgcmf = torques_Nm / 0.0981
-        torque_current_mapping = self._torque_current_mapping[np.searchsorted(self._ids, ids)]
-        no_load_current = self._no_load_current[np.searchsorted(self._ids, ids)]
-        signs = self._signs[np.searchsorted(self._ids, ids)]
+        torque_current_mapping = self._torque_current_mapping[indices]
+        no_load_current = self._no_load_current[indices]
+        signs = self._signs[indices]
         currents = ((torque_current_mapping * np.abs(torques_kgcmf) + no_load_current) * np.sign(torques_kgcmf)) * signs
         encoded_currents = np.around(currents / -6.5).astype(int)
         if self._gripper_id >= 0:
@@ -156,6 +189,9 @@ class Linker(BaseEquipment):
         self,
         positions: Sequence[float],
         ids: Optional[Sequence[int]] = None,
+        velocities: Optional[Sequence[float] | float] = None,
+        accelerations: Optional[Sequence[float] | float] = None,
+        torque: Optional[Sequence[float] | float] = None,
         encode_gripper: bool = True,
     ):
         if ids is None:
@@ -164,110 +200,54 @@ class Linker(BaseEquipment):
 
         assert len(ids) == len(positions), "ids and positions must have the same length."
         assert np.all(np.isin(ids, self._ids)), "ids is illegal."
-
-        positions_array = np.asarray(positions, dtype=float).copy()
-        signs = self._signs[np.searchsorted(self._ids, ids)]
-        if encode_gripper and self._gripper_id >= 0 and self._gripper_id in ids:
-            gripper_index = int(np.where(ids == self._gripper_id)[0][0])
-            positions_array[gripper_index] = positions_array[gripper_index] * self._gripper_decoding_scale
-        encoded_positions = np.around(positions_array * signs * 2048.0 / np.pi).astype(int)
-        self._driver.set_position(ids, encoded_positions)
-
-    def set_position_and_torque(
-        self,
-        positions: Sequence[float],
-        torques: Sequence[float],
-        ids: Optional[Sequence[int]] = None,
-        encode_gripper: bool = True,
-    ):
-        if ids is None:
-            ids = self._ids
-        ids = np.asarray(ids)
-
-        assert len(ids) == len(positions) == len(torques), "ids, positions and torques must have the same length."
-        assert np.all(np.isin(ids, self._ids)), "ids is illegal."
-
-        positions_array = np.asarray(positions, dtype=float).copy()
-        signs = self._signs[np.searchsorted(self._ids, ids)]
-        if encode_gripper and self._gripper_id >= 0 and self._gripper_id in ids:
-            gripper_index = int(np.where(ids == self._gripper_id)[0][0])
-            positions_array[gripper_index] = positions_array[gripper_index] * self._gripper_decoding_scale
-        encoded_positions = np.around(positions_array * signs * 2048.0 / np.pi).astype(int)
-
-        current_positions_dict, _, _ = self._driver.get_state()
-        current_positions_array = np.array([current_positions_dict[ft_id] for ft_id in ids])
-        encoded_positions += np.round((current_positions_array - encoded_positions) / 4096.0).astype(int) * 4096
-
-        torques_Nm = np.asarray(torques)
-        torques_kgcmf = torques_Nm / 0.0981
-        torque_current_mapping = self._torque_current_mapping[np.searchsorted(self._ids, ids)]
-        no_load_current = self._no_load_current[np.searchsorted(self._ids, ids)]
-        currents = torque_current_mapping * np.abs(torques_kgcmf) + no_load_current
-        encoded_currents = np.around(currents / 6.5).astype(int)
-
-        self._driver.set_position_and_current(ids, encoded_positions, encoded_currents)
-
-    def move_position(
-        self,
-        positions: Sequence[float],
-        ids: Optional[Sequence[int]] = None,
-        torque: Optional[Sequence[float]] = None,
-    ) -> int:
-        if ids is None:
-            ids = self._ids
-
-        ids = np.asarray(ids)
-        positions_array = np.asarray(positions, dtype=float)
-        assert len(ids) == len(positions_array), "ids and positions must have the same length."
-        assert np.all(np.isin(ids, self._ids)), "ids is illegal."
-
-        torque_array = None
+        indices = np.array([int(np.where(self._ids == int(ft_id))[0][0]) for ft_id in ids])
         if torque is not None:
             torque_array = np.asarray(torque, dtype=float)
             if torque_array.ndim == 0:
                 torque_array = np.full(len(ids), float(torque_array))
             assert len(torque_array) == len(ids), "ids and torques must have the same length."
+        else:
+            torque_array = None
 
-        current_pos, _, _ = self.act()
-        indices = np.searchsorted(self._ids, ids)
-        current_pos = current_pos[indices]
-
-        target_pos = positions_array
-        errors = (target_pos - current_pos + np.pi) % (2 * np.pi) - np.pi
-        if self._gripper_id >= 0 and self._gripper_id in ids:
+        positions_array = np.asarray(positions, dtype=float).copy()
+        signs = self._signs[indices]
+        if encode_gripper and self._gripper_id >= 0 and self._gripper_id in ids:
             gripper_index = int(np.where(ids == self._gripper_id)[0][0])
-            errors[gripper_index] = target_pos[gripper_index] - current_pos[gripper_index]
+            positions_array[gripper_index] = positions_array[gripper_index] * self._gripper_decoding_scale
+        encoded_positions = np.around(positions_array * signs * 2048.0 / np.pi).astype(int)
 
-        max_error = np.max(np.abs(errors))
-        if max_error < 0.001:
-            if torque_array is None:
-                self.set_position(ids=ids, positions=positions_array)
-            else:
-                self.set_position_and_torque(
-                    ids=ids,
-                    positions=positions_array,
-                    torques=torque_array,
-                )
-            return 1
-
-        num_steps = int(np.ceil(max_error / 0.02 - 1e-12))
-        num_steps = min(num_steps, 200)
-
-        for i in range(1, num_steps + 1):
-            t = i / num_steps
-            interp_pos = current_pos + errors * t
-            if self._gripper_id >= 0 and self._gripper_id in ids:
-                interp_pos[gripper_index] = np.clip(interp_pos[gripper_index], 0.0, 1.0)
-            if torque_array is None:
-                self.set_position(ids=ids, positions=interp_pos)
-            else:
-                self.set_position_and_torque(
-                    ids=ids,
-                    positions=interp_pos,
-                    torques=torque_array,
-                )
-
-        return num_steps
+        if torque_array is None:
+            currents_raw = self._profile_current_defaults[indices].copy()
+        else:
+            torques_Nm = np.asarray(torque_array, dtype=float)
+            torques_kgcmf = torques_Nm / 0.0981
+            torque_current_mapping = self._torque_current_mapping[indices]
+            no_load_current = self._no_load_current[indices]
+            currents = torque_current_mapping * np.abs(torques_kgcmf) + no_load_current
+            currents_raw = np.around(currents / 6.5).astype(int)
+        if velocities is None:
+            velocities_raw = self._profile_velocity_defaults[indices].copy()
+        else:
+            velocities_array = np.asarray(velocities, dtype=float)
+            if velocities_array.ndim == 0:
+                velocities_array = np.full(len(ids), float(velocities_array))
+            assert len(velocities_array) == len(ids), "ids and velocities must have the same length."
+            velocities_raw = np.around(velocities_array / PROFILE_VELOCITY_UNIT_RAD_PER_SEC).astype(int)
+        if accelerations is None:
+            accelerations_raw = self._profile_acceleration_defaults[indices].copy()
+        else:
+            accelerations_array = np.asarray(accelerations, dtype=float)
+            if accelerations_array.ndim == 0:
+                accelerations_array = np.full(len(ids), float(accelerations_array))
+            assert len(accelerations_array) == len(ids), "ids and accelerations must have the same length."
+            accelerations_raw = np.around(accelerations_array / PROFILE_ACCELERATION_UNIT_RAD_PER_SEC2).astype(int)
+        self._driver.set_position(
+            ids,
+            encoded_positions,
+            currents_raw=currents_raw,
+            velocities_raw=velocities_raw,
+            accelerations_raw=accelerations_raw,
+        )
 
     def get_frequency(self) -> float:
         return self._driver.get_frequency()
@@ -315,7 +295,7 @@ class Linker(BaseEquipment):
             tau_fb = self._torque_feedback(joint_vel)  # 力反馈
             tau = tau_n + tau_g + tau_ss + tau_fb
             self.set_torque(tau)
-            # self.set_position_and_torque(positions=joint_pos, torques=tau, encode_gripper=False)
+            # self.set_position(positions=joint_pos, torque=tau, encode_gripper=False)
             sleep_time = self._control_period - (time.perf_counter() - loop_start)
             if sleep_time > 0.0:
                 time.sleep(sleep_time)
@@ -336,7 +316,7 @@ class Linker(BaseEquipment):
     def _friction_compensation(self, tau_g, joint_vel):
         tau_ss = np.zeros(self._dof)
         for i in range(self._dof):
-            if abs(joint_vel[i]) < self._stiction_comp_enable_speed:
+            if abs(joint_vel[i]) < self._stiction_comp_enable_velocity:
                 if self._stiction_dither_flag[i]:
                     tau_ss[i] += self._stiction_comp_gain * abs(tau_g[i])
                 else:

@@ -7,7 +7,7 @@ ace_robot_node:
     follower_state_timeout: 0.5
     sync_position_tolerance: 0.03
     sync_stable_duration: 0.2
-    sync_move_step_size: 0.2
-    sync_move_max_steps: 20
+    sync_profile_velocity: 2.0
+    sync_profile_acceleration: 3.0
     ready_lock_rate: 20.0
     ready_resync_threshold: 0.08

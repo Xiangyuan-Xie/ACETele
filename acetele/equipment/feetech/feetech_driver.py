@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import time
 from collections import deque
 from enum import Enum
@@ -12,7 +14,7 @@ from tqdm import tqdm
 from acetele.equipment.feetech.feetech_sdk.group_sync_read import GroupSyncRead
 from acetele.equipment.feetech.feetech_sdk.group_sync_write import GroupSyncWrite
 from acetele.equipment.feetech.feetech_sdk.hls import (
-    HLS_GOAL_POSITION_L,
+    HLS_ACC,
     HLS_GOAL_TORQUE_L,
     HLS_MODE,
     HLS_PRESENT_CURRENT_L,
@@ -45,8 +47,14 @@ class FeeTechStateTimeoutError(RuntimeError):
 
 
 class FeeTechDriver:
-    def __init__(self, ids: Sequence[int], port: str, baudrate: int = 1000000):
+    def __init__(
+        self,
+        ids: Sequence[int],
+        port: str,
+        baudrate: int = 1000000,
+    ):
         self._ids = ids
+        self._id_to_index = {int(ft_id): index for index, ft_id in enumerate(self._ids)}
 
         logger.info(f"FeeTechDriver initializing with port: {port}, baudrate: {baudrate}")
 
@@ -58,8 +66,7 @@ class FeeTechDriver:
         self._groupSyncWriteModeHandler = GroupSyncWrite(self._packetHandler, HLS_MODE, 1)
         self._groupSyncWriteTorqueEnableHandler = GroupSyncWrite(self._packetHandler, HLS_TORQUE_ENABLE, 1)
         self._groupSyncWriteGoalCurrentHandler = GroupSyncWrite(self._packetHandler, HLS_GOAL_TORQUE_L, 2)
-        self._groupSyncWriteGoalPositionHandler = GroupSyncWrite(self._packetHandler, HLS_GOAL_POSITION_L, 2)
-        self._groupSyncWriteGoalPositionAndCurrentHandler = GroupSyncWrite(self._packetHandler, HLS_GOAL_POSITION_L, 4)
+        self._groupSyncWriteGoalPositionProfileHandler = GroupSyncWrite(self._packetHandler, HLS_ACC, 7)
 
         self._position: Dict[int, int] = {}
         self._velocity: Dict[int, int] = {}
@@ -73,6 +80,7 @@ class FeeTechDriver:
         self._lock = Lock()
         self._stop_flag = Event()
         self._comm_task_queue: Queue[Callable] = Queue(maxsize=32)
+
         self._comm_thread = Thread(target=self._comm_worker, daemon=True)
         self._comm_thread.start()
 
@@ -220,8 +228,8 @@ class FeeTechDriver:
         for ft_id, mode in zip(target_ids, target_modes):
             self._mode[ft_id] = mode
 
-    def set_current(self, ids: Sequence[int], goal_currents: Sequence[int]):
-        assert len(ids) == len(goal_currents), "ids and currents must have the same length."
+    def set_current(self, ids: Sequence[int], goal_currents_raw: Sequence[int]):
+        assert len(ids) == len(goal_currents_raw), "ids and currents must have the same length."
         if len(ids) == 0:
             return
 
@@ -240,7 +248,7 @@ class FeeTechDriver:
         )
 
         params = []
-        for ft_id, current in zip(ids, goal_currents):
+        for ft_id, current in zip(ids, goal_currents_raw):
             current = self._packetHandler.scs_toscs(current, 15)
             params.append((ft_id, [self._packetHandler.scs_lobyte(current), self._packetHandler.scs_hibyte(current)]))
 
@@ -249,50 +257,36 @@ class FeeTechDriver:
 
         self._comm_task_queue.put(task)
 
-    def set_position(self, ids: Sequence[int], goal_positions: Sequence[int]):
-        assert len(ids) == len(goal_positions), "ids and positions must have the same length."
+    def set_position(
+        self,
+        ids: Sequence[int],
+        goal_positions_raw: Sequence[int],
+        currents_raw: Sequence[int] | None = None,
+        velocities_raw: Sequence[int] | None = None,
+        accelerations_raw: Sequence[int] | None = None,
+    ):
+        assert len(ids) == len(goal_positions_raw), "ids and positions must have the same length."
         if len(ids) == 0:
             return
-
-        current_positions_dict, _, _ = self.get_state()
-        current_positions_array = np.array([current_positions_dict[ft_id] for ft_id in ids])
-        goal_positions_array = np.asarray(goal_positions).copy()
-        goal_positions_array += np.round((current_positions_array - goal_positions_array) / 4096).astype(int) * 4096
-
-        set_mode_waiting_list = []
-        for ft_id in ids:
-            if self._mode.get(ft_id) != Mode.Position:
-                set_mode_waiting_list.append(ft_id)
-        self.set_mode(set_mode_waiting_list, [Mode.Position] * len(set_mode_waiting_list))
-
-        set_torque_enable_waiting_list = []
-        for ft_id in ids:
-            if not self._torque_enable.get(ft_id) == TorqueEnable.Enable:
-                set_torque_enable_waiting_list.append(ft_id)
-        self.set_torque_enable(
-            set_torque_enable_waiting_list, [TorqueEnable.Enable] * len(set_torque_enable_waiting_list)
-        )
-
-        params = []
-        for ft_id, position in zip(ids, goal_positions_array):
-            position = self._packetHandler.scs_toscs(position, 15)
-            params.append((ft_id, [self._packetHandler.scs_lobyte(position), self._packetHandler.scs_hibyte(position)]))
-
-        def task():
-            self._write_sync_params(self._groupSyncWriteGoalPositionHandler, params, "groupSyncWriteGoalPosition")
-
-        self._comm_task_queue.put(task)
-
-    def set_position_and_current(self, ids: Sequence[int], goal_positions: Sequence[int], goal_currents: Sequence[int]):
+        ids = np.asarray(ids)
         assert (
-            len(ids) == len(goal_positions) == len(goal_currents)
-        ), "ids, positions, and currents must have the same length."
-        if len(ids) == 0:
-            return
-
+            velocities_raw is not None and accelerations_raw is not None and currents_raw is not None
+        ), "velocities_raw, accelerations_raw, and currents_raw are required."
+        assert len(ids) == len(velocities_raw), "ids and velocities must have the same length."
+        velocities_array = np.asarray(velocities_raw, dtype=int)
+        assert len(ids) == len(accelerations_raw), "ids and accelerations must have the same length."
+        accelerations_array = np.asarray(accelerations_raw, dtype=int)
+        assert len(ids) == len(currents_raw), "ids and currents must have the same length."
+        currents_array = np.asarray(currents_raw, dtype=int)
+        assert np.all(velocities_array >= 0), "velocities must be non-negative."
+        assert np.all(accelerations_array >= 0), "accelerations must be non-negative."
+        assert np.all(currents_array >= 0), "currents must be non-negative."
+        assert np.all(velocities_array <= 32767), "velocities must fit in 15 bits."
+        assert np.all(accelerations_array <= 255), "accelerations must fit in one byte."
+        assert np.all(currents_array <= 32767), "currents must fit in 15 bits."
         current_positions_dict, _, _ = self.get_state()
-        current_positions_array = np.array([current_positions_dict[ft_id] for ft_id in ids])
-        goal_positions_array = np.asarray(goal_positions).copy()
+        current_positions_array = np.array([current_positions_dict[int(ft_id)] for ft_id in ids])
+        goal_positions_array = np.asarray(goal_positions_raw).copy()
         goal_positions_array += np.round((current_positions_array - goal_positions_array) / 4096).astype(int) * 4096
 
         set_mode_waiting_list = []
@@ -309,26 +303,36 @@ class FeeTechDriver:
             set_torque_enable_waiting_list, [TorqueEnable.Enable] * len(set_torque_enable_waiting_list)
         )
 
-        params = []
-        for ft_id, position, current in zip(ids, goal_positions_array, goal_currents):
+        profile_params = []
+        for ft_id, position, velocity, acceleration, current in zip(
+            ids,
+            goal_positions_array,
+            velocities_array,
+            accelerations_array,
+            currents_array,
+        ):
             position = self._packetHandler.scs_toscs(position, 15)
-            params.append(
+            velocity = self._packetHandler.scs_toscs(int(velocity), 15)
+            profile_params.append(
                 (
                     ft_id,
                     [
+                        int(acceleration),
                         self._packetHandler.scs_lobyte(position),
                         self._packetHandler.scs_hibyte(position),
-                        self._packetHandler.scs_lobyte(current),
-                        self._packetHandler.scs_hibyte(current),
+                        self._packetHandler.scs_lobyte(int(current)),
+                        self._packetHandler.scs_hibyte(int(current)),
+                        self._packetHandler.scs_lobyte(velocity),
+                        self._packetHandler.scs_hibyte(velocity),
                     ],
                 )
             )
 
         def task():
             self._write_sync_params(
-                self._groupSyncWriteGoalPositionAndCurrentHandler,
-                params,
-                "groupSyncWriteGoalPositionAndCurrent",
+                self._groupSyncWriteGoalPositionProfileHandler,
+                profile_params,
+                "groupSyncWriteGoalPositionProfile",
             )
 
         self._comm_task_queue.put(task)

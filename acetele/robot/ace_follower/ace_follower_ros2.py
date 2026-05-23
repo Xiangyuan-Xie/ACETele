@@ -59,7 +59,7 @@ class AceFollowerROS2Robot(Node, AceFollowerRobot):
         self._state_publish_timer = self.create_timer(publish_period, self._publish_state_loop)
 
         current_pos, _, _ = self.act()
-        self.move_position(current_pos)
+        self.set_position(current_pos)
         self._sync_mode = LeaderSyncMode.IDLE
         self._sync_status = FollowerSyncStatus.IDLE
         self._last_command_ns = None

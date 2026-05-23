@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import time
 from typing import Optional, Sequence, Tuple
 
@@ -11,6 +13,7 @@ class AceLeaderMockRobot(BaseRobot):
     def __init__(self, config_loader: ConfigLoader):
         super().__init__(config_loader)
         (single_arm_config,) = self._config_loader.get_linker_config()
+        self.ids = np.array(single_arm_config["joint_ids"])
         self.dof = len(single_arm_config["joint_ids"])
         self.current_positions = np.array([-1.57, 3.14, 0.0, 0.0, 0.0])
         self.current_velocities = np.zeros(self.dof)
@@ -20,19 +23,21 @@ class AceLeaderMockRobot(BaseRobot):
     def act(self) -> Tuple[Sequence[float], Sequence[float], Sequence[float]]:
         return self.current_positions, self.current_velocities, self.current_currents
 
-    def set_position(self, positions: Sequence[float]):
-        self.current_positions = np.asarray(positions)
-
-    def set_position_and_torque(self, positions: Sequence[float], torques: Sequence[float]):
-        self.set_position(positions)
-
-    def move_position(
+    def set_position(
         self,
         positions: Sequence[float],
         ids: Optional[Sequence[int]] = None,
-        torque: Optional[Sequence[float]] = None,
+        velocities: Optional[Sequence[float] | float] = None,
+        accelerations: Optional[Sequence[float] | float] = None,
+        torque: Optional[Sequence[float] | float] = None,
     ):
-        self.set_position(positions)
+        del velocities, accelerations, torque
+        if ids is None:
+            self.current_positions = np.asarray(positions)
+            return
+        next_positions = self.current_positions.copy()
+        next_positions[np.searchsorted(self.ids, ids)] = np.asarray(positions)
+        self.current_positions = next_positions
 
 
 if __name__ == "__main__":

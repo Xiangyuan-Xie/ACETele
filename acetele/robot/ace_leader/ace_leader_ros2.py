@@ -32,10 +32,10 @@ class AceLeaderROS2Robot(Node, AceLeaderRobot):
         self._sync_position_tolerance = self.get_parameter("sync_position_tolerance").value
         self.declare_parameter("sync_stable_duration", 0.2)
         self._sync_stable_duration_ns = int(self.get_parameter("sync_stable_duration").value * 1e9)
-        self.declare_parameter("sync_move_step_size", 0.2)
-        self._sync_move_step_size = self.get_parameter("sync_move_step_size").value
-        self.declare_parameter("sync_move_max_steps", 20)
-        self._sync_move_max_steps = int(self.get_parameter("sync_move_max_steps").value)
+        self.declare_parameter("sync_profile_velocity", 2.0)
+        self._sync_profile_velocity = self.get_parameter("sync_profile_velocity").value
+        self.declare_parameter("sync_profile_acceleration", 3.0)
+        self._sync_profile_acceleration = self.get_parameter("sync_profile_acceleration").value
         self.declare_parameter("ready_lock_rate", 20.0)
         self._ready_lock_period_ns = int((1.0 / self.get_parameter("ready_lock_rate").value) * 1e9)
         self.declare_parameter("ready_resync_threshold", max(self._sync_position_tolerance * 2.0, 0.08))
@@ -126,6 +126,16 @@ class AceLeaderROS2Robot(Node, AceLeaderRobot):
             indices = [index for index, ft_id in enumerate(ids) if int(ft_id) != int(gripper_id)]
         return ids[indices].tolist(), indices
 
+    def _gripper_index(self) -> Optional[int]:
+        ids = np.asarray(self._equipments.single_arm.ids)
+        gripper_id = getattr(self._equipments.single_arm, "_gripper_id", ids[-1] if ids.size else -1)
+        if gripper_id is None or int(gripper_id) < 0:
+            return None
+        matches = np.where(ids == int(gripper_id))[0]
+        if len(matches) == 0:
+            return None
+        return int(matches[0])
+
     def _extract_non_gripper_position(self, positions: Sequence[float]) -> list[float]:
         _, indices = self._non_gripper_ids_and_indices()
         return [float(positions[index]) for index in indices]
@@ -169,7 +179,12 @@ class AceLeaderROS2Robot(Node, AceLeaderRobot):
                 return
         non_gripper_ids, _ = self._non_gripper_ids_and_indices()
         if non_gripper_ids:
-            self.move_position(self._sync_target_position, ids=non_gripper_ids)
+            self.set_position(
+                self._sync_target_position,
+                ids=non_gripper_ids,
+                velocities=self._sync_profile_velocity,
+                accelerations=self._sync_profile_acceleration,
+            )
             self._last_ready_lock_ns = now_ns
 
     def _update_sync_request(self, joint_pos: Sequence[float], now_ns: int):
@@ -185,7 +200,12 @@ class AceLeaderROS2Robot(Node, AceLeaderRobot):
             self._sync_target_position = self._extract_non_gripper_position(follower_pos)
             non_gripper_ids, _ = self._non_gripper_ids_and_indices()
             if non_gripper_ids:
-                self.move_position(self._sync_target_position, ids=non_gripper_ids)
+                self.set_position(
+                    self._sync_target_position,
+                    ids=non_gripper_ids,
+                    velocities=self._sync_profile_velocity,
+                    accelerations=self._sync_profile_acceleration,
+                )
             return
 
         current = np.asarray(self._extract_non_gripper_position(joint_pos), dtype=float)
@@ -264,7 +284,8 @@ class AceLeaderROS2Robot(Node, AceLeaderRobot):
                 self._request_sync("Leader drifted from synchronized pose. Requesting synchronization.")
                 return
             self._lock_to_sync_target(now_ns)
-            if joint_pos[-1] >= 1.0:
+            gripper_index = self._gripper_index()
+            if gripper_index is None or joint_pos[gripper_index] >= 1.0:
                 non_gripper_ids, _ = self._non_gripper_ids_and_indices()
                 if non_gripper_ids:
                     self.set_torque_enable(TorqueEnable.Disable, ids=non_gripper_ids)
