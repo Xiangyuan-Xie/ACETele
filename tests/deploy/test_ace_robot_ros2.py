@@ -53,8 +53,11 @@ class FakeRosGripper:
         self.position_calls = []
         self.fragile_calls = []
         self.fragile_result = True
+        self.fragile_force_control_enabled = True
+        self.state_reads = 0
 
     def get_state(self):
+        self.state_reads += 1
         return types.SimpleNamespace(
             public_position=self.position,
             raw_position=self.position,
@@ -66,8 +69,8 @@ class FakeRosGripper:
     def act(self):
         return np.array([self.position]), np.array([self.velocity]), np.array([self.effort])
 
-    def set_fragile_position(self, position):
-        self.fragile_calls.append(float(position))
+    def set_fragile_position(self, position, state=None):
+        self.fragile_calls.append((float(position), state))
         return self.fragile_result
 
     def set_position(self, position, **kwargs):
@@ -621,6 +624,54 @@ def test_follower_tracking_sends_arm_command_to_single_arm(monkeypatch):
     assert robot._sync_status == sync.FollowerSyncStatus.TRACKING
 
 
+def test_follower_tracking_sends_arm_command_before_reading_state(monkeypatch):
+    install_fake_ros_modules(monkeypatch)
+    module = importlib.reload(importlib.import_module("acetele.robot.ace_follower.ace_follower_ros2"))
+    sync = importlib.import_module("acetele.utils.teleop_sync")
+    robot = module.AceFollowerROS2Robot.__new__(module.AceFollowerROS2Robot)
+    robot._sync_mode = sync.LeaderSyncMode.TRACKING
+    robot._sync_status = sync.FollowerSyncStatus.READY
+    robot._last_command_ns = 1_000_000_000
+    robot._heartbeat_lost = False
+    robot._heartbeat_timeout_ns = int(1e9)
+    robot._latest_arm_command = [0.5, 0.6]
+    robot._latest_gripper_command = None
+    robot._last_external_estimate_ns = None
+    robot._external_joint_torque = None
+    robot._external_wrench = None
+    events = []
+
+    class FakeNow:
+        nanoseconds = 1_100_000_000
+
+    class FakeArm:
+        ids = np.array([0, 1])
+        external_torque_estimation_enabled = False
+        external_wrench_frame_name = "link_5"
+
+        def set_position(self, positions):
+            events.append(("set_position", list(positions)))
+
+        def get_linker_state(self):
+            events.append(("get_linker_state", None))
+            return types.SimpleNamespace(
+                public_positions=np.array([0.1, 0.2]),
+                raw_positions=np.array([0.1, 0.2]),
+                velocities=np.zeros(2),
+                motor_torque_magnitude=np.zeros(2),
+                motor_torque_signed=np.zeros(2),
+            )
+
+    robot._equipments = types.SimpleNamespace(single_arm=FakeArm(), gripper=None)
+    robot.get_clock = lambda: types.SimpleNamespace(now=lambda: FakeNow())
+    robot.get_logger = lambda: types.SimpleNamespace(info=lambda _message: None)
+
+    module.AceFollowerROS2Robot._control_loop(robot)
+
+    assert events[:2] == [("set_position", [0.5, 0.6]), ("get_linker_state", None)]
+    assert robot._sync_status == sync.FollowerSyncStatus.TRACKING
+
+
 def test_follower_tracking_keeps_arm_command_arm_only(monkeypatch):
     install_fake_ros_modules(monkeypatch)
     module = importlib.reload(importlib.import_module("acetele.robot.ace_follower.ace_follower_ros2"))
@@ -649,6 +700,129 @@ def test_follower_tracking_keeps_arm_command_arm_only(monkeypatch):
     assert arm.position_calls == [([0.4, 0.5, 0.6], {})]
 
 
+def test_follower_gripper_command_callback_only_caches_command(monkeypatch):
+    install_fake_ros_modules(monkeypatch)
+    module = importlib.reload(importlib.import_module("acetele.robot.ace_follower.ace_follower_ros2"))
+    sync = importlib.import_module("acetele.utils.teleop_sync")
+    robot = module.AceFollowerROS2Robot.__new__(module.AceFollowerROS2Robot)
+    robot._sync_mode = sync.LeaderSyncMode.TRACKING
+    gripper = FakeRosGripper(position=0.2)
+    robot._equipments = types.SimpleNamespace(single_arm=None, gripper=gripper)
+
+    module.AceFollowerROS2Robot._gripper_command_callback(robot, types.SimpleNamespace(position=[0.8]))
+
+    assert robot._latest_gripper_command == [0.8]
+    assert gripper.fragile_calls == []
+    assert gripper.position_calls == []
+
+
+def test_follower_tracking_sends_cached_gripper_command(monkeypatch):
+    install_fake_ros_modules(monkeypatch)
+    module = importlib.reload(importlib.import_module("acetele.robot.ace_follower.ace_follower_ros2"))
+    sync = importlib.import_module("acetele.utils.teleop_sync")
+    robot = module.AceFollowerROS2Robot.__new__(module.AceFollowerROS2Robot)
+    robot._sync_mode = sync.LeaderSyncMode.TRACKING
+    robot._sync_status = sync.FollowerSyncStatus.READY
+    robot._last_command_ns = 1_000_000_000
+    robot._heartbeat_lost = False
+    robot._heartbeat_timeout_ns = int(1e9)
+    robot._latest_arm_command = None
+    robot._latest_gripper_command = [0.8]
+    cached_gripper_state = types.SimpleNamespace(public_position=0.2)
+    robot._latest_gripper_device_state = cached_gripper_state
+    robot._last_external_estimate_ns = None
+    robot._external_joint_torque = None
+    robot._external_wrench = None
+    gripper = FakeRosGripper(position=0.2)
+    gripper.fragile_result = False
+
+    class FakeNow:
+        nanoseconds = 1_100_000_000
+
+    robot.get_clock = lambda: types.SimpleNamespace(now=lambda: FakeNow())
+    robot.get_logger = lambda: types.SimpleNamespace(info=lambda _message: None)
+    arm = install_robot_level_state(robot, [0.0, 0.0])
+    robot._equipments = types.SimpleNamespace(single_arm=arm, gripper=gripper)
+
+    module.AceFollowerROS2Robot._control_loop(robot)
+
+    assert gripper.fragile_calls == [(0.8, cached_gripper_state)]
+    assert gripper.position_calls == [(0.8, {})]
+    assert robot._sync_status == sync.FollowerSyncStatus.TRACKING
+
+
+def test_follower_tracking_waits_for_cached_gripper_state_before_fragile_command(monkeypatch):
+    install_fake_ros_modules(monkeypatch)
+    module = importlib.reload(importlib.import_module("acetele.robot.ace_follower.ace_follower_ros2"))
+    sync = importlib.import_module("acetele.utils.teleop_sync")
+    robot = module.AceFollowerROS2Robot.__new__(module.AceFollowerROS2Robot)
+    robot._sync_mode = sync.LeaderSyncMode.TRACKING
+    robot._sync_status = sync.FollowerSyncStatus.READY
+    robot._last_command_ns = 1_000_000_000
+    robot._heartbeat_lost = False
+    robot._heartbeat_timeout_ns = int(1e9)
+    robot._latest_arm_command = None
+    robot._latest_gripper_command = [0.8]
+    robot._latest_gripper_device_state = None
+    robot._last_external_estimate_ns = None
+    robot._external_joint_torque = None
+    robot._external_wrench = None
+    gripper = FakeRosGripper(position=0.2)
+
+    class FakeNow:
+        nanoseconds = 1_100_000_000
+
+    robot.get_clock = lambda: types.SimpleNamespace(now=lambda: FakeNow())
+    robot.get_logger = lambda: types.SimpleNamespace(info=lambda _message: None)
+    arm = install_robot_level_state(robot, [0.0, 0.0])
+    robot._equipments = types.SimpleNamespace(single_arm=arm, gripper=gripper)
+
+    module.AceFollowerROS2Robot._control_loop(robot)
+
+    assert gripper.fragile_calls == []
+    assert gripper.position_calls == []
+    assert robot._latest_gripper_device_state.public_position == pytest.approx(0.2)
+
+    cached_gripper_state = robot._latest_gripper_device_state
+    module.AceFollowerROS2Robot._control_loop(robot)
+
+    assert gripper.fragile_calls == [(0.8, cached_gripper_state)]
+    assert gripper.state_reads == 2
+
+
+def test_follower_ready_does_not_send_cached_gripper_command(monkeypatch):
+    install_fake_ros_modules(monkeypatch)
+    module = importlib.reload(importlib.import_module("acetele.robot.ace_follower.ace_follower_ros2"))
+    sync = importlib.import_module("acetele.utils.teleop_sync")
+    robot = module.AceFollowerROS2Robot.__new__(module.AceFollowerROS2Robot)
+    robot._sync_mode = sync.LeaderSyncMode.READY
+    robot._sync_status = sync.FollowerSyncStatus.READY
+    robot._last_command_ns = None
+    robot._heartbeat_lost = False
+    robot._heartbeat_timeout_ns = int(1e9)
+    robot._latest_arm_command = None
+    robot._latest_gripper_command = [0.8]
+    robot._latest_gripper_device_state = types.SimpleNamespace(public_position=0.2)
+    robot._last_external_estimate_ns = None
+    robot._external_joint_torque = None
+    robot._external_wrench = None
+    gripper = FakeRosGripper(position=0.2)
+
+    class FakeNow:
+        nanoseconds = 1_100_000_000
+
+    robot.get_clock = lambda: types.SimpleNamespace(now=lambda: FakeNow())
+    robot.get_logger = lambda: types.SimpleNamespace(info=lambda _message: None)
+    arm = install_robot_level_state(robot, [0.0, 0.0])
+    robot._equipments = types.SimpleNamespace(single_arm=arm, gripper=gripper)
+
+    module.AceFollowerROS2Robot._control_loop(robot)
+
+    assert gripper.fragile_calls == []
+    assert gripper.position_calls == []
+    assert robot._sync_status == sync.FollowerSyncStatus.READY
+
+
 def test_ros2_classes_do_not_define_robot_arm_boundary_helpers(monkeypatch):
     install_fake_ros_modules(monkeypatch)
     leader_module = importlib.reload(importlib.import_module("acetele.robot.ace_leader.ace_leader_ros2"))
@@ -671,6 +845,9 @@ def test_follower_ros2_external_estimate_uses_arm_only_state(monkeypatch):
     robot._heartbeat_lost = False
     robot._heartbeat_timeout_ns = int(1e9)
     robot._latest_arm_command = None
+    robot._external_estimate_future = None
+    robot._external_joint_torque = None
+    robot._external_wrench = None
 
     class FakeArm:
         ids = np.array([0, 1])
@@ -710,18 +887,142 @@ def test_follower_ros2_external_estimate_uses_arm_only_state(monkeypatch):
     robot.get_clock = lambda: types.SimpleNamespace(now=lambda: types.SimpleNamespace(nanoseconds=1_004_000_000))
     robot.get_logger = lambda: types.SimpleNamespace(info=lambda _message: None)
 
+    class PendingFuture:
+        def done(self):
+            return False
+
+    class FakeExecutor:
+        def __init__(self):
+            self.submissions = []
+
+        def submit(self, fn, *args):
+            self.submissions.append((fn, args))
+            return PendingFuture()
+
+    executor = FakeExecutor()
+    robot._external_estimate_executor = executor
+
     module.AceFollowerROS2Robot._control_loop(robot)
 
-    joint_pos, joint_vel, joint_effort, dt = arm.estimate_calls[0]
+    assert arm.estimate_calls == []
+    assert robot._external_joint_torque is None
+    assert robot._external_wrench is None
+    assert len(executor.submissions) == 1
+    submitted_fn, args = executor.submissions[0]
+    joint_pos, joint_vel, joint_effort, dt = args
     np.testing.assert_allclose(joint_pos, np.array([1.1, 1.2]))
     np.testing.assert_allclose(joint_vel, np.array([2.1, 2.2]))
     np.testing.assert_allclose(joint_effort, np.array([4.1, 4.2]))
     assert dt == pytest.approx(0.004)
-    np.testing.assert_allclose(robot._external_joint_torque, np.array([0.4, 0.5]))
+    result = submitted_fn(*args)
     np.testing.assert_allclose(arm.wrench_calls[0][0], np.array([1.1, 1.2]))
     np.testing.assert_allclose(arm.wrench_calls[0][1], np.array([0.4, 0.5]))
+    np.testing.assert_allclose(result[0], np.array([0.4, 0.5]))
+    np.testing.assert_allclose(result[1], np.array([1.0, 2.0, 3.0, 0.1, 0.2, 0.3]))
+    assert result[2] == "link_5"
+
+
+def test_follower_ros2_external_estimate_harvests_finished_future(monkeypatch):
+    install_fake_ros_modules(monkeypatch)
+    module = importlib.reload(importlib.import_module("acetele.robot.ace_follower.ace_follower_ros2"))
+    sync = importlib.import_module("acetele.utils.teleop_sync")
+    robot = module.AceFollowerROS2Robot.__new__(module.AceFollowerROS2Robot)
+    robot._last_external_estimate_ns = None
+    robot._external_joint_torque = None
+    robot._external_wrench = None
+    robot._sync_mode = sync.LeaderSyncMode.IDLE
+    robot._sync_status = sync.FollowerSyncStatus.IDLE
+    robot._last_command_ns = None
+    robot._heartbeat_lost = False
+    robot._heartbeat_timeout_ns = int(1e9)
+    robot._latest_arm_command = None
+
+    class FinishedFuture:
+        def done(self):
+            return True
+
+        def result(self):
+            return np.array([0.4, 0.5]), np.array([1.0, 2.0, 3.0, 0.1, 0.2, 0.3]), "link_5"
+
+    class FakeArm:
+        ids = np.array([0, 1])
+        external_torque_estimation_enabled = True
+        external_wrench_frame_name = "link_5"
+
+        def get_linker_state(self):
+            return types.SimpleNamespace(
+                public_positions=np.array([0.1, 0.2]),
+                raw_positions=np.array([1.1, 1.2]),
+                velocities=np.array([2.1, 2.2]),
+                motor_torque_magnitude=np.array([3.1, 3.2]),
+                motor_torque_signed=np.array([4.1, 4.2]),
+            )
+
+    robot._external_estimate_future = FinishedFuture()
+    robot._equipments = types.SimpleNamespace(single_arm=FakeArm(), gripper=None)
+    robot.get_clock = lambda: types.SimpleNamespace(now=lambda: types.SimpleNamespace(nanoseconds=1_004_000_000))
+    robot.get_logger = lambda: types.SimpleNamespace(info=lambda _message: None, warn=lambda _message: None)
+
+    module.AceFollowerROS2Robot._control_loop(robot)
+
+    np.testing.assert_allclose(robot._external_joint_torque, np.array([0.4, 0.5]))
     np.testing.assert_allclose(robot._external_wrench, np.array([1.0, 2.0, 3.0, 0.1, 0.2, 0.3]))
     assert robot._external_wrench_frame_id == "link_5"
+    assert robot._external_estimate_future is None
+
+
+def test_follower_ros2_external_estimate_skips_sample_while_future_pending(monkeypatch):
+    install_fake_ros_modules(monkeypatch)
+    module = importlib.reload(importlib.import_module("acetele.robot.ace_follower.ace_follower_ros2"))
+    sync = importlib.import_module("acetele.utils.teleop_sync")
+    robot = module.AceFollowerROS2Robot.__new__(module.AceFollowerROS2Robot)
+    robot._last_external_estimate_ns = 1_000_000_000
+    robot._external_joint_torque = None
+    robot._external_wrench = None
+    robot._sync_mode = sync.LeaderSyncMode.IDLE
+    robot._sync_status = sync.FollowerSyncStatus.IDLE
+    robot._last_command_ns = None
+    robot._heartbeat_lost = False
+    robot._heartbeat_timeout_ns = int(1e9)
+    robot._latest_arm_command = None
+
+    class PendingFuture:
+        def done(self):
+            return False
+
+    class FakeExecutor:
+        def __init__(self):
+            self.submissions = []
+
+        def submit(self, fn, *args):
+            self.submissions.append((fn, args))
+            return PendingFuture()
+
+    class FakeArm:
+        ids = np.array([0, 1])
+        external_torque_estimation_enabled = True
+        external_wrench_frame_name = "link_5"
+
+        def get_linker_state(self):
+            return types.SimpleNamespace(
+                public_positions=np.array([0.1, 0.2]),
+                raw_positions=np.array([1.1, 1.2]),
+                velocities=np.array([2.1, 2.2]),
+                motor_torque_magnitude=np.array([3.1, 3.2]),
+                motor_torque_signed=np.array([4.1, 4.2]),
+            )
+
+    executor = FakeExecutor()
+    robot._external_estimate_future = PendingFuture()
+    robot._external_estimate_executor = executor
+    robot._equipments = types.SimpleNamespace(single_arm=FakeArm(), gripper=None)
+    robot.get_clock = lambda: types.SimpleNamespace(now=lambda: types.SimpleNamespace(nanoseconds=1_004_000_000))
+    robot.get_logger = lambda: types.SimpleNamespace(info=lambda _message: None)
+
+    module.AceFollowerROS2Robot._control_loop(robot)
+
+    assert executor.submissions == []
+    assert robot._external_estimate_future is not None
 
 
 def test_follower_ros2_external_estimate_disabled_clears_publish_cache(monkeypatch):
@@ -823,9 +1124,10 @@ def test_leader_uses_100hz_control_and_publish_timers(monkeypatch):
     robot = module.AceLeaderROS2Robot(config_loader=None)
 
     assert hasattr(robot, "_control_timer")
-    assert hasattr(robot, "_arm_command_publish_timer")
+    assert hasattr(robot, "_sync_mode_publish_timer")
     assert hasattr(robot, "_arm_command_pub")
     assert hasattr(robot, "_latest_arm_command")
+    assert not hasattr(robot, "_arm_command_publish_timer")
     assert not hasattr(robot, "_command_publish_timer")
     assert not hasattr(robot, "_command_pub")
     assert not hasattr(robot, "_latest_command")
@@ -849,7 +1151,7 @@ def test_leader_uses_100hz_control_and_publish_timers(monkeypatch):
     assert robot._ready_lock_period_ns == int(0.05e9)
     assert robot._ready_resync_threshold == 0.08
     assert (1.0 / 100.0, "_control_loop") in timers
-    assert (1.0 / 100.0, "_publish_arm_command_loop") in timers
+    assert (1.0 / 100.0, "_publish_sync_mode_loop") in timers
     publisher_topics = {topic for _msg_type, topic, _qos in publishers}
     subscription_topics = {topic for _msg_type, topic, _callback, _qos in subscriptions}
     assert {
@@ -861,7 +1163,7 @@ def test_leader_uses_100hz_control_and_publish_timers(monkeypatch):
     assert all(not topic.startswith("/arm/") for topic in publisher_topics | subscription_topics)
 
 
-def test_leader_control_loop_caches_command_for_publish_timer(monkeypatch):
+def test_leader_control_loop_publishes_tracking_commands_directly(monkeypatch):
     install_fake_ros_modules(monkeypatch)
     module = importlib.reload(importlib.import_module("acetele.robot.ace_leader.ace_leader_ros2"))
     sync = importlib.import_module("acetele.utils.teleop_sync")
@@ -873,13 +1175,13 @@ def test_leader_control_loop_caches_command_for_publish_timer(monkeypatch):
     robot._last_follower_state_ns = None
     robot._is_landed = False
     robot._latest_arm_command = None
-    published = {"mode": [], "command": []}
+    robot._latest_gripper_command = None
+    published = {"mode": [], "arm": [], "gripper": []}
 
     joint_pos = np.array([0.1, 0.2])
     joint_vel = np.array([1.1, 1.2])
     joint_effort = np.array([2.1, 2.2])
 
-    robot.act = lambda: (joint_pos, joint_vel, joint_effort)
     robot.get_clock = lambda: types.SimpleNamespace(
         now=lambda: types.SimpleNamespace(
             nanoseconds=1_000_000_000,
@@ -887,43 +1189,116 @@ def test_leader_control_loop_caches_command_for_publish_timer(monkeypatch):
         )
     )
     robot.ids = np.array([0, 1])
+    robot._equipments = types.SimpleNamespace(
+        single_arm=types.SimpleNamespace(
+            ids=np.array([0, 1]),
+            act=lambda: (joint_pos, joint_vel, joint_effort),
+        ),
+        gripper=None,
+    )
     robot._sync_mode_pub = types.SimpleNamespace(publish=lambda msg: published["mode"].append(msg))
-    robot._arm_command_pub = types.SimpleNamespace(publish=lambda msg: published["command"].append(msg))
+    robot._arm_command_pub = types.SimpleNamespace(publish=lambda msg: published["arm"].append(msg))
+    robot._gripper_command_pub = types.SimpleNamespace(publish=lambda msg: published["gripper"].append(msg))
 
     module.AceLeaderROS2Robot._control_loop(robot)
 
-    assert published == {"mode": [], "command": []}
+    assert published["mode"][0].data == "tracking"
+    assert published["arm"][0].position == [0.1, 0.2]
+    assert published["arm"][0].velocity == [1.1, 1.2]
+    assert published["arm"][0].effort == [2.1, 2.2]
+    assert published["gripper"] == []
     cached_pos, cached_vel, cached_effort = robot._latest_arm_command
     assert cached_pos is joint_pos
     assert cached_vel is joint_vel
     assert cached_effort is joint_effort
 
-    module.AceLeaderROS2Robot._publish_arm_command_loop(robot)
 
-    assert published["mode"][0].data == "tracking"
-    assert published["command"][0].position == [0.1, 0.2]
-    assert published["command"][0].velocity == [1.1, 1.2]
-    assert published["command"][0].effort == [2.1, 2.2]
+def test_leader_control_loop_does_not_publish_commands_outside_tracking(monkeypatch):
+    install_fake_ros_modules(monkeypatch)
+    module = importlib.reload(importlib.import_module("acetele.robot.ace_leader.ace_leader_ros2"))
+    sync = importlib.import_module("acetele.utils.teleop_sync")
+    robot = module.AceLeaderROS2Robot.__new__(module.AceLeaderROS2Robot)
+    robot._sync_mode = sync.LeaderSyncMode.READY
+    robot._follower_sync_status = sync.FollowerSyncStatus.READY
+    robot._last_follower_sync_status_ns = 1_000_000_000
+    robot._sync_status_timeout_ns = int(0.5e9)
+    robot._follower_state_timeout_ns = int(0.5e9)
+    robot._sync_position_tolerance = 0.03
+    robot._sync_profile_velocity = 2.0
+    robot._sync_profile_acceleration = 3.0
+    robot._ready_resync_threshold = 0.08
+    robot._sync_target_position = [0.1, 0.2]
+    robot._last_ready_lock_ns = 1_000_000_000
+    robot._ready_lock_period_ns = int(0.05e9)
+    robot._last_follower_state_ns = 1_000_000_000
+    robot._is_landed = False
+    robot._latest_arm_command = None
+    robot._latest_gripper_command = None
+    published = {"mode": [], "arm": [], "gripper": []}
+
+    robot.get_clock = lambda: types.SimpleNamespace(
+        now=lambda: types.SimpleNamespace(
+            nanoseconds=1_100_000_000,
+            to_msg=lambda: "stamp",
+        )
+    )
+    robot.get_logger = lambda: types.SimpleNamespace(info=lambda _message: None)
+    robot.set_position = lambda *_args, **_kwargs: None
+    robot.ids = np.array([0, 1, 4])
+    gripper = FakeRosGripper(position=0.5)
+    robot._equipments = types.SimpleNamespace(
+        single_arm=types.SimpleNamespace(
+            ids=np.array([0, 1]),
+            act=lambda: (np.array([0.1, 0.2]), np.zeros(2), np.zeros(2)),
+        ),
+        gripper=gripper,
+    )
+    robot._sync_mode_pub = types.SimpleNamespace(publish=lambda msg: published["mode"].append(msg))
+    robot._arm_command_pub = types.SimpleNamespace(publish=lambda msg: published["arm"].append(msg))
+    robot._gripper_command_pub = types.SimpleNamespace(publish=lambda msg: published["gripper"].append(msg))
+
+    module.AceLeaderROS2Robot._control_loop(robot)
+
+    assert published["mode"][0].data == "ready"
+    assert published["arm"] == []
+    assert published["gripper"] == []
 
 
-def test_leader_publish_arm_command_loop_publishes_gripper_command_separately(monkeypatch):
+def test_leader_control_loop_publishes_gripper_command_separately(monkeypatch):
     install_fake_ros_modules(monkeypatch)
     module = importlib.reload(importlib.import_module("acetele.robot.ace_leader.ace_leader_ros2"))
     sync = importlib.import_module("acetele.utils.teleop_sync")
     robot = module.AceLeaderROS2Robot.__new__(module.AceLeaderROS2Robot)
     published = {"arm": [], "gripper": [], "mode": []}
     robot._sync_mode = sync.LeaderSyncMode.TRACKING
-    robot._latest_arm_command = (np.array([0.1, 0.2]), np.array([1.1, 1.2]), np.array([2.1, 2.2]))
-    robot._latest_gripper_command = (np.array([0.9]), np.array([0.3]), np.array([0.4]))
+    robot._follower_sync_status = sync.FollowerSyncStatus.TRACKING
+    robot._last_follower_sync_status_ns = None
+    robot._sync_status_timeout_ns = int(0.5e9)
+    robot._last_follower_state_ns = None
+    robot._is_landed = False
+    robot._latest_arm_command = None
+    robot._latest_gripper_command = None
     robot.gripper_id = 4
-    robot._equipments = types.SimpleNamespace(single_arm=types.SimpleNamespace(ids=np.array([0, 1])), gripper=None)
-    robot.get_clock = lambda: types.SimpleNamespace(now=lambda: types.SimpleNamespace(to_msg=lambda: "stamp"))
+    robot._equipments = types.SimpleNamespace(
+        single_arm=types.SimpleNamespace(
+            ids=np.array([0, 1]),
+            act=lambda: (np.array([0.1, 0.2]), np.array([1.1, 1.2]), np.array([2.1, 2.2])),
+        ),
+        gripper=FakeRosGripper(position=0.9, velocity=0.3, effort=0.4),
+    )
+    robot.get_clock = lambda: types.SimpleNamespace(
+        now=lambda: types.SimpleNamespace(
+            nanoseconds=1_000_000_000,
+            to_msg=lambda: "stamp",
+        )
+    )
     robot._sync_mode_pub = types.SimpleNamespace(publish=lambda msg: published["mode"].append(msg))
     robot._arm_command_pub = types.SimpleNamespace(publish=lambda msg: published["arm"].append(msg))
     robot._gripper_command_pub = types.SimpleNamespace(publish=lambda msg: published["gripper"].append(msg))
 
-    module.AceLeaderROS2Robot._publish_arm_command_loop(robot)
+    module.AceLeaderROS2Robot._control_loop(robot)
 
+    assert published["mode"][0].data == "tracking"
     assert published["arm"][0].position == [0.1, 0.2]
     assert published["gripper"][0].name == ["joint_5"]
     assert published["gripper"][0].position == [0.9]
@@ -1244,7 +1619,6 @@ def test_leader_publishes_idle_mode_without_command_before_follower_state(monkey
     robot._arm_command_pub = types.SimpleNamespace(publish=lambda msg: published_commands.append(msg))
 
     module.AceLeaderROS2Robot._control_loop(robot)
-    module.AceLeaderROS2Robot._publish_arm_command_loop(robot)
 
     assert robot._sync_mode == sync.LeaderSyncMode.IDLE
     assert robot._latest_arm_command is not None
@@ -1279,7 +1653,6 @@ def test_leader_landing_publishes_stop_mode_without_command(monkeypatch):
     robot._arm_command_pub = types.SimpleNamespace(publish=lambda msg: published_commands.append(msg))
 
     module.AceLeaderROS2Robot._control_loop(robot)
-    module.AceLeaderROS2Robot._publish_arm_command_loop(robot)
 
     assert robot._sync_mode == sync.LeaderSyncMode.STOP
     assert robot._latest_arm_command is not None
@@ -1389,7 +1762,7 @@ def test_sync_mode_and_status_are_published_from_publish_loops(monkeypatch):
     follower._px4_arm_state_pub = types.SimpleNamespace(publish=lambda msg: published_px4_states.append(msg))
     follower._sync_status_pub = types.SimpleNamespace(publish=lambda msg: published_statuses.append(msg.data))
 
-    leader_module.AceLeaderROS2Robot._publish_arm_command_loop(leader)
+    leader_module.AceLeaderROS2Robot._publish_sync_mode_loop(leader)
     follower_module.AceFollowerROS2Robot._publish_state_loop(follower)
 
     assert published_modes == ["sync_request"]
@@ -1565,6 +1938,10 @@ def test_follower_publish_state_loop_publishes_external_estimates(monkeypatch):
         measured_torque_nm=0.08,
         contact_torque_nm=0.07,
         hold_torque_nm=0.09,
+        baseline_torque_nm=0.02,
+        torque_rise_nm=0.06,
+        contact_confirm_count=3,
+        approach_torque_nm=0.5,
     )
     robot._arm_state_pub = types.SimpleNamespace(publish=lambda msg: published["state"].append(msg))
     robot._px4_arm_state_pub = types.SimpleNamespace(publish=lambda msg: published["px4"].append(msg))
@@ -1593,6 +1970,10 @@ def test_follower_publish_state_loop_publishes_external_estimates(monkeypatch):
         "measured_torque_nm": 0.08,
         "contact_torque_nm": 0.07,
         "hold_torque_nm": 0.09,
+        "baseline_torque_nm": 0.02,
+        "torque_rise_nm": 0.06,
+        "contact_confirm_count": 3,
+        "approach_torque_nm": 0.5,
     }
     wrench_msg = published["wrench"][0]
     assert wrench_msg.header.frame_id == "link_5"

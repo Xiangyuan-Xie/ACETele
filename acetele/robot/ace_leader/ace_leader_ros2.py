@@ -79,7 +79,7 @@ class AceLeaderROS2Robot(Node, AceLeaderRobot):
         control_period = 1.0 / self._control_rate
         self._control_timer = self.create_timer(control_period, self._control_loop)
         publish_period = 1.0 / self._publish_rate
-        self._arm_command_publish_timer = self.create_timer(publish_period, self._publish_arm_command_loop)
+        self._sync_mode_publish_timer = self.create_timer(publish_period, self._publish_sync_mode_loop)
 
         self._sync_mode = LeaderSyncMode.IDLE
         self._follower_sync_status = FollowerSyncStatus.IDLE
@@ -214,77 +214,93 @@ class AceLeaderROS2Robot(Node, AceLeaderRobot):
         else:
             self._latest_gripper_command = None
         self._latest_arm_command = (joint_pos, joint_vel, joint_effort)
-        if self._sync_mode == LeaderSyncMode.STOP:
-            return
-        if self._is_landed:
-            self._sync_mode = LeaderSyncMode.STOP
-            self.get_logger().info("Landing detected. Teleoperation stopped.")
-            return
-
-        now_ns = self.get_clock().now().nanoseconds
-        if (
-            self._sync_mode == LeaderSyncMode.TRACKING
-            and self._follower_sync_status in (FollowerSyncStatus.LOST, FollowerSyncStatus.FAULT)
-        ):
-            self._request_sync("Follower reported lost sync. Requesting synchronization.")
-            return
-
-        if (
-            self._sync_mode == LeaderSyncMode.TRACKING
-            and getattr(self, "_last_follower_sync_status_ns", None) is not None
-            and now_ns - self._last_follower_sync_status_ns > self._sync_status_timeout_ns
-        ):
-            self._request_sync("Follower sync status timed out. Requesting synchronization.")
-            return
-
-        if (
-            self._sync_mode == LeaderSyncMode.TRACKING
-            and getattr(self, "_last_follower_state_ns", None) is not None
-            and not self._has_recent_follower_state(now_ns)
-        ):
-            self._request_sync("Follower state timed out. Requesting synchronization.")
-            return
-
-        if self._sync_mode == LeaderSyncMode.IDLE:
-            if self._has_recent_follower_state(now_ns):
-                self._request_sync("Follower arm state received. Requesting synchronization.")
-                self._update_sync_request(joint_pos, now_ns)
-            return
-
-        if self._sync_mode == LeaderSyncMode.SYNC_REQUEST:
-            self._update_sync_request(joint_pos, now_ns)
-            return
-
-        if self._sync_mode == LeaderSyncMode.READY:
-            ready_error_exceeds_threshold = False
-            if self._sync_target_position is not None:
-                current = np.asarray(joint_pos, dtype=float)
-                target = np.asarray(self._sync_target_position, dtype=float)
-                if current.shape != target.shape:
-                    ready_error_exceeds_threshold = True
-                else:
-                    errors = self._shortest_angle_errors(current, target)
-                    ready_error_exceeds_threshold = bool(np.any(np.abs(errors) > self._ready_resync_threshold))
-            if ready_error_exceeds_threshold:
-                self._request_sync("Leader drifted from synchronized pose. Requesting synchronization.")
+        try:
+            if self._sync_mode == LeaderSyncMode.STOP:
                 return
-            self._lock_to_sync_target(now_ns)
-            gripper_value = None
-            if gripper is not None:
-                gripper_pos, _, _ = self._latest_gripper_command
-                gripper_value = float(np.asarray(gripper_pos, dtype=float)[0])
-            if gripper_value is None or gripper_value >= 1.0:
-                arm_ids = np.asarray(getattr(single_arm, "ids", getattr(self, "ids", []))).astype(int).tolist()
-                if arm_ids:
-                    self.set_torque_enable(TorqueEnable.Disable, ids=arm_ids)
-                self._sync_mode = LeaderSyncMode.TRACKING
-                self.get_logger().info("Leader gripper released. Teleoperation tracking started.")
+            if self._is_landed:
+                self._sync_mode = LeaderSyncMode.STOP
+                self.get_logger().info("Landing detected. Teleoperation stopped.")
+                return
 
-    def _publish_arm_command_loop(self):
+            now_ns = self.get_clock().now().nanoseconds
+            if (
+                self._sync_mode == LeaderSyncMode.TRACKING
+                and self._follower_sync_status in (FollowerSyncStatus.LOST, FollowerSyncStatus.FAULT)
+            ):
+                self._request_sync("Follower reported lost sync. Requesting synchronization.")
+                return
+
+            if (
+                self._sync_mode == LeaderSyncMode.TRACKING
+                and getattr(self, "_last_follower_sync_status_ns", None) is not None
+                and now_ns - self._last_follower_sync_status_ns > self._sync_status_timeout_ns
+            ):
+                self._request_sync("Follower sync status timed out. Requesting synchronization.")
+                return
+
+            if (
+                self._sync_mode == LeaderSyncMode.TRACKING
+                and getattr(self, "_last_follower_state_ns", None) is not None
+                and not self._has_recent_follower_state(now_ns)
+            ):
+                self._request_sync("Follower state timed out. Requesting synchronization.")
+                return
+
+            if self._sync_mode == LeaderSyncMode.IDLE:
+                if self._has_recent_follower_state(now_ns):
+                    self._request_sync("Follower arm state received. Requesting synchronization.")
+                    self._update_sync_request(joint_pos, now_ns)
+                return
+
+            if self._sync_mode == LeaderSyncMode.SYNC_REQUEST:
+                self._update_sync_request(joint_pos, now_ns)
+                return
+
+            if self._sync_mode == LeaderSyncMode.READY:
+                ready_error_exceeds_threshold = False
+                if self._sync_target_position is not None:
+                    current = np.asarray(joint_pos, dtype=float)
+                    target = np.asarray(self._sync_target_position, dtype=float)
+                    if current.shape != target.shape:
+                        ready_error_exceeds_threshold = True
+                    else:
+                        errors = self._shortest_angle_errors(current, target)
+                        ready_error_exceeds_threshold = bool(np.any(np.abs(errors) > self._ready_resync_threshold))
+                if ready_error_exceeds_threshold:
+                    self._request_sync("Leader drifted from synchronized pose. Requesting synchronization.")
+                    return
+                self._lock_to_sync_target(now_ns)
+                gripper_value = None
+                if gripper is not None:
+                    gripper_pos, _, _ = self._latest_gripper_command
+                    gripper_value = float(np.asarray(gripper_pos, dtype=float)[0])
+                if gripper_value is None or gripper_value >= 1.0:
+                    arm_ids = np.asarray(getattr(single_arm, "ids", getattr(self, "ids", []))).astype(int).tolist()
+                    if arm_ids:
+                        self.set_torque_enable(TorqueEnable.Disable, ids=arm_ids)
+                    self._sync_mode = LeaderSyncMode.TRACKING
+                    self.get_logger().info("Leader gripper released. Teleoperation tracking started.")
+        finally:
+            self._publish_sync_mode()
+            if self._sync_mode == LeaderSyncMode.TRACKING:
+                self._publish_tracking_command()
+
+    def _publish_sync_mode(self):
+        publisher = getattr(self, "_sync_mode_pub", None)
+        if publisher is None:
+            return
         mode_msg = String()
         mode_msg.data = self._sync_mode.value
-        self._sync_mode_pub.publish(mode_msg)
+        publisher.publish(mode_msg)
+
+    def _publish_sync_mode_loop(self):
+        self._publish_sync_mode()
+
+    def _publish_tracking_command(self):
         if self._latest_arm_command is None or self._sync_mode != LeaderSyncMode.TRACKING:
+            return
+        arm_command_pub = getattr(self, "_arm_command_pub", None)
+        if arm_command_pub is None:
             return
 
         joint_pos, joint_vel, joint_effort = self._latest_arm_command
@@ -296,9 +312,10 @@ class AceLeaderROS2Robot(Node, AceLeaderRobot):
         msg.position = joint_pos.tolist()
         msg.velocity = joint_vel.tolist()
         msg.effort = joint_effort.tolist()
-        self._arm_command_pub.publish(msg)
+        arm_command_pub.publish(msg)
 
-        if self._latest_gripper_command is None:
+        gripper_command_pub = getattr(self, "_gripper_command_pub", None)
+        if self._latest_gripper_command is None or gripper_command_pub is None:
             return
         gripper_pos, gripper_vel, gripper_effort = self._latest_gripper_command
         gripper_msg = JointState()
@@ -308,4 +325,4 @@ class AceLeaderROS2Robot(Node, AceLeaderRobot):
         gripper_msg.position = np.asarray(gripper_pos, dtype=float).tolist()
         gripper_msg.velocity = np.asarray(gripper_vel, dtype=float).tolist()
         gripper_msg.effort = np.asarray(gripper_effort, dtype=float).tolist()
-        self._gripper_command_pub.publish(gripper_msg)
+        gripper_command_pub.publish(gripper_msg)
