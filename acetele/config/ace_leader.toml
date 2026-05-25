@@ -4,11 +4,18 @@ backend = "mock"
 
 [linker.single]
 port = "/dev/ttyUSB0"
-joint_ids = [0, 1, 2, 3, 4]
-joint_signs = [1, -1, -1, -1, 1]
-home_poses = [0.0, 0.0, 0.0, 0.0, 0.0]
-gripper_id = 4
-gripper_type = "ace_leader"
+joint_ids = [0, 1, 2, 3]
+joint_signs = [1, -1, -1, -1]
+home_poses = [0.0, 0.0, 0.0, 0.0]
 enable_gravity_compensation = true
 enable_estimate_external_torque = false
-servo_types = ["HL3915", "HL3915", "HL3915", "HL3915", "HL3915"]
+servo_types = ["HL3915", "HL3915", "HL3915", "HL3915"]
+
+[gripper.single]
+port = "/dev/ttyUSB0"
+joint_id = 4
+joint_sign = 1
+home_pose = 0.0
+servo_type = "HL3915"
+gripper_type = "ace_leader"
+enable_fragile_force_control = false

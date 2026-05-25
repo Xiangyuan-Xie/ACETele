@@ -59,8 +59,6 @@ port = "/dev/test"
 joint_ids = [1, 2, 3]
 joint_signs = [1, -1, 1]
 home_poses = [1.5707963267948966, 1.5707963267948966, 0.001]
-gripper_id = -1
-gripper_type = "ace_leader"
 enable_gravity_compensation = false
 enable_estimate_external_torque = false
 servo_types = ["HL3915", "HL3915", "HL3915"]
@@ -84,7 +82,7 @@ servo_types = ["HL3915", "HL3915", "HL3915"]
     assert driver.closed
 
 
-def test_calibrate_decodes_normalized_follower_gripper_home_pose(tmp_path):
+def test_calibrate_includes_separate_gripper_config_on_same_port(tmp_path):
     config_path = write_config(
         tmp_path,
         "robot.toml",
@@ -95,47 +93,137 @@ backend = "default"
 
 [linker.single]
 port = "/dev/test"
-joint_ids = [0, 1, 4]
-joint_signs = [1, 1, 1]
-home_poses = [1.5707963267948966, -0.5, 1.0]
-gripper_id = 4
-gripper_type = "ace_follower"
-enable_gravity_compensation = false
-enable_estimate_external_torque = false
-servo_types = ["HL3915", "HL3915", "HL3915"]
-""",
-    )
-
-    results = Calibration(config_path=config_path, driver_factory=FakeDriver).calibrate()
-
-    assert results[0].encoded_home_poses == (1024, -326, 896)
-
-
-def test_calibrate_applies_joint_sign_to_decoded_follower_gripper_home_pose(tmp_path):
-    config_path = write_config(
-        tmp_path,
-        "robot.toml",
-        """
-[basic]
-robot_type = "ace_follower"
-backend = "default"
-
-[linker.single]
-port = "/dev/test"
-joint_ids = [0, 4]
+joint_ids = [0, 1]
 joint_signs = [1, -1]
-home_poses = [0.0, 1.0]
-gripper_id = 4
-gripper_type = "ace_follower"
+home_poses = [1.5707963267948966, 0.5]
 enable_gravity_compensation = false
 enable_estimate_external_torque = false
 servo_types = ["HL3915", "HL3915"]
+
+[gripper.single]
+port = "/dev/test"
+joint_id = 4
+joint_sign = -1
+home_pose = 1.0
+servo_type = "HL3915"
+gripper_type = "ace_follower"
 """,
     )
 
     results = Calibration(config_path=config_path, driver_factory=FakeDriver).calibrate()
 
-    assert results[0].encoded_home_poses == (0, -896)
+    driver = FakeDriver.instances[0]
+    assert driver.calibrate_calls[0][0] == [0, 1, 4]
+    np.testing.assert_array_equal(driver.calibrate_calls[0][1], np.array([1024, -326, -896]))
+    assert results[0].ids == (0, 1, 4)
+    assert results[0].encoded_home_poses == (1024, -326, -896)
+
+
+def test_calibrate_uses_separate_gripper_port_when_configured(tmp_path):
+    config_path = write_config(
+        tmp_path,
+        "robot.toml",
+        """
+[basic]
+robot_type = "ace_follower"
+backend = "default"
+
+[linker.single]
+port = "/dev/arm"
+joint_ids = [0, 1]
+joint_signs = [1, -1]
+home_poses = [1.5707963267948966, 0.5]
+enable_gravity_compensation = false
+enable_estimate_external_torque = false
+servo_types = ["HL3915", "HL3915"]
+
+[gripper.single]
+port = "/dev/gripper"
+joint_id = 4
+joint_sign = -1
+home_pose = 1.0
+servo_type = "HL3915"
+gripper_type = "ace_follower"
+""",
+    )
+
+    results = Calibration(config_path=config_path, driver_factory=FakeDriver).calibrate()
+
+    assert [(driver.ids, driver.port) for driver in FakeDriver.instances] == [
+        ([0, 1], "/dev/arm"),
+        ([4], "/dev/gripper"),
+    ]
+    assert FakeDriver.instances[0].calibrate_calls[0][0] == [0, 1]
+    np.testing.assert_array_equal(FakeDriver.instances[0].calibrate_calls[0][1], np.array([1024, -326]))
+    assert FakeDriver.instances[1].calibrate_calls[0][0] == [4]
+    np.testing.assert_array_equal(FakeDriver.instances[1].calibrate_calls[0][1], np.array([-896]))
+    assert results[0].ids == (0, 1)
+    assert results[0].port == "/dev/arm"
+    assert results[1].ids == (4,)
+    assert results[1].port == "/dev/gripper"
+    assert all(driver.closed for driver in FakeDriver.instances)
+
+
+def test_calibrate_requires_gripper_port(tmp_path):
+    config_path = write_config(
+        tmp_path,
+        "robot.toml",
+        """
+[basic]
+robot_type = "ace_follower"
+backend = "default"
+
+[linker.single]
+port = "/dev/test"
+joint_ids = [0, 1]
+joint_signs = [1, -1]
+home_poses = [1.5707963267948966, 0.5]
+enable_gravity_compensation = false
+enable_estimate_external_torque = false
+servo_types = ["HL3915", "HL3915"]
+
+[gripper.single]
+joint_id = 4
+joint_sign = -1
+home_pose = 1.0
+servo_type = "HL3915"
+gripper_type = "ace_follower"
+""",
+    )
+
+    with pytest.raises(CalibrationError, match="gripper.single.port"):
+        Calibration(config_path=config_path, driver_factory=FakeDriver).calibrate()
+
+
+def test_calibrate_requires_gripper_joint_id(tmp_path):
+    config_path = write_config(
+        tmp_path,
+        "robot.toml",
+        """
+[basic]
+robot_type = "ace_follower"
+backend = "default"
+
+[linker.single]
+port = "/dev/test"
+joint_ids = [0, 1]
+joint_signs = [1, -1]
+home_poses = [1.5707963267948966, 0.5]
+enable_gravity_compensation = false
+enable_estimate_external_torque = false
+servo_types = ["HL3915", "HL3915"]
+
+[gripper.single]
+port = "/dev/test"
+joint_sign = -1
+home_pose = 1.0
+servo_type = "HL3915"
+gripper_type = "ace_follower"
+""",
+    )
+
+    with pytest.raises(CalibrationError, match="gripper.single.joint_id"):
+        Calibration(config_path=config_path, driver_factory=FakeDriver).calibrate()
 
 
 def test_calibrate_rejects_gripper_home_pose_outside_normalized_range(tmp_path):
@@ -149,14 +237,20 @@ backend = "default"
 
 [linker.single]
 port = "/dev/test"
-joint_ids = [0, 4]
-joint_signs = [1, 1]
-home_poses = [0.0, 1.2]
-gripper_id = 4
-gripper_type = "ace_leader"
+joint_ids = [0]
+joint_signs = [1]
+home_poses = [0.0]
 enable_gravity_compensation = false
 enable_estimate_external_torque = false
-servo_types = ["HL3915", "HL3915"]
+servo_types = ["HL3915"]
+
+[gripper.single]
+port = "/dev/test"
+joint_id = 4
+joint_sign = 1
+home_pose = 1.2
+servo_type = "HL3915"
+gripper_type = "ace_leader"
 """,
     )
 
@@ -178,8 +272,6 @@ port = "/dev/left"
 joint_ids = [1]
 joint_signs = [1]
 home_poses = [0.0]
-gripper_id = -1
-gripper_type = "ace_leader"
 enable_gravity_compensation = false
 enable_estimate_external_torque = false
 servo_types = ["HL3915"]
@@ -189,8 +281,6 @@ port = "/dev/right"
 joint_ids = [2]
 joint_signs = [-1]
 home_poses = [3.141592653589793]
-gripper_id = -1
-gripper_type = "ace_leader"
 enable_gravity_compensation = false
 enable_estimate_external_torque = false
 servo_types = ["HL3915"]
@@ -219,8 +309,6 @@ port = "/dev/direct"
 joint_ids = [1]
 joint_signs = [-1]
 home_poses = [3.141592653589793]
-gripper_id = -1
-gripper_type = "ace_leader"
 enable_gravity_compensation = false
 enable_estimate_external_torque = false
 servo_types = ["HL3915"]
@@ -247,8 +335,6 @@ port = "/dev/fail"
 joint_ids = [1]
 joint_signs = [1]
 home_poses = [0.0]
-gripper_id = -1
-gripper_type = "ace_leader"
 enable_gravity_compensation = false
 enable_estimate_external_torque = false
 servo_types = ["HL3915"]

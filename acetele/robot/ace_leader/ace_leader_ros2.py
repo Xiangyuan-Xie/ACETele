@@ -42,25 +42,30 @@ class AceLeaderROS2Robot(Node, AceLeaderRobot):
         self._ready_resync_threshold = self.get_parameter("ready_resync_threshold").value
 
         qos = QoSProfile(depth=10)
-        self._command_pub = self.create_publisher(
+        self._arm_command_pub = self.create_publisher(
             JointState,
-            "/arm/command",
+            "/ace_leader/arm/command",
             qos,
         )
         self._sync_mode_pub = self.create_publisher(
             String,
-            "/arm/sync_mode",
+            "/ace_leader/arm/sync_mode",
+            qos,
+        )
+        self._gripper_command_pub = self.create_publisher(
+            JointState,
+            "/ace_leader/gripper/command",
             qos,
         )
         self._state_sub = self.create_subscription(
             JointState,
-            "/arm/state",
+            "/ace_follower/arm/state",
             self._state_callback,
             qos,
         )
         self._sync_status_sub = self.create_subscription(
             String,
-            "/arm/sync_status",
+            "/ace_follower/arm/sync_status",
             self._sync_status_callback,
             qos,
         )
@@ -74,7 +79,7 @@ class AceLeaderROS2Robot(Node, AceLeaderRobot):
         control_period = 1.0 / self._control_rate
         self._control_timer = self.create_timer(control_period, self._control_loop)
         publish_period = 1.0 / self._publish_rate
-        self._command_publish_timer = self.create_timer(publish_period, self._publish_command_loop)
+        self._arm_command_publish_timer = self.create_timer(publish_period, self._publish_arm_command_loop)
 
         self._sync_mode = LeaderSyncMode.IDLE
         self._follower_sync_status = FollowerSyncStatus.IDLE
@@ -87,14 +92,16 @@ class AceLeaderROS2Robot(Node, AceLeaderRobot):
         self._sync_stable_since_ns: Optional[int] = None
         self._last_ready_lock_ns: Optional[int] = None
         self._is_landed = False
-        self._latest_command: Optional[
+        self._latest_arm_command: Optional[
+            Tuple[Sequence[float], Sequence[float], Sequence[float]]
+        ] = None
+        self._latest_gripper_command: Optional[
             Tuple[Sequence[float], Sequence[float], Sequence[float]]
         ] = None
 
         self.get_logger().info("Leader arm controller node started.")
 
     def _state_callback(self, msg: JointState):
-        self._external_torque = msg.effort
         self._latest_follower_state = (
             list(msg.position),
             list(msg.velocity),
@@ -115,31 +122,6 @@ class AceLeaderROS2Robot(Node, AceLeaderRobot):
         # self._is_landed = msg.landed
         self._is_landed = False
 
-    def _non_gripper_ids_and_indices(self):
-        ids = np.asarray(self._equipments.single_arm.ids)
-        if ids.size == 0:
-            return [], []
-        gripper_id = getattr(self._equipments.single_arm, "_gripper_id", ids[-1])
-        if gripper_id is None or int(gripper_id) < 0:
-            indices = list(range(len(ids)))
-        else:
-            indices = [index for index, ft_id in enumerate(ids) if int(ft_id) != int(gripper_id)]
-        return ids[indices].tolist(), indices
-
-    def _gripper_index(self) -> Optional[int]:
-        ids = np.asarray(self._equipments.single_arm.ids)
-        gripper_id = getattr(self._equipments.single_arm, "_gripper_id", ids[-1] if ids.size else -1)
-        if gripper_id is None or int(gripper_id) < 0:
-            return None
-        matches = np.where(ids == int(gripper_id))[0]
-        if len(matches) == 0:
-            return None
-        return int(matches[0])
-
-    def _extract_non_gripper_position(self, positions: Sequence[float]) -> list[float]:
-        _, indices = self._non_gripper_ids_and_indices()
-        return [float(positions[index]) for index in indices]
-
     def _has_recent_follower_state(self, now_ns: int) -> bool:
         latest_follower_state = getattr(self, "_latest_follower_state", None)
         last_follower_state_ns = getattr(self, "_last_follower_state_ns", None)
@@ -148,13 +130,6 @@ class AceLeaderROS2Robot(Node, AceLeaderRobot):
             latest_follower_state is not None
             and last_follower_state_ns is not None
             and now_ns - last_follower_state_ns <= follower_state_timeout_ns
-        )
-
-    def _has_recent_follower_sync_status(self, now_ns: int) -> bool:
-        last_follower_sync_status_ns = getattr(self, "_last_follower_sync_status_ns", None)
-        return (
-            last_follower_sync_status_ns is not None
-            and now_ns - last_follower_sync_status_ns <= self._sync_status_timeout_ns
         )
 
     def _request_sync(self, message: str):
@@ -177,11 +152,12 @@ class AceLeaderROS2Robot(Node, AceLeaderRobot):
         if now_ns is not None and self._last_ready_lock_ns is not None:
             if now_ns - self._last_ready_lock_ns < self._ready_lock_period_ns:
                 return
-        non_gripper_ids, _ = self._non_gripper_ids_and_indices()
-        if non_gripper_ids:
+        single_arm = getattr(getattr(self, "_equipments", None), "single_arm", None)
+        arm_ids = np.asarray(getattr(single_arm, "ids", getattr(self, "ids", []))).astype(int).tolist()
+        if arm_ids:
             self.set_position(
                 self._sync_target_position,
-                ids=non_gripper_ids,
+                ids=arm_ids,
                 velocities=self._sync_profile_velocity,
                 accelerations=self._sync_profile_acceleration,
             )
@@ -197,18 +173,19 @@ class AceLeaderROS2Robot(Node, AceLeaderRobot):
 
         if self._sync_target_position is None:
             follower_pos, _, _ = latest_follower_state
-            self._sync_target_position = self._extract_non_gripper_position(follower_pos)
-            non_gripper_ids, _ = self._non_gripper_ids_and_indices()
-            if non_gripper_ids:
+            self._sync_target_position = np.asarray(follower_pos, dtype=float).tolist()
+            single_arm = getattr(getattr(self, "_equipments", None), "single_arm", None)
+            arm_ids = np.asarray(getattr(single_arm, "ids", getattr(self, "ids", []))).astype(int).tolist()
+            if arm_ids:
                 self.set_position(
                     self._sync_target_position,
-                    ids=non_gripper_ids,
+                    ids=arm_ids,
                     velocities=self._sync_profile_velocity,
                     accelerations=self._sync_profile_acceleration,
                 )
             return
 
-        current = np.asarray(self._extract_non_gripper_position(joint_pos), dtype=float)
+        current = np.asarray(joint_pos, dtype=float)
         target = np.asarray(self._sync_target_position, dtype=float)
         if current.shape != target.shape:
             self._sync_stable_since_ns = None
@@ -225,19 +202,18 @@ class AceLeaderROS2Robot(Node, AceLeaderRobot):
         else:
             self._sync_stable_since_ns = None
 
-    def _ready_error_exceeds_resync_threshold(self, joint_pos: Sequence[float]) -> bool:
-        if self._sync_target_position is None:
-            return False
-        current = np.asarray(self._extract_non_gripper_position(joint_pos), dtype=float)
-        target = np.asarray(self._sync_target_position, dtype=float)
-        if current.shape != target.shape:
-            return True
-        errors = self._shortest_angle_errors(current, target)
-        return bool(np.any(np.abs(errors) > self._ready_resync_threshold))
-
     def _control_loop(self):
-        joint_pos, joint_vel, joint_effort = self.act()
-        self._latest_command = (joint_pos, joint_vel, joint_effort)
+        single_arm = getattr(getattr(self, "_equipments", None), "single_arm", None)
+        if single_arm is not None and hasattr(single_arm, "act"):
+            joint_pos, joint_vel, joint_effort = single_arm.act()
+        else:
+            joint_pos, joint_vel, joint_effort = self.act()
+        gripper = getattr(getattr(self, "_equipments", None), "gripper", None)
+        if gripper is not None:
+            self._latest_gripper_command = gripper.act()
+        else:
+            self._latest_gripper_command = None
+        self._latest_arm_command = (joint_pos, joint_vel, joint_effort)
         if self._sync_mode == LeaderSyncMode.STOP:
             return
         if self._is_landed:
@@ -256,7 +232,7 @@ class AceLeaderROS2Robot(Node, AceLeaderRobot):
         if (
             self._sync_mode == LeaderSyncMode.TRACKING
             and getattr(self, "_last_follower_sync_status_ns", None) is not None
-            and not self._has_recent_follower_sync_status(now_ns)
+            and now_ns - self._last_follower_sync_status_ns > self._sync_status_timeout_ns
         ):
             self._request_sync("Follower sync status timed out. Requesting synchronization.")
             return
@@ -280,30 +256,56 @@ class AceLeaderROS2Robot(Node, AceLeaderRobot):
             return
 
         if self._sync_mode == LeaderSyncMode.READY:
-            if self._ready_error_exceeds_resync_threshold(joint_pos):
+            ready_error_exceeds_threshold = False
+            if self._sync_target_position is not None:
+                current = np.asarray(joint_pos, dtype=float)
+                target = np.asarray(self._sync_target_position, dtype=float)
+                if current.shape != target.shape:
+                    ready_error_exceeds_threshold = True
+                else:
+                    errors = self._shortest_angle_errors(current, target)
+                    ready_error_exceeds_threshold = bool(np.any(np.abs(errors) > self._ready_resync_threshold))
+            if ready_error_exceeds_threshold:
                 self._request_sync("Leader drifted from synchronized pose. Requesting synchronization.")
                 return
             self._lock_to_sync_target(now_ns)
-            gripper_index = self._gripper_index()
-            if gripper_index is None or joint_pos[gripper_index] >= 1.0:
-                non_gripper_ids, _ = self._non_gripper_ids_and_indices()
-                if non_gripper_ids:
-                    self.set_torque_enable(TorqueEnable.Disable, ids=non_gripper_ids)
+            gripper_value = None
+            if gripper is not None:
+                gripper_pos, _, _ = self._latest_gripper_command
+                gripper_value = float(np.asarray(gripper_pos, dtype=float)[0])
+            if gripper_value is None or gripper_value >= 1.0:
+                arm_ids = np.asarray(getattr(single_arm, "ids", getattr(self, "ids", []))).astype(int).tolist()
+                if arm_ids:
+                    self.set_torque_enable(TorqueEnable.Disable, ids=arm_ids)
                 self._sync_mode = LeaderSyncMode.TRACKING
                 self.get_logger().info("Leader gripper released. Teleoperation tracking started.")
 
-    def _publish_command_loop(self):
+    def _publish_arm_command_loop(self):
         mode_msg = String()
         mode_msg.data = self._sync_mode.value
         self._sync_mode_pub.publish(mode_msg)
-        if self._latest_command is None or self._sync_mode != LeaderSyncMode.TRACKING:
+        if self._latest_arm_command is None or self._sync_mode != LeaderSyncMode.TRACKING:
             return
 
-        joint_pos, joint_vel, joint_effort = self._latest_command
+        joint_pos, joint_vel, joint_effort = self._latest_arm_command
         msg = JointState()
         msg.header.stamp = self.get_clock().now().to_msg()
-        msg.name = [f"joint_{i+1}" for i in self._equipments.single_arm.ids]
+        single_arm = getattr(getattr(self, "_equipments", None), "single_arm", None)
+        arm_ids = np.asarray(getattr(single_arm, "ids", getattr(self, "ids", range(len(joint_pos))))).astype(int)
+        msg.name = [f"joint_{i+1}" for i in arm_ids]
         msg.position = joint_pos.tolist()
         msg.velocity = joint_vel.tolist()
         msg.effort = joint_effort.tolist()
-        self._command_pub.publish(msg)
+        self._arm_command_pub.publish(msg)
+
+        if self._latest_gripper_command is None:
+            return
+        gripper_pos, gripper_vel, gripper_effort = self._latest_gripper_command
+        gripper_msg = JointState()
+        gripper_msg.header.stamp = msg.header.stamp
+        gripper_id = getattr(self, "gripper_id", None)
+        gripper_msg.name = [] if gripper_id is None else [f"joint_{int(gripper_id) + 1}"]
+        gripper_msg.position = np.asarray(gripper_pos, dtype=float).tolist()
+        gripper_msg.velocity = np.asarray(gripper_vel, dtype=float).tolist()
+        gripper_msg.effort = np.asarray(gripper_effort, dtype=float).tolist()
+        self._gripper_command_pub.publish(gripper_msg)

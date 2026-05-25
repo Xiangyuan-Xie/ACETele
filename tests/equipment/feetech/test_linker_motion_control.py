@@ -1,3 +1,4 @@
+import inspect
 import types
 from collections import deque
 from queue import Queue
@@ -12,11 +13,13 @@ from acetele.equipment.feetech.feetech_driver import (
     Mode,
     TorqueEnable,
 )
-from acetele.equipment.feetech.linker import HLS_PROFILE_DEFAULTS_BY_SERVO, Linker
-from acetele.utils.gripper import GRIPPER_DECODING_SCALE, GRIPPER_ENCODING_SCALE
-
-PROFILE_VELOCITY_UNIT_RAD_PER_SEC = 0.732 * np.pi / 30.0
-PROFILE_ACCELERATION_UNIT_RAD_PER_SEC2 = 8.7 * np.pi / 180.0
+from acetele.equipment.feetech.linker import Linker
+from acetele.equipment.feetech.servo_specs import (
+    HLS_PROFILE_DEFAULTS_BY_SERVO,
+    PROFILE_ACCELERATION_UNIT_RAD_PER_SEC2,
+    PROFILE_VELOCITY_UNIT_RAD_PER_SEC,
+)
+from acetele.utils.external_torque import ExternalTorqueObserver
 
 
 def profile_payload(
@@ -50,18 +53,13 @@ def install_driver_profile_defaults(driver, servo_types):
 
 
 class FakeLinker(Linker):
-    def __init__(self, current_pos, ids=(0, 1, 2, 3, 4), gripper_id=4):
+    def __init__(self, current_pos, ids=(0, 1, 2, 3)):
         self._ids = np.array(ids)
         self._dof = len(self._ids)
-        self._gripper_id = gripper_id
         self.current_pos = np.array(current_pos, dtype=float)
         self.position_commands = []
         self.torque_commands = []
         self._signs = np.ones(len(self._ids))
-        self._gripper_type = "ace_leader"
-        if self._gripper_id >= 0:
-            self._gripper_encoding_scale = GRIPPER_ENCODING_SCALE[self._gripper_type]
-            self._gripper_decoding_scale = GRIPPER_DECODING_SCALE[self._gripper_type]
         self._servo_types = np.array(["HL3915"] * len(ids))
         self._profile_acceleration_defaults = np.zeros(len(ids), dtype=int)
         self._profile_current_defaults = np.full(len(ids), 500, dtype=int)
@@ -78,142 +76,120 @@ class FakeLinker(Linker):
             )
         )
 
-    def act(self, encode_gripper=True):
+    def act(self):
         return self.current_pos.copy(), np.zeros(self._dof), np.zeros(self._dof)
 
 
 def test_linker_set_position_converts_metric_velocity_to_raw_profile_velocity(monkeypatch):
-    linker = FakeLinker(current_pos=[0.0, 0.0, 0.0, 0.0, 0.5])
+    linker = FakeLinker(current_pos=[0.0, 0.0, 0.0, 0.0])
     monkeypatch.setattr(
         "acetele.equipment.feetech.linker.time.sleep",
         lambda _duration: pytest.fail("profile set_position should not sleep"),
     )
 
     linker.set_position(
-        positions=[-2.0, 0.0, 0.0, 0.0, 0.5],
+        positions=[-2.0, 0.0, 0.0, 0.0],
         velocities=26 * PROFILE_VELOCITY_UNIT_RAD_PER_SEC,
     )
 
     assert len(linker.position_commands) == 1
     sent_ids, sent_positions, kwargs = linker.position_commands[0]
-    np.testing.assert_array_equal(sent_ids, np.array([0, 1, 2, 3, 4]))
+    np.testing.assert_array_equal(sent_ids, np.array([0, 1, 2, 3]))
     assert sent_positions[0] == pytest.approx(-1304, abs=1)
     assert "profile" not in kwargs
-    np.testing.assert_array_equal(kwargs["velocities_raw"], np.full(5, 26))
-    np.testing.assert_array_equal(kwargs["accelerations_raw"], np.zeros(5, dtype=int))
-    np.testing.assert_array_equal(kwargs["currents_raw"], np.full(5, 500))
-
-
-def test_set_position_profile_encodes_gripper_without_relative_wrap(monkeypatch):
-    current = [np.pi - 0.1, 0.0, 0.0, 0.0, 0.9]
-    target = [-np.pi + 0.1, 0.0, 0.0, 0.0, 0.1]
-    linker = FakeLinker(current_pos=current)
-    monkeypatch.setattr(
-        "acetele.equipment.feetech.linker.time.sleep",
-        lambda _duration: pytest.fail("profile set_position should not sleep"),
-    )
-
-    linker.set_position(
-        positions=target,
-        velocities=26 * PROFILE_VELOCITY_UNIT_RAD_PER_SEC,
-    )
-
-    final_position = linker.position_commands[-1][1]
-    assert final_position[0] == pytest.approx(-1983, abs=1)
-    assert final_position[-1] == pytest.approx(51, abs=1)
+    np.testing.assert_array_equal(kwargs["velocities_raw"], np.full(4, 26))
+    np.testing.assert_array_equal(kwargs["accelerations_raw"], np.zeros(4, dtype=int))
+    np.testing.assert_array_equal(kwargs["currents_raw"], np.full(4, 500))
 
 
 def test_set_position_profile_uses_single_profile_command(monkeypatch):
-    linker = FakeLinker(current_pos=[0.0, 0.0, 0.0, 0.0, 0.5])
+    linker = FakeLinker(current_pos=[0.0, 0.0, 0.0, 0.0])
     monkeypatch.setattr(
         "acetele.equipment.feetech.linker.time.sleep",
         lambda _duration: pytest.fail("profile set_position should not sleep"),
     )
 
     linker.set_position(
-        positions=[0.06, 0.0, 0.0, 0.0, 0.5],
+        positions=[0.06, 0.0, 0.0, 0.0],
         accelerations=20 * PROFILE_ACCELERATION_UNIT_RAD_PER_SEC2,
     )
 
     assert len(linker.position_commands) == 1
     assert linker.position_commands[0][1][0] == pytest.approx(39, abs=1)
-    np.testing.assert_array_equal(linker.position_commands[0][2]["velocities_raw"], np.full(5, 250))
-    np.testing.assert_array_equal(linker.position_commands[0][2]["accelerations_raw"], np.full(5, 20))
-    np.testing.assert_array_equal(linker.position_commands[0][2]["currents_raw"], np.full(5, 500))
+    np.testing.assert_array_equal(linker.position_commands[0][2]["velocities_raw"], np.full(4, 250))
+    np.testing.assert_array_equal(linker.position_commands[0][2]["accelerations_raw"], np.full(4, 20))
+    np.testing.assert_array_equal(linker.position_commands[0][2]["currents_raw"], np.full(4, 500))
 
 
 def test_set_position_explicit_none_velocity_and_acceleration_use_plain_position_write():
-    linker = FakeLinker(current_pos=[0.0, 0.0, 0.0, 0.0, 0.5])
+    linker = FakeLinker(current_pos=[0.0, 0.0, 0.0, 0.0])
 
     linker.set_position(
-        positions=[0.06, 0.0, 0.0, 0.0, 0.5],
+        positions=[0.06, 0.0, 0.0, 0.0],
         velocities=None,
         accelerations=None,
     )
 
     assert len(linker.position_commands) == 1
     _, _, kwargs = linker.position_commands[0]
-    np.testing.assert_array_equal(kwargs["velocities_raw"], np.full(5, 250))
-    np.testing.assert_array_equal(kwargs["accelerations_raw"], np.zeros(5, dtype=int))
-    np.testing.assert_array_equal(kwargs["currents_raw"], np.full(5, 500))
+    np.testing.assert_array_equal(kwargs["velocities_raw"], np.full(4, 250))
+    np.testing.assert_array_equal(kwargs["accelerations_raw"], np.zeros(4, dtype=int))
+    np.testing.assert_array_equal(kwargs["currents_raw"], np.full(4, 500))
 
 
 def test_set_position_without_profile_uses_plain_position_write(monkeypatch):
-    linker = FakeLinker(current_pos=[0.0, 0.0, 0.0, 0.0, 0.5])
+    linker = FakeLinker(current_pos=[0.0, 0.0, 0.0, 0.0])
     monkeypatch.setattr(
         "acetele.equipment.feetech.linker.time.sleep",
         lambda _duration: pytest.fail("plain set_position should not sleep"),
     )
 
     linker.set_position(
-        positions=[0.01, 0.0, 0.0, 0.0, 0.5],
+        positions=[0.01, 0.0, 0.0, 0.0],
     )
 
     assert len(linker.position_commands) == 1
     assert linker.position_commands[0][1][0] == pytest.approx(7, abs=1)
-    np.testing.assert_array_equal(linker.position_commands[0][2]["velocities_raw"], np.full(5, 250))
-    np.testing.assert_array_equal(linker.position_commands[0][2]["accelerations_raw"], np.zeros(5, dtype=int))
-    np.testing.assert_array_equal(linker.position_commands[0][2]["currents_raw"], np.full(5, 500))
+    np.testing.assert_array_equal(linker.position_commands[0][2]["velocities_raw"], np.full(4, 250))
+    np.testing.assert_array_equal(linker.position_commands[0][2]["accelerations_raw"], np.zeros(4, dtype=int))
+    np.testing.assert_array_equal(linker.position_commands[0][2]["currents_raw"], np.full(4, 500))
 
 
 def test_set_position_does_not_accept_runtime_step_parameters():
-    linker = FakeLinker(current_pos=[0.0, 0.0, 0.0, 0.0, 0.5])
+    linker = FakeLinker(current_pos=[0.0, 0.0, 0.0, 0.0])
 
     with pytest.raises(TypeError):
-        linker.set_position(
-            positions=[0.0, 0.0, 0.0, 1.0, 0.5],
-            step_size=0.25,
-        )
+        linker.set_position(positions=[0.0, 0.0, 0.0, 1.0], step_size=0.25)
 
 
 def test_linker_set_position_does_not_accept_public_profile_or_current_parameters():
-    linker = FakeLinker(current_pos=[0.0, 0.0, 0.0, 0.0, 0.5])
+    linker = FakeLinker(current_pos=[0.0, 0.0, 0.0, 0.0])
 
     with pytest.raises(TypeError):
-        linker.set_position([0.0, 0.0, 0.0, 1.0, 0.5], profile=True)
+        linker.set_position([0.0, 0.0, 0.0, 1.0], profile=True)
 
     with pytest.raises(TypeError):
-        linker.set_position([0.0, 0.0, 0.0, 1.0, 0.5], current=1000)
+        linker.set_position([0.0, 0.0, 0.0, 1.0], current=1000)
 
     with pytest.raises(TypeError):
-        linker.set_position([0.0, 0.0, 0.0, 1.0, 0.5], velocity=1.0)
+        linker.set_position([0.0, 0.0, 0.0, 1.0], velocity=1.0)
 
     with pytest.raises(TypeError):
-        linker.set_position([0.0, 0.0, 0.0, 1.0, 0.5], acceleration=1.0)
+        linker.set_position([0.0, 0.0, 0.0, 1.0], acceleration=1.0)
 
 
 def test_control_loop_sleeps_to_maintain_control_period(monkeypatch):
-    linker = FakeLinker(current_pos=[0.0, 0.0, 0.0, 0.0, 0.0])
+    linker = FakeLinker(current_pos=[0.0, 0.0, 0.0, 0.0])
     linker._control_period = 0.004
     linker._stop_flag = type(
         "StopAfterOneIteration",
         (),
         {"calls": 0, "is_set": lambda self: setattr(self, "calls", self.calls + 1) or self.calls > 1},
     )()
-    linker._null_space_regulation = lambda joint_pos, joint_vel: np.zeros(5)
-    linker._gravity_compensation = lambda joint_pos, joint_vel: np.ones(5)
-    linker._friction_compensation = lambda tau_g, joint_vel: np.zeros(5)
-    linker._torque_feedback = lambda joint_vel: np.zeros(5)
+    linker._null_space_regulation = lambda joint_pos, joint_vel: np.zeros(4)
+    linker._gravity_compensation = lambda joint_pos, joint_vel: np.ones(4)
+    linker._friction_compensation = lambda tau_g, joint_vel: np.zeros(4)
+    linker._torque_feedback = lambda joint_vel: np.zeros(4)
     linker.set_torque = lambda tau: linker.torque_commands.append(np.array(tau))
 
     perf_counter_values = iter([10.0, 10.001])
@@ -538,7 +514,7 @@ def test_set_position_uses_servo_model_defaults_for_selected_ids():
 
 
 def test_set_position_model_defaults_fill_only_omitted_profile_fields():
-    linker = FakeLinker(current_pos=[0.0, 0.0, 0.0], ids=(0, 1, 2), gripper_id=-1)
+    linker = FakeLinker(current_pos=[0.0, 0.0, 0.0], ids=(0, 1, 2))
     linker._servo_types = np.array(["HL3950", "HL3930", "HL3915"])
     linker._profile_acceleration_defaults = np.array([0, 250, 0])
     linker._profile_current_defaults = np.array([1000, 1000, 500])
@@ -683,7 +659,7 @@ class TorqueEnableRecordingDriver(PositionOnlyDriver):
 
 @pytest.mark.parametrize("enable", [TorqueEnable.Disable, TorqueEnable.Enable])
 def test_linker_set_torque_enable_for_selected_ids(enable):
-    linker = make_linker_for_encoding(ids=(0, 1, 4), gripper_id=4)
+    linker = make_linker_for_encoding(ids=(0, 1, 4))
     driver = TorqueEnableRecordingDriver()
     linker._driver = driver
 
@@ -732,16 +708,12 @@ class CurrentRecordingDriver:
         self.current_calls.append((np.array(ids), np.array(currents)))
 
 
-def make_linker_for_encoding(ids=(0, 1, 2, 3, 4), gripper_id=4, gripper_type="ace_leader"):
+def make_linker_for_encoding(ids=(0, 1, 2, 3)):
     linker = Linker.__new__(Linker)
     linker._ids = np.array(ids)
     linker._dof = len(ids)
     linker._signs = np.ones(len(ids))
     linker._home_poses = np.zeros(len(ids))
-    linker._gripper_id = gripper_id
-    linker._gripper_type = gripper_type
-    linker._gripper_encoding_scale = GRIPPER_ENCODING_SCALE[linker._gripper_type]
-    linker._gripper_decoding_scale = GRIPPER_DECODING_SCALE[linker._gripper_type]
     linker._servo_types = np.array(["HL3915"] * len(ids))
     linker._profile_acceleration_defaults = np.zeros(len(ids), dtype=int)
     linker._profile_current_defaults = np.full(len(ids), 500, dtype=int)
@@ -755,28 +727,28 @@ def make_linker_for_encoding(ids=(0, 1, 2, 3, 4), gripper_id=4, gripper_type="ac
     return linker
 
 
-def test_set_torque_excludes_only_configured_gripper():
+def test_set_torque_sends_all_selected_linker_ids():
     linker = make_linker_for_encoding()
     driver = CurrentRecordingDriver()
     linker._driver = driver
 
-    linker.set_torque([0.1, 0.2, 0.3, 0.4, 0.5])
+    linker.set_torque([0.1, 0.2, 0.3, 0.4])
 
     sent_ids, sent_currents = driver.current_calls[0]
     np.testing.assert_array_equal(sent_ids, np.array([0, 1, 2, 3]))
     assert len(sent_currents) == 4
 
 
-def test_set_torque_accepts_list_ids_when_excluding_configured_gripper():
+def test_set_torque_accepts_list_ids():
     linker = make_linker_for_encoding()
     driver = CurrentRecordingDriver()
     linker._driver = driver
 
-    linker.set_torque([0.1, 0.5], ids=[0, 4])
+    linker.set_torque([0.1, 0.5], ids=[0, 3])
 
     sent_ids, sent_currents = driver.current_calls[0]
-    np.testing.assert_array_equal(sent_ids, np.array([0]))
-    assert len(sent_currents) == 1
+    np.testing.assert_array_equal(sent_ids, np.array([0, 3]))
+    assert len(sent_currents) == 2
 
 
 class PositionRecordingDriver:
@@ -805,23 +777,60 @@ class ImmediateProfileDriver(PositionOnlyDriver):
         return self.state
 
 
-def test_linker_decodes_normalized_follower_gripper_home_pose():
-    config = {
-        "joint_ids": [0, 1, 4],
-        "joint_signs": [1, 1, 1],
-        "home_poses": [0.25, -0.5, 1.0],
+class CloseRecordingDriver:
+    def __init__(self):
+        self.torque_enable_calls = []
+        self.close_calls = 0
+
+    def set_torque_enable(self, ids, enables):
+        self.torque_enable_calls.append((list(ids), list(enables)))
+
+    def close(self):
+        self.close_calls += 1
+
+
+def minimal_linker_config():
+    return {
+        "joint_ids": [0, 1],
+        "joint_signs": [1, 1],
+        "home_poses": [0.0, 0.0],
         "port": "/dev/test",
-        "gripper_id": 4,
-        "gripper_type": "ace_follower",
         "enable_gravity_compensation": False,
         "enable_estimate_external_torque": False,
-        "servo_types": ["HL3915", "HL3915", "HL3915"],
+        "servo_types": ["HL3915", "HL3915"],
     }
-    driver = PositionRecordingDriver(({0: 0, 1: 0, 4: 0}, {0: 0, 1: 0, 4: 0}, {0: 0, 1: 0, 4: 0}))
 
-    linker = Linker(config, driver=driver)
 
-    np.testing.assert_allclose(linker._home_poses, np.array([0.25, -0.5, 896.0 * np.pi / 2048.0]))
+def test_linker_close_does_not_close_external_driver(monkeypatch):
+    driver = CloseRecordingDriver()
+    linker = Linker(minimal_linker_config(), driver=driver)
+    monkeypatch.setattr("acetele.equipment.feetech.linker.time.sleep", lambda _duration: None)
+
+    linker.close()
+
+    assert driver.torque_enable_calls == [([0, 1], [TorqueEnable.Disable, TorqueEnable.Disable])]
+    assert driver.close_calls == 0
+
+
+def test_linker_close_closes_self_created_driver(monkeypatch):
+    created = []
+
+    class CapturingFeeTechDriver(CloseRecordingDriver):
+        def __init__(self, ids, port):
+            super().__init__()
+            self.ids = list(ids)
+            self.port = port
+            created.append(self)
+
+    monkeypatch.setattr("acetele.equipment.feetech.linker.FeeTechDriver", CapturingFeeTechDriver)
+    monkeypatch.setattr("acetele.equipment.feetech.linker.time.sleep", lambda _duration: None)
+    linker = Linker(minimal_linker_config())
+
+    linker.close()
+
+    assert [(driver.ids, driver.port) for driver in created] == [([0, 1], "/dev/test")]
+    assert created[0].torque_enable_calls == [([0, 1], [TorqueEnable.Disable, TorqueEnable.Disable])]
+    assert created[0].close_calls == 1
 
 
 def test_linker_requires_servo_types():
@@ -830,8 +839,6 @@ def test_linker_requires_servo_types():
         "joint_signs": [1, 1, 1],
         "home_poses": [0.0, 0.0, 0.0],
         "port": "/dev/test",
-        "gripper_id": -1,
-        "gripper_type": "ace_leader",
         "enable_gravity_compensation": False,
         "enable_estimate_external_torque": False,
     }
@@ -847,8 +854,6 @@ def test_linker_rejects_invalid_servo_types():
         "joint_signs": [1, 1, 1],
         "home_poses": [0.0, 0.0, 0.0],
         "port": "/dev/test",
-        "gripper_id": -1,
-        "gripper_type": "ace_leader",
         "enable_gravity_compensation": False,
         "enable_estimate_external_torque": False,
         "servo_types": ["HL3915", "HL3915"],
@@ -877,8 +882,6 @@ def test_linker_constructs_feetech_driver_without_servo_types(monkeypatch):
         "joint_signs": [1, 1, 1],
         "home_poses": [0.0, 0.0, 0.0],
         "port": "/dev/test",
-        "gripper_id": -1,
-        "gripper_type": "ace_leader",
         "enable_gravity_compensation": False,
         "enable_estimate_external_torque": False,
         "servo_types": ["HL3950", "HL3930", "HL3915"],
@@ -898,8 +901,6 @@ def test_linker_plain_position_fills_model_profile_defaults():
         "joint_signs": [1, 1, 1],
         "home_poses": [0.0, 0.0, 0.0],
         "port": "/dev/test",
-        "gripper_id": -1,
-        "gripper_type": "ace_leader",
         "enable_gravity_compensation": False,
         "enable_estimate_external_torque": False,
         "servo_types": ["HL3950", "HL3930", "HL3915"],
@@ -921,8 +922,6 @@ def test_linker_metric_profile_reaches_hls_payload():
         "joint_signs": [1],
         "home_poses": [0.0],
         "port": "/dev/test",
-        "gripper_id": -1,
-        "gripper_type": "ace_leader",
         "enable_gravity_compensation": False,
         "enable_estimate_external_torque": False,
         "servo_types": ["HL3915"],
@@ -942,25 +941,6 @@ def test_linker_metric_profile_reaches_hls_payload():
     ]
 
 
-def test_gripper_decoding_inverts_encoded_act_value():
-    encoded_gripper_position = 512
-    driver = PositionRecordingDriver(
-        (
-            {0: 0, 1: 0, 2: 0, 3: 0, 4: encoded_gripper_position},
-            {0: 0, 1: 0, 2: 0, 3: 0, 4: 0},
-            {0: 0, 1: 0, 2: 0, 3: 0, 4: 0},
-        )
-    )
-    linker = make_linker_for_encoding()
-    linker._driver = driver
-
-    positions, _, _ = linker.act()
-    linker.set_position(positions)
-
-    _, encoded_positions, _ = driver.profile_calls[0]
-    assert encoded_positions[-1] == pytest.approx(encoded_gripper_position, abs=1)
-
-
 def test_act_without_gripper_keeps_last_joint_in_radians():
     driver = PositionRecordingDriver(
         (
@@ -969,7 +949,7 @@ def test_act_without_gripper_keeps_last_joint_in_radians():
             {0: 0, 1: 0},
         )
     )
-    linker = make_linker_for_encoding(ids=(0, 1), gripper_id=-1)
+    linker = make_linker_for_encoding(ids=(0, 1))
     linker._driver = driver
 
     positions, _, _ = linker.act()
@@ -977,22 +957,10 @@ def test_act_without_gripper_keeps_last_joint_in_radians():
     np.testing.assert_allclose(positions, np.array([0.0, np.pi / 2]))
 
 
-def test_act_uses_configured_gripper_id_not_last_joint():
-    driver = PositionRecordingDriver(
-        (
-            {4: 512, 0: 1024, 1: 0},
-            {4: 0, 0: 0, 1: 0},
-            {4: 0, 0: 0, 1: 0},
-        )
-    )
-    linker = make_linker_for_encoding(ids=(4, 0, 1), gripper_id=4)
-    linker._driver = driver
-
-    positions, _, _ = linker.act()
-
-    assert positions[0] == pytest.approx(1.0)
-    assert positions[1] == pytest.approx(np.pi / 2)
-    assert positions[2] == pytest.approx(0.0)
+def test_linker_public_methods_do_not_expose_encode_gripper():
+    assert "encode_gripper" not in inspect.signature(Linker.act).parameters
+    assert "encode_gripper" not in inspect.signature(Linker.get_linker_state).parameters
+    assert "encode_gripper" not in inspect.signature(Linker.set_position).parameters
 
 
 def test_set_position_does_not_mutate_numpy_positions():
@@ -1003,63 +971,13 @@ def test_set_position_does_not_mutate_numpy_positions():
             {0: 0, 1: 0, 2: 0, 3: 0, 4: 0},
         )
     )
-    linker = make_linker_for_encoding()
+    linker = make_linker_for_encoding(ids=(0, 1, 2, 3))
     linker._driver = driver
-    positions = np.array([0.0, 0.0, 0.0, 0.0, 0.25])
+    positions = np.array([0.0, 0.0, 0.0, 0.0])
 
     linker.set_position(positions)
 
-    np.testing.assert_array_equal(positions, np.array([0.0, 0.0, 0.0, 0.0, 0.25]))
-
-
-def test_set_position_accepts_list_ids_for_gripper_encoding():
-    driver = PositionRecordingDriver(({4: 0}, {4: 0}, {4: 0}))
-    linker = make_linker_for_encoding()
-    linker._driver = driver
-
-    linker.set_position([0.5], ids=[4])
-
-    sent_ids, encoded_positions, _ = driver.profile_calls[0]
-    np.testing.assert_array_equal(sent_ids, np.array([4]))
-    assert encoded_positions[0] == pytest.approx(256, abs=1)
-
-
-def test_set_position_uses_follower_gripper_travel():
-    driver = PositionRecordingDriver(({4: 0}, {4: 0}, {4: 0}))
-    linker = make_linker_for_encoding(ids=(4,), gripper_type="ace_follower")
-    linker._driver = driver
-
-    linker.set_position([0.5], ids=[4])
-
-    sent_ids, encoded_positions, _ = driver.profile_calls[0]
-    np.testing.assert_array_equal(sent_ids, np.array([4]))
-    assert encoded_positions[0] == pytest.approx(448, abs=1)
-
-
-def test_set_position_applies_gripper_sign_once():
-    driver = PositionRecordingDriver(({4: 0}, {4: 0}, {4: 0}))
-    linker = make_linker_for_encoding(ids=(4,), gripper_type="ace_follower")
-    linker._signs = np.array([-1])
-    linker._driver = driver
-
-    linker.set_position([1.0], ids=[4])
-
-    _, encoded_positions, _ = driver.profile_calls[0]
-    assert encoded_positions[0] == pytest.approx(-896, abs=1)
-
-
-def test_set_position_uses_configured_gripper_id_not_last_joint():
-    driver = PositionRecordingDriver(({4: 0, 0: 0, 1: 0}, {4: 0, 0: 0, 1: 0}, {4: 0, 0: 0, 1: 0}))
-    linker = make_linker_for_encoding(ids=(4, 0, 1), gripper_id=4)
-    linker._driver = driver
-
-    linker.set_position([0.5, np.pi / 2, 0.0])
-
-    sent_ids, encoded_positions, _ = driver.profile_calls[0]
-    np.testing.assert_array_equal(sent_ids, np.array([4, 0, 1]))
-    assert encoded_positions[0] == pytest.approx(256, abs=1)
-    assert encoded_positions[1] == pytest.approx(1024, abs=1)
-    assert encoded_positions[2] == pytest.approx(0, abs=1)
+    np.testing.assert_array_equal(positions, np.array([0.0, 0.0, 0.0, 0.0]))
 
 
 def test_linker_set_position_profile_converts_only_explicit_metric_velocity():
@@ -1070,16 +988,16 @@ def test_linker_set_position_profile_converts_only_explicit_metric_velocity():
             {0: 0, 1: 0, 4: 0},
         )
     )
-    linker = make_linker_for_encoding(ids=(0, 1, 4), gripper_id=4)
+    linker = make_linker_for_encoding(ids=(0, 1, 2))
     linker._driver = driver
 
     linker.set_position([0.1, 0.0, 0.5], velocities=26 * PROFILE_VELOCITY_UNIT_RAD_PER_SEC)
 
     assert driver.position_calls == []
     sent_ids, positions, kwargs = driver.profile_calls[0]
-    np.testing.assert_array_equal(sent_ids, np.array([0, 1, 4]))
+    np.testing.assert_array_equal(sent_ids, np.array([0, 1, 2]))
     assert positions[0] == pytest.approx(65, abs=1)
-    assert positions[2] == pytest.approx(256, abs=1)
+    assert positions[2] == pytest.approx(326, abs=1)
     np.testing.assert_array_equal(kwargs["velocities_raw"], np.array([26, 26, 26]))
     np.testing.assert_array_equal(kwargs["accelerations_raw"], np.array([0, 0, 0]))
     np.testing.assert_array_equal(kwargs["currents_raw"], np.array([500, 500, 500]))
@@ -1094,7 +1012,7 @@ def test_linker_set_position_torque_overrides_profile_current():
             {0: 0},
         )
     )
-    linker = make_linker_for_encoding(ids=(0,), gripper_id=-1)
+    linker = make_linker_for_encoding(ids=(0,))
     linker._driver = driver
 
     linker.set_position([0.1], velocities=26 * PROFILE_VELOCITY_UNIT_RAD_PER_SEC, torque=[0.1])
@@ -1112,7 +1030,7 @@ def test_linker_set_position_torque_without_velocity_uses_profile_defaults():
             {0: 0},
         )
     )
-    linker = make_linker_for_encoding(ids=(0,), gripper_id=-1)
+    linker = make_linker_for_encoding(ids=(0,))
     linker._driver = driver
 
     linker.set_position([0.1], torque=[0.1])
@@ -1135,7 +1053,7 @@ def test_linker_set_position_broadcasts_metric_profile_scalars_to_raw_arrays():
             {0: 0, 1: 0},
         )
     )
-    linker = make_linker_for_encoding(ids=(0, 1), gripper_id=-1)
+    linker = make_linker_for_encoding(ids=(0, 1))
     linker._driver = driver
 
     linker.set_position(
@@ -1153,7 +1071,7 @@ def test_linker_set_position_broadcasts_metric_profile_scalars_to_raw_arrays():
 
 
 def test_act_signed_torque_round_trips_set_torque_direction():
-    linker = make_linker_for_encoding(ids=(0, 1), gripper_id=-1)
+    linker = make_linker_for_encoding(ids=(0, 1))
     linker._signs = np.array([1, -1])
     current_driver = CurrentRecordingDriver()
     linker._driver = current_driver
@@ -1180,7 +1098,7 @@ def test_act_signed_torque_round_trips_set_torque_direction():
     np.testing.assert_allclose(signed_effort, commanded_torque, atol=0.004)
 
 
-def test_linker_state_keeps_raw_gripper_angle_for_dynamics():
+def test_linker_state_keeps_raw_joint_angles_for_dynamics():
     driver = PositionRecordingDriver(
         (
             {0: 0, 4: 512},
@@ -1188,13 +1106,13 @@ def test_linker_state_keeps_raw_gripper_angle_for_dynamics():
             {0: 0, 4: 0},
         )
     )
-    linker = make_linker_for_encoding(ids=(0, 4), gripper_id=4)
+    linker = make_linker_for_encoding(ids=(0, 4))
     linker._driver = driver
 
     state = linker.get_linker_state()
 
     assert state.public_positions[0] == pytest.approx(0.0)
-    assert state.public_positions[1] == pytest.approx(1.0)
+    assert state.public_positions[1] == pytest.approx(512 * np.pi / 2048.0)
     assert state.raw_positions[1] == pytest.approx(512 * np.pi / 2048.0)
 
 
@@ -1204,8 +1122,6 @@ def test_external_torque_estimation_requires_pin_model():
         "joint_signs": [1, 1],
         "home_poses": [0.0, 0.0],
         "port": "/dev/test",
-        "gripper_id": -1,
-        "gripper_type": "ace_leader",
         "enable_gravity_compensation": False,
         "enable_estimate_external_torque": True,
         "servo_types": ["HL3915", "HL3915"],
@@ -1216,38 +1132,84 @@ def test_external_torque_estimation_requires_pin_model():
         Linker(config, driver=driver)
 
 
-def test_momentum_observer_initializes_and_guards_bad_dt(monkeypatch):
-    linker = make_linker_for_encoding(ids=(0, 1), gripper_id=-1)
-    linker._pin_data = types.SimpleNamespace(M=np.eye(2), g=np.zeros(2), C=np.zeros((2, 2)))
-    linker._K = np.eye(2) * 15.0
-    linker._p_hat = np.zeros(2)
-    linker._estimated_external_torque = np.zeros(2)
-    linker._observer_initialized = False
-    linker._observer_static_friction = 0.0
-    linker._viscous_friction_gain = 0.0
-    linker._max_observer_dt = 0.05
-    linker._lpf_alpha = 1.0
+def test_linker_exposes_external_torque_metadata_when_disabled():
+    linker = make_linker_for_encoding(ids=(0, 1))
+
+    assert linker.external_torque_estimation_enabled is False
+    assert linker.external_wrench_frame_name == "link_5"
+
+
+def test_external_torque_observer_is_public_utils_import():
+    assert ExternalTorqueObserver.__name__ == "ExternalTorqueObserver"
+    assert list(inspect.signature(ExternalTorqueObserver.__init__).parameters) == ["self", "pin_model", "dof"]
+
+
+def test_linker_external_torque_metadata_uses_fixed_frame():
+    pin_model = types.SimpleNamespace(
+        nv=2,
+        frames=[object(), object()],
+        createData=lambda: types.SimpleNamespace(M=np.eye(2), g=np.zeros(2), C=np.zeros((2, 2))),
+        getFrameId=lambda name: 0 if name == "link_5" else 2,
+    )
+    config = {
+        "joint_ids": [0, 1],
+        "joint_signs": [1, 1],
+        "home_poses": [0.0, 0.0],
+        "port": "/dev/test",
+        "enable_gravity_compensation": False,
+        "enable_estimate_external_torque": True,
+        "external_wrench_frame": "tool_tip",
+        "servo_types": ["HL3915", "HL3915"],
+    }
+    driver = PositionRecordingDriver(({0: 0, 1: 0}, {0: 0, 1: 0}, {0: 0, 1: 0}))
+    linker = Linker(config, driver=driver, pin_model=pin_model)
+
+    assert linker.external_torque_estimation_enabled is True
+    assert linker.external_wrench_frame_name == "link_5"
+
+
+def test_linker_external_torque_estimator_initializes_and_guards_bad_dt(monkeypatch):
+    pin_model = types.SimpleNamespace(
+        nv=2,
+        frames=[object(), object()],
+        createData=lambda: types.SimpleNamespace(M=np.eye(2), g=np.zeros(2), C=np.zeros((2, 2))),
+        getFrameId=lambda _name: 0,
+    )
+    driver = PositionRecordingDriver(({0: 0, 1: 0}, {0: 0, 1: 0}, {0: 0, 1: 0}))
+    linker = Linker(
+        {
+            "joint_ids": [0, 1],
+            "joint_signs": [1, 1],
+            "home_poses": [0.0, 0.0],
+            "port": "/dev/test",
+            "enable_gravity_compensation": False,
+            "enable_estimate_external_torque": True,
+            "servo_types": ["HL3915", "HL3915"],
+        },
+        driver=driver,
+        pin_model=pin_model,
+    )
 
     def fake_compute_all_terms(_model, data, _joint_pos, _joint_vel):
         data.M = np.eye(2)
         data.g = np.zeros(2)
         data.C = np.zeros((2, 2))
 
-    monkeypatch.setattr("acetele.equipment.feetech.linker.pin.computeAllTerms", fake_compute_all_terms)
+    monkeypatch.setattr("acetele.utils.external_torque.pin.computeAllTerms", fake_compute_all_terms)
 
-    first = linker.update_momentum_observer(
+    first = linker.estimate_joint_external_torque(
         np.array([0.0, 0.0]),
         np.array([0.3, -0.4]),
         np.array([10.0, -10.0]),
         0.004,
     )
-    second = linker.update_momentum_observer(
+    second = linker.estimate_joint_external_torque(
         np.array([0.0, 0.0]),
         np.array([0.3, -0.4]),
         np.array([10.0, -10.0]),
         0.0,
     )
-    third = linker.update_momentum_observer(
+    third = linker.estimate_joint_external_torque(
         np.array([0.0, 0.0]),
         np.array([0.3, -0.4]),
         np.array([10.0, -10.0]),
@@ -1257,7 +1219,7 @@ def test_momentum_observer_initializes_and_guards_bad_dt(monkeypatch):
     np.testing.assert_allclose(first, np.zeros(2))
     np.testing.assert_allclose(second, np.zeros(2))
     np.testing.assert_allclose(third, np.zeros(2))
-    np.testing.assert_allclose(linker._p_hat, np.array([0.3, -0.4]))
+    np.testing.assert_allclose(linker._external_torque_observer._p_hat, np.array([0.3, -0.4]))
 
 
 def test_linker_exposes_single_wrench_mapping_api():

@@ -22,7 +22,7 @@ class VisualizationNode(Node):
         self.declare_parameter("wrist_depth_topic", "/camera/wrist/aligned_depth_to_color/image_raw")
         self.declare_parameter("front_color_metadata_topic", "/camera/front/color/metadata")
         self.declare_parameter("wrist_color_metadata_topic", "/camera/wrist/color/metadata")
-        self.declare_parameter("arm_state_topic", "/arm/state")
+        self.declare_parameter("arm_state_topic", "/ace_follower/arm/state")
         self.declare_parameter("color_transport", "compressed")
         self.declare_parameter("depth_transport", "compressedDepth")
 

@@ -105,14 +105,21 @@ backend = "mock"
 
 [linker.single]
 port = "/dev/ttyUSB0"
-joint_ids = [0, 1, 2, 3, 4]
-joint_signs = [1, -1, -1, -1, 1]
-home_poses = [0.0, 0.0, 0.0, 0.0, 0.0]
-gripper_id = 4
-gripper_type = "ace_leader"
+joint_ids = [0, 1, 2, 3]
+joint_signs = [1, -1, -1, -1]
+home_poses = [0.0, 0.0, 0.0, 0.0]
 enable_gravity_compensation = true
 enable_estimate_external_torque = false
-servo_types = ["HL3915", "HL3915", "HL3915", "HL3915", "HL3915"]
+servo_types = ["HL3915", "HL3915", "HL3915", "HL3915"]
+
+[gripper.single]
+port = "/dev/ttyUSB0"
+joint_id = 4
+joint_sign = 1
+home_pose = 0.0
+servo_type = "HL3915"
+gripper_type = "ace_leader"
+enable_fragile_force_control = false
 ```
 
 可通过修改 `default.toml` 的 `config_file` 切换不同配置，例如切换为 `ace_follower.toml` 以使用 ace_follower 机器人的配置文件。
@@ -133,7 +140,9 @@ robot.close()
 
 - `basic.robot_type`：机器人类型，例如 `"ace_leader"` 或 `"ace_follower"`；
 - `basic.backend`：后端类型，例如 `"default"`、`"ros2"`、`"mock"`；
-- `linker.single` / `linker.dual`：硬件连线配置，包含串口号、关节 ID、符号方向以及初始姿态等信息。
+- `linker.single` / `linker.dual`：机械臂硬件连线配置，包含串口号、关节 ID、符号方向以及初始姿态等信息；
+- `gripper.single` / `gripper.dual`：可选夹爪配置，使用 `joint_id` 和 `port` 描述夹爪舵机。direct Robot API 的组合关节顺序固定为 `linker.single.joint_ids` 后追加 `gripper.single.joint_id`。
+- ROS 2 topic 已按设备分域：`/ace_follower/arm/state` 和 `/ace_leader/arm/command` 只包含机械臂轴，夹爪使用 `/ace_follower/gripper/state` 和 `/ace_leader/gripper/command` 单独发布；PX4 `/fmu/in/arm_joint_state` 仍是适配层要求的 5D `[arm..., gripper]`。
 
 `ConfigLoader` 使用内部 `_ROBOT_MAP` 将 `(robot_type, backend)` 映射为具体模块与类名，并由 `make_robot` 工厂函数创建机器人实例。
 

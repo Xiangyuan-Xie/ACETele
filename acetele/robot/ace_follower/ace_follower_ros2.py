@@ -1,3 +1,4 @@
+import json
 from typing import Optional, Sequence, Tuple
 
 import numpy as np
@@ -27,19 +28,19 @@ class AceFollowerROS2Robot(Node, AceFollowerRobot):
         self.declare_parameter("heartbeat_timeout", 1.0)
         self._heartbeat_timeout_ns = int(self.get_parameter("heartbeat_timeout").value * 1e9)
         qos = QoSProfile(depth=10)
-        self._state_pub = self.create_publisher(
+        self._arm_state_pub = self.create_publisher(
             JointState,
-            "/arm/state",
+            "/ace_follower/arm/state",
             qos,
         )
         self._external_joint_torque_pub = self.create_publisher(
             JointState,
-            "/arm/external_joint_torque",
+            "/ace_follower/arm/external_joint_torque",
             qos,
         )
         self._external_wrench_pub = self.create_publisher(
             WrenchStamped,
-            "/arm/external_wrench",
+            "/ace_follower/arm/external_wrench",
             qos,
         )
         self._px4_arm_state_pub = self.create_publisher(
@@ -49,18 +50,34 @@ class AceFollowerROS2Robot(Node, AceFollowerRobot):
         )
         self._sync_status_pub = self.create_publisher(
             String,
-            "/arm/sync_status",
+            "/ace_follower/arm/sync_status",
             qos,
         )
-        self._command_sub = self.create_subscription(
+        self._gripper_state_pub = self.create_publisher(
             JointState,
-            "/arm/command",
-            self._command_callback,
+            "/ace_follower/gripper/state",
+            qos,
+        )
+        self._gripper_force_state_pub = self.create_publisher(
+            String,
+            "/ace_follower/gripper/force_state",
+            qos,
+        )
+        self._arm_command_sub = self.create_subscription(
+            JointState,
+            "/ace_leader/arm/command",
+            self._arm_command_callback,
+            qos,
+        )
+        self._gripper_command_sub = self.create_subscription(
+            JointState,
+            "/ace_leader/gripper/command",
+            self._gripper_command_callback,
             qos,
         )
         self._sync_mode_sub = self.create_subscription(
             String,
-            "/arm/sync_mode",
+            "/ace_leader/arm/sync_mode",
             self._sync_mode_callback,
             qos,
         )
@@ -76,29 +93,39 @@ class AceFollowerROS2Robot(Node, AceFollowerRobot):
         self._sync_status = FollowerSyncStatus.IDLE
         self._last_command_ns = None
         self._heartbeat_lost = False
-        self._latest_command: Optional[list[float]] = None
-        self._latest_state: Optional[
+        self._latest_arm_command: Optional[list[float]] = None
+        self._latest_arm_state: Optional[
             Tuple[Sequence[float], Sequence[float], Sequence[float]]
         ] = None
         self._last_external_estimate_ns: Optional[int] = None
         self._external_joint_torque: Optional[np.ndarray] = None
         self._external_wrench: Optional[np.ndarray] = None
-        single_arm = getattr(getattr(self, "_equipments", None), "single_arm", None)
         self._external_wrench_frame_id = getattr(
-            single_arm,
-            "_external_wrench_frame_name",
+            getattr(getattr(self, "_equipments", None), "single_arm", None),
+            "external_wrench_frame_name",
             "link_5",
         )
+        self._latest_gripper_state: Optional[Tuple[Sequence[float], Sequence[float], Sequence[float]]] = None
         self._warned_invalid_px4_arm_state_length = False
 
         self.get_logger().info("Follower arm controller node started.")
 
-    def _command_callback(self, msg: JointState):
+    def _arm_command_callback(self, msg: JointState):
         if self._sync_mode != LeaderSyncMode.TRACKING:
             return
         self._last_command_ns = self.get_clock().now().nanoseconds
         self._heartbeat_lost = False
-        self._latest_command = list(msg.position)
+        self._latest_arm_command = list(msg.position)
+
+    def _gripper_command_callback(self, msg: JointState):
+        if self._sync_mode != LeaderSyncMode.TRACKING:
+            return
+        gripper = getattr(getattr(self, "_equipments", None), "gripper", None)
+        if gripper is None or not msg.position:
+            return
+        command_position = float(msg.position[0])
+        if not gripper.set_fragile_position(command_position):
+            gripper.set_position(command_position)
 
     def _sync_mode_callback(self, msg: String):
         try:
@@ -127,15 +154,49 @@ class AceFollowerROS2Robot(Node, AceFollowerRobot):
                 self._heartbeat_lost = True
         single_arm = getattr(getattr(self, "_equipments", None), "single_arm", None)
         if single_arm is not None and hasattr(single_arm, "get_linker_state"):
-            state = single_arm.get_linker_state()
-            joint_pos = state.public_positions
-            joint_vel = state.velocities
-            joint_effort = state.motor_torque_magnitude
-            self._latest_state = (joint_pos, joint_vel, joint_effort)
-            self._update_external_estimate(now_ns, state)
+            arm_state = single_arm.get_linker_state()
+            joint_pos = arm_state.public_positions
+            joint_vel = arm_state.velocities
+            joint_effort = arm_state.motor_torque_magnitude
+            self._latest_arm_state = (joint_pos, joint_vel, joint_effort)
+            self._external_wrench_frame_id = single_arm.external_wrench_frame_name
+            if not single_arm.external_torque_estimation_enabled:
+                self._external_joint_torque = None
+                self._external_wrench = None
+            else:
+                dt = (
+                    0.0
+                    if self._last_external_estimate_ns is None
+                    else (now_ns - self._last_external_estimate_ns) * 1e-9
+                )
+                self._last_external_estimate_ns = now_ns
+                arm_external_joint_torque = np.asarray(
+                    single_arm.estimate_joint_external_torque(
+                        arm_state.raw_positions,
+                        arm_state.velocities,
+                        arm_state.motor_torque_signed,
+                        dt,
+                    ),
+                    dtype=float,
+                )
+                self._external_joint_torque = arm_external_joint_torque
+                self._external_wrench = np.asarray(
+                    single_arm.external_wrench_from_joint_torque(arm_state.raw_positions, arm_external_joint_torque),
+                    dtype=float,
+                )
         else:
             joint_pos, joint_vel, joint_effort = self.act()
-            self._latest_state = (joint_pos, joint_vel, joint_effort)
+            self._latest_arm_state = (joint_pos, joint_vel, joint_effort)
+        gripper = getattr(getattr(self, "_equipments", None), "gripper", None)
+        if gripper is not None:
+            gripper_state = gripper.get_state()
+            self._latest_gripper_state = (
+                np.array([gripper_state.public_position], dtype=float),
+                np.array([gripper_state.velocity], dtype=float),
+                np.array([gripper_state.motor_torque_magnitude], dtype=float),
+            )
+        else:
+            self._latest_gripper_state = None
         if self._sync_mode == LeaderSyncMode.STOP:
             self._sync_status = FollowerSyncStatus.LOST
             return
@@ -146,48 +207,27 @@ class AceFollowerROS2Robot(Node, AceFollowerRobot):
             self._sync_status = FollowerSyncStatus.READY
             return
         if self._sync_mode == LeaderSyncMode.TRACKING:
-            if self._latest_command is None:
+            if self._latest_arm_command is None:
                 return
             if self._sync_status in (FollowerSyncStatus.READY, FollowerSyncStatus.TRACKING):
-                self.set_position(self._latest_command)
+                self._equipments.single_arm.set_position(self._latest_arm_command)
                 self._sync_status = FollowerSyncStatus.TRACKING
 
-    def _update_external_estimate(self, now_ns: int, state):
-        linker = self._equipments.single_arm
-        if not getattr(linker, "_enable_estimate_external_torque", False):
-            self._external_joint_torque = None
-            self._external_wrench = None
-            return
-        if self._last_external_estimate_ns is None:
-            dt = 0.0
-        else:
-            dt = (now_ns - self._last_external_estimate_ns) * 1e-9
-        self._last_external_estimate_ns = now_ns
-        external_joint_torque = linker.estimate_joint_external_torque(
-            state.raw_positions,
-            state.velocities,
-            state.motor_torque_signed,
-            dt,
-        )
-        self._external_joint_torque = np.asarray(external_joint_torque, dtype=float)
-        self._external_wrench = np.asarray(
-            linker.external_wrench_from_joint_torque(state.raw_positions, self._external_joint_torque),
-            dtype=float,
-        )
-
     def _publish_state_loop(self):
-        if self._latest_state is None:
+        if self._latest_arm_state is None:
             return
 
-        joint_pos, joint_vel, joint_effort = self._latest_state
+        joint_pos, joint_vel, joint_effort = self._latest_arm_state
         now = self.get_clock().now()
         msg = JointState()
         msg.header.stamp = now.to_msg()
-        msg.name = [f"joint_{i+1}" for i in self._equipments.single_arm.ids]
+        single_arm = getattr(getattr(self, "_equipments", None), "single_arm", None)
+        arm_ids = np.asarray(getattr(single_arm, "ids", getattr(self, "ids", range(len(joint_pos))))).astype(int)
+        msg.name = [f"joint_{i+1}" for i in arm_ids]
         msg.position = joint_pos.tolist()
         msg.velocity = joint_vel.tolist()
         msg.effort = joint_effort.tolist()
-        self._state_pub.publish(msg)
+        self._arm_state_pub.publish(msg)
 
         external_joint_torque = getattr(self, "_external_joint_torque", None)
         if external_joint_torque is not None:
@@ -214,7 +254,39 @@ class AceFollowerROS2Robot(Node, AceFollowerRobot):
         status_msg.data = self._sync_status.value
         self._sync_status_pub.publish(status_msg)
 
-        if len(msg.position) != 5:
+        gripper_state = getattr(self, "_latest_gripper_state", None)
+        if gripper_state is not None:
+            gripper_pos, gripper_vel, gripper_effort = gripper_state
+            gripper_msg = JointState()
+            gripper_msg.header.stamp = now.to_msg()
+            gripper_id = getattr(self, "gripper_id", None)
+            gripper_msg.name = [] if gripper_id is None else [f"joint_{int(gripper_id) + 1}"]
+            gripper_msg.position = gripper_pos.tolist()
+            gripper_msg.velocity = gripper_vel.tolist()
+            gripper_msg.effort = gripper_effort.tolist()
+            self._gripper_state_pub.publish(gripper_msg)
+
+        publisher = getattr(self, "_gripper_force_state_pub", None)
+        state = self.get_gripper_force_control_state() if hasattr(self, "get_gripper_force_control_state") else None
+        if publisher is not None and state is not None:
+            gripper_msg = String()
+            gripper_msg.data = json.dumps(
+                {
+                    "status": getattr(state, "status", None),
+                    "command_position": getattr(state, "command_position", None),
+                    "hold_position": getattr(state, "hold_position", None),
+                    "measured_torque_nm": getattr(state, "measured_torque_nm", None),
+                    "contact_torque_nm": getattr(state, "contact_torque_nm", None),
+                    "hold_torque_nm": getattr(state, "hold_torque_nm", None),
+                }
+            )
+            publisher.publish(gripper_msg)
+
+        px4_positions = list(msg.position)
+        if gripper_state is not None:
+            px4_positions = px4_positions + list(np.asarray(gripper_state[0], dtype=float))
+
+        if len(px4_positions) != 5:
             if not self._warned_invalid_px4_arm_state_length:
                 self.get_logger().warn(
                     "Skipping PX4 arm joint state publish: ArmJointState expects 5 joints."
@@ -224,5 +296,5 @@ class AceFollowerROS2Robot(Node, AceFollowerRobot):
 
         px4_msg = ArmJointState()
         px4_msg.timestamp = now.nanoseconds // 1000
-        px4_msg.arm_position = msg.position
+        px4_msg.arm_position = px4_positions
         self._px4_arm_state_pub.publish(px4_msg)

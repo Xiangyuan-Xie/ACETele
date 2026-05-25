@@ -60,7 +60,8 @@ TOPIC_CONFIG = {
     "/fmu/out/manual_control_setpoint": {
         "outputs": [("action/base", extract_attr(["throttle", "yaw", "pitch", "roll"]))]
     },
-    "/arm/command": {"outputs": [("action/arm", extract_attr("position"))]},
+    "/ace_leader/arm/command": {"outputs": [("action/arm", extract_attr("position"))]},
+    "/ace_leader/gripper/command": {"outputs": [("action/gripper", extract_attr("position"))]},
     "Xie_1/pose": {
         "outputs": [
             ("observation/base_position_mocap", extract_attr("position")),
@@ -75,11 +76,18 @@ TOPIC_CONFIG = {
             ("observation/base_angular_velocity", extract_attr("angular_velocity")),
         ]
     },
-    "/arm/state": {
+    "/ace_follower/arm/state": {
         "outputs": [
             ("observation/arm_position", extract_attr("position")),
             ("observation/arm_velocity", extract_attr("velocity")),
             ("observation/arm_effort", extract_attr("effort")),
+        ]
+    },
+    "/ace_follower/gripper/state": {
+        "outputs": [
+            ("observation/gripper_position", extract_attr("position")),
+            ("observation/gripper_velocity", extract_attr("velocity")),
+            ("observation/gripper_effort", extract_attr("effort")),
         ]
     },
     "/camera/color/image_raw": {"outputs": [("observations/images/front/color", extract_image)]},

@@ -17,11 +17,17 @@ port = "/dev/test"
 joint_ids = [1]
 joint_signs = [1]
 home_poses = [0.0]
-gripper_id = -1
-gripper_type = "ace_leader"
 enable_gravity_compensation = false
 enable_estimate_external_torque = false
 servo_types = ["HL3915"]
+
+[gripper.single]
+port = "/dev/test"
+joint_id = 2
+joint_sign = 1
+home_pose = 0.0
+servo_type = "HL3915"
+gripper_type = "ace_leader"
 """
     )
 
@@ -30,6 +36,7 @@ servo_types = ["HL3915"]
     assert loader.get_robot_type() == "ace_follower"
     assert loader.get_backend() == "ros2"
     assert loader.get_linker_config()[0]["port"] == "/dev/test"
+    assert loader.get_gripper_config()[0]["joint_id"] == 2
 
 
 def test_config_loader_can_override_backend_without_separate_robot_config(tmp_path):
@@ -47,11 +54,17 @@ port = "/dev/test"
 joint_ids = [1]
 joint_signs = [1]
 home_poses = [0.0]
-gripper_id = -1
-gripper_type = "ace_leader"
 enable_gravity_compensation = false
 enable_estimate_external_torque = false
 servo_types = ["HL3915"]
+
+[gripper.single]
+port = "/dev/test"
+joint_id = 2
+joint_sign = 1
+home_pose = 0.0
+servo_type = "HL3915"
+gripper_type = "ace_leader"
 """
     )
 
@@ -60,6 +73,8 @@ servo_types = ["HL3915"]
     assert loader.get_robot_type() == "ace_leader"
     assert loader.get_backend() == "ros2"
     assert loader.get_linker_config()[0]["port"] == "/dev/test"
+    assert loader.get_gripper_config()[0]["joint_id"] == 2
+    assert not hasattr(loader, "get_public_joint_ids")
 
 
 def test_ace_follower_pin_model_path_exists_and_loads():

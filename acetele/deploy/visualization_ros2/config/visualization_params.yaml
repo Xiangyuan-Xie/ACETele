@@ -6,6 +6,6 @@ visualization_ros2:
     wrist_depth_topic: "/camera/wrist/aligned_depth_to_color/image_raw"
     front_color_metadata_topic: "/camera/front/color/metadata"
     wrist_color_metadata_topic: "/camera/wrist/color/metadata"
-    arm_state_topic: "/arm/state"
+    arm_state_topic: "/ace_follower/arm/state"
     color_transport: "compressed"
     depth_transport: "compressedDepth"

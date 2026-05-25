@@ -58,10 +58,20 @@ class ConfigLoader:
         else:
             raise ValueError(f"Robot type '{robot_type}' not supported")
 
+    @staticmethod
+    def _get_equipment_config(config: Dict[str, Any], key: str) -> Tuple[Dict[str, Any], ...]:
+        equipment_config = config.get(key, {})
+        if "single" in equipment_config:
+            return (equipment_config["single"],)
+        if "dual" in equipment_config:
+            return tuple(equipment_config["dual"].values())
+        return ()
+
     def get_linker_config(self) -> Tuple[Dict[str, Any], ...]:
-        if "single" in self._robot_config["linker"]:
-            return (self._robot_config["linker"]["single"],)
-        elif "dual" in self._robot_config["linker"]:
-            return tuple(self._robot_config["linker"]["dual"].values())
-        else:
-            raise ValueError("Linker type not supported")
+        linker_configs = self._get_equipment_config(self._robot_config, "linker")
+        if linker_configs:
+            return linker_configs
+        raise ValueError("Linker type not supported")
+
+    def get_gripper_config(self) -> Tuple[Dict[str, Any], ...]:
+        return self._get_equipment_config(self._robot_config, "gripper")

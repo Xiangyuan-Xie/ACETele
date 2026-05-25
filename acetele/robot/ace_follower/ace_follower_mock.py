@@ -13,8 +13,11 @@ class AceFollowerMockRobot(BaseRobot):
     def __init__(self, config_loader: ConfigLoader):
         super().__init__(config_loader)
         (single_arm_config,) = self._config_loader.get_linker_config()
-        self.ids = np.array(single_arm_config["joint_ids"])
-        self.dof = len(single_arm_config["joint_ids"])
+        gripper_configs = self._config_loader.get_gripper_config()
+        self.ids = np.array(
+            tuple(single_arm_config["joint_ids"]) + tuple(int(config["joint_id"]) for config in gripper_configs)
+        )
+        self.dof = len(self.ids)
         self.current_positions = np.zeros(self.dof)
         self.current_velocities = np.zeros(self.dof)
         self.current_currents = np.zeros(self.dof)
@@ -36,7 +39,9 @@ class AceFollowerMockRobot(BaseRobot):
             self.current_positions = np.asarray(positions)
             return
         next_positions = self.current_positions.copy()
-        next_positions[np.searchsorted(self.ids, ids)] = np.asarray(positions)
+        index_by_id = {int(ft_id): index for index, ft_id in enumerate(self.ids)}
+        indices = [index_by_id[int(ft_id)] for ft_id in ids]
+        next_positions[indices] = np.asarray(positions)
         self.current_positions = next_positions
 
 
