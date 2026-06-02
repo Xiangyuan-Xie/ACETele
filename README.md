@@ -1,239 +1,363 @@
-# ACETele
+<a id="readme-top"></a>
 
-[![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/) [![Status](https://img.shields.io/badge/status-experimental-orange.svg)](#项目状态) [![Code style](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black) [![pre-commit](https://img.shields.io/badge/pre--commit-enabled-brightgreen?logo=pre-commit&logoColor=white)](https://pre-commit.com/)
+<div align="center">
 
-ACETele 是一套面向机器人平台的实时遥操作系统，致力于构建统一且稳定的控制与数据传输链路。
+<p align="center">
+  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-%3E%3D3.9-blue.svg" alt="Python" /></a>
+  <a href="https://docs.ros.org/en/humble/"><img src="https://img.shields.io/badge/ROS%202-Humble-22314E.svg" alt="ROS 2 Humble" /></a>
+  <a href="#项目状态"><img src="https://img.shields.io/badge/status-experimental-orange.svg" alt="Status: experimental" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License: Apache-2.0" /></a>
+  <a href="https://pre-commit.com/"><img src="https://img.shields.io/badge/pre--commit-enabled-brightgreen?logo=pre-commit&logoColor=white" alt="pre-commit" /></a>
+</p>
 
----
-
-- [ACETele](#acetele)
-  - [项目简介](#项目简介)
-  - [功能特性](#功能特性)
-  - [项目状态](#项目状态)
-  - [目录结构](#目录结构)
-  - [快速开始](#快速开始)
-    - [运行环境](#运行环境)
-    - [安装](#安装)
-    - [获取遥操作数据](#获取遥操作数据)
-  - [配置说明](#配置说明)
-  - [ROS 2 集成与部署](#ros-2-集成与部署)
-  - [与 ACESim 协作](#与-acesim-协作)
-  - [开发与测试](#开发与测试)
-  - [贡献指南](#贡献指南)
-  - [开源协议](#开源协议)
-  - [致谢](#致谢)
+<h1 align="center">ACETele</h1>
 
 ---
+
+<p align="center">
+  面向机器人平台的实时遥操作系统。
+</p>
+
+<p align="center">
+  <strong>简体中文</strong>
+  ·
+  <a href="README.en.md">English</a>
+</p>
+
+</div>
+
+<details>
+  <summary>目录</summary>
+  <ol>
+    <li><a href="#项目简介">项目简介</a></li>
+    <li><a href="#项目状态">项目状态</a></li>
+    <li><a href="#技术栈">技术栈</a></li>
+    <li>
+      <a href="#快速开始">快速开始</a>
+      <ul>
+        <li><a href="#环境要求">环境要求</a></li>
+        <li><a href="#安装">安装</a></li>
+      </ul>
+    </li>
+    <li>
+      <a href="#使用">使用</a>
+      <ul>
+        <li><a href="#python-入口">Python 入口</a></li>
+        <li><a href="#配置">配置</a></li>
+        <li><a href="#ros-2-部署">ROS 2 部署</a></li>
+        <li><a href="#数据与诊断工具">数据与诊断工具</a></li>
+      </ul>
+    </li>
+    <li><a href="#目录结构">目录结构</a></li>
+    <li><a href="#路线图">路线图</a></li>
+    <li><a href="#贡献">贡献</a></li>
+    <li><a href="#许可证">许可证</a></li>
+    <li><a href="#联系">联系</a></li>
+    <li><a href="#致谢">致谢</a></li>
+  </ol>
+</details>
 
 ## 项目简介
 
-ACETele 是一套用于机器人遥操作系统的软件框架。该系统通常包含本地操作端、远程执行端与真实或仿真环境三部分。我们希望通过清晰的架构与可扩展的设计，实现以下目标：
+ACETele 是一套面向机器人平台的实时遥操作系统。它把主端机器人、从端机器人、夹爪、手柄、ROS 2 节点、数据采集和硬件诊断放在统一工程中，目标是在实验室快速搭建可复用、可扩展、可接入真实硬件的遥操作链路。
 
-- 在迁移至真实硬件环境时最大限度复用同一套逻辑；
-- 以统一接口接入多种硬件设备（舵机、电机、手柄等），降低集成成本；
-- 与 ROS 2 等主流机器人软件生态保持良好兼容性，便于系统集成与扩展。
+核心能力：
 
-## 功能特性
+- 支持 `ace_leader` 与 `ace_follower` 两类机器人角色。
+- 支持 `mock`、`default`、`ros2` 三类后端，便于在无硬件测试、真实设备控制和 ROS 2 部署之间切换。
+- 封装 FEETECH HLS 舵机驱动、机械臂 `Linker`、归一化夹爪 `Gripper` 和手柄输入。
+- 支持主从同步遥操作，机械臂与夹爪使用独立 ROS 2 topic，并保留 PX4 适配所需的 5D 关节状态。
+- 提供 rosbag 转 HDF5、HDF5 可视化、回差诊断、重力补偿诊断和 FEETECH PID 自动调参等工具。
 
-- 遥操作
-  - 支持单臂/多臂的同构遥操作。
-
-- ROS 2 集成
-  - `ace_robot_ros2`：机器人端 ROS 2 节点。
-  - `data_collector_ros2`：数据采集与记录节点。
-  - `joystick_ros2`：手柄输入与手动控制节点。
-  - `visualization_ros2`：可视化与监控 GUI。
-- 工具与数据处理
-  - 训练数据采集与格式转换。
+<p align="right">(<a href="#readme-top">返回顶部</a>)</p>
 
 ## 项目状态
 
-ACETele 目前处于实验性（experimental）阶段，主要面向科研研究和教学演示场景。接口与内部实现仍可能根据需求调整，尚不承诺长期向后兼容。若用于工程化或产品级场景，建议在充分评估与测试基础上引入版本管理策略。
+ACETele 目前处于实验阶段，主要服务于科研、课程实验和机器人系统原型验证。接口、配置字段、ROS 2 topic 和硬件调参流程仍可能随实验需求变化。
 
-## 目录结构
+在真实硬件上运行前，请确认串口配置、舵机 ID、机械限位、供电、急停和人员安全。涉及标定、PID 调参、重力补偿和诊断工具的命令都可能移动舵机或写入控制参数。
 
-```text
-ACETele/
-├─ acetele/
-│  ├─ config/          配置文件
-│  ├─ core/            核心接口
-│  ├─ deploy/          ROS 2 部署包
-│  ├─ equipment/       硬件抽象与驱动
-│  ├─ robot/           主从遥操作机器人端逻辑
-│  ├─ tools/           工具脚本
-├─ README.md           本说明文档
-├─ requirements.txt    运行时依赖
-├─ pyproject.toml      项目元数据与构建配置
-├─ setup.py            setuptools 安装脚本
-└─ .pre-commit-config.yaml  开发阶段代码质量检查配置
-```
+<p align="right">(<a href="#readme-top">返回顶部</a>)</p>
+
+## 技术栈
+
+主要运行时与集成依赖：
+
+- [Python](https://www.python.org/) 3.9+
+- [NumPy](https://numpy.org/)
+- [Pinocchio](https://stack-of-tasks.github.io/pinocchio/)
+- [ROS 2 Humble](https://docs.ros.org/en/humble/)
+- [PX4](https://px4.io/) / `px4_msgs`
+- [Intel RealSense ROS](https://github.com/IntelRealSense/realsense-ros)
+- [pygame](https://www.pygame.org/)、[pyserial](https://pyserial.readthedocs.io/)、[h5py](https://www.h5py.org/)
+
+Python 包的基础依赖由 `pyproject.toml` 和 `requirements.txt` 声明；ROS 2、相机、PX4 和 GUI 相关依赖需要在 ROS 2 工作空间中按需准备。
+
+<p align="right">(<a href="#readme-top">返回顶部</a>)</p>
 
 ## 快速开始
 
-### 运行环境
+### 环境要求
 
-- 操作系统：Ubuntu（推荐）/Windows。
-- Python：3.10 及以上。
-- ROS 2（可选）：Humble。
+- Python 3.9 或更新版本。
+- Git 与 pip。
+- 如需 ROS 2 部署，推荐 Ubuntu + ROS 2 Humble。
+- 如需真实硬件，准备 FEETECH HLS 舵机、串口权限和完整安全检查流程。
+- 可选外设包括 JDK FPV/pygame 兼容手柄、RealSense 相机和 PX4 相关 ROS 2 消息。
 
 ### 安装
 
-```bash
-git clone https://github.com/Xiangyuan-Xie/ACETele.git
-cd ACETele
+克隆仓库：
 
-pip install -e .
+```bash
+git clone --recursive https://github.com/Xiangyuan-Xie/ACETele.git
+cd ACETele
 ```
 
-### 获取遥操作数据
+如果已经克隆过仓库，可补拉子模块：
 
-`BaseRobot` 及其子类负责将外部输入（如主臂当前关节位置）转换为目标动作指令。
+```bash
+git submodule update --init --recursive
+```
 
-配置入口见 [`acetele/config/default.toml`](acetele/config/default.toml)：
+安装 Python 包：
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e .
+```
+
+安装开发工具并运行测试：
+
+```bash
+python -m pip install pytest pre-commit
+pre-commit install
+python -m pytest
+```
+
+<p align="right">(<a href="#readme-top">返回顶部</a>)</p>
+
+## 使用
+
+### Python 入口
+
+最小调用入口是 `make_robot()`。默认 `acetele/config/default.toml` 指向 `ace_leader.toml`，其中 `ace_leader` 当前使用 `mock` 后端，可用于无硬件快速验证。
+
+```python
+from acetele.core.make_robot import make_robot
+
+robot = make_robot()
+try:
+    joint_pos, joint_vel, joint_tau = robot.act()
+    print(joint_pos, joint_vel, joint_tau)
+finally:
+    robot.close()
+```
+
+`BaseRobot.act()` 返回位置、速度和力/力矩估计。带夹爪的 direct Robot API 中，组合关节顺序为机械臂关节在前，夹爪关节在后。
+
+<p align="right">(<a href="#readme-top">返回顶部</a>)</p>
+
+### 配置
+
+配置入口位于 `acetele/config/default.toml`：
 
 ```toml
 [basic]
 config_file = "ace_leader.toml"
 ```
 
-示例配置见 [`acetele/config/ace_leader.toml`](acetele/config/ace_leader.toml)：
+机器人配置文件位于：
 
-```toml
-[basic]
-robot_type = "ace_leader"
-backend = "mock"
+- `acetele/config/ace_leader.toml`
+- `acetele/config/ace_follower.toml`
 
-[linker.single]
-port = "/dev/ttyUSB0"
-joint_ids = [0, 1, 2, 3]
-joint_signs = [1, -1, -1, -1]
-home_poses = [0.0, 0.0, 0.0, 0.0]
-enable_gravity_compensation = true
-enable_estimate_external_torque = false
-servo_types = ["HL3915", "HL3915", "HL3915", "HL3915"]
+核心字段：
 
-[gripper.single]
-port = "/dev/ttyUSB0"
-joint_id = 4
-joint_sign = 1
-home_pose = 0.0
-servo_type = "HL3915"
-gripper_type = "ace_leader"
-enable_fragile_force_control = false
-```
+- `basic.robot_type`：机器人角色，例如 `ace_leader`、`ace_follower`。
+- `basic.backend`：运行后端，例如 `mock`、`default`、`ros2`。
+- `linker.single.port`：机械臂舵机串口。
+- `linker.single.joint_ids`：机械臂舵机 ID。
+- `linker.single.joint_signs`：关节方向约定。
+- `linker.single.home_poses`：标定零位。
+- `linker.single.servo_types`：舵机型号，目前支持 `HL3950`、`HL3930`、`HL3915`。
+- `gripper.single`：可选夹爪配置，包含夹爪舵机 ID、串口、方向、初始位置和夹爪类型。
 
-可通过修改 `default.toml` 的 `config_file` 切换不同配置，例如切换为 `ace_follower.toml` 以使用 ace_follower 机器人的配置文件。
+`ConfigLoader` 会根据 `(robot_type, backend)` 从内部映射表中创建对应机器人类。新增机器人角色或后端时，需要同步更新配置、映射和测试。
 
-调用方式：
+<p align="right">(<a href="#readme-top">返回顶部</a>)</p>
 
-```python
-from acetele.core.make_robot import make_robot
+### ROS 2 部署
 
-robot = make_robot()
-joint_pos, joint_vel, joint_tau = robot.act()
-robot.close()
-```
+ROS 2 包位于 `acetele/deploy`：
 
-## 配置说明
+- `ace_robot_ros2`：统一机器人节点，通过 `config_path` 创建 leader 或 follower。
+- `acetele_bringup`：系统级 launch 文件。
+- `data_collector_ros2`：由遥控通道触发 rosbag 录制。
+- `joystick_ros2`：将手柄输入转换为 PX4 manual control 输入。
+- `visualization_ros2`：RGB-D 图像、关节状态和 topic 状态可视化 GUI。
+- `px4_msgs`、`realsense-ros`：部署相关消息包和相机子模块。
 
-配置系统由 [`ConfigLoader`](acetele/config/config_loader.py) 统一管理，核心概念包括：
-
-- `basic.robot_type`：机器人类型，例如 `"ace_leader"` 或 `"ace_follower"`；
-- `basic.backend`：后端类型，例如 `"default"`、`"ros2"`、`"mock"`；
-- `linker.single` / `linker.dual`：机械臂硬件连线配置，包含串口号、关节 ID、符号方向以及初始姿态等信息；
-- `gripper.single` / `gripper.dual`：可选夹爪配置，使用 `joint_id` 和 `port` 描述夹爪舵机。direct Robot API 的组合关节顺序固定为 `linker.single.joint_ids` 后追加 `gripper.single.joint_id`。
-- ROS 2 topic 已按设备分域：`/ace_follower/arm/state` 和 `/ace_leader/arm/command` 只包含机械臂轴，夹爪使用 `/ace_follower/gripper/state` 和 `/ace_leader/gripper/command` 单独发布；PX4 `/fmu/in/arm_joint_state` 仍是适配层要求的 5D `[arm..., gripper]`。
-
-`ConfigLoader` 使用内部 `_ROBOT_MAP` 将 `(robot_type, backend)` 映射为具体模块与类名，并由 `make_robot` 工厂函数创建机器人实例。
-
-## ROS 2 集成与部署
-
-`acetele/deploy` 目录包含若干 ROS 2 包：
-
-- `ace_robot_ros2/`：将 ACETele 机器人端封装为 ROS 2 节点。
-- `data_collector_ros2/`：数据采集与记录节点。
-- `joystick_ros2/`：手柄输入与手动控制节点。
-- `visualization_ros2/`：可视化 GUI 与节点。
-
-构建示例：
+构建核心 ROS 2 包：
 
 ```bash
+ACETELE_ROOT="$(pwd)"
 mkdir -p ~/ws_acetele_ros2/src
 cd ~/ws_acetele_ros2/src
-cp -r /your/path/to/ACETele/acetele/deploy/ .
+cp -r "${ACETELE_ROOT}/acetele/deploy/"* .
 cd ..
-colcon build --packages-select ace_robot_ros2 data_collector_ros2 visualization_ros2 joystick_ros2
+colcon build --packages-up-to \
+  ace_robot_ros2 \
+  data_collector_ros2 \
+  joystick_ros2 \
+  visualization_ros2
 source install/setup.bash
 ```
 
-启动示例：
+`visualization_ros2` 依赖 `realsense2_camera_msgs`、`cv_bridge`、OpenCV 和 PySide6。使用 `acetele_bringup` 前，请确认 `realsense2_camera`、`ros2_px4_odometry` 等外部依赖已经在工作空间中可用。
+
+常用命令：
 
 ```bash
-ros2 launch ace_robot_ros2 ace_robot.launch.py
+ros2 launch ace_robot_ros2 ace_robot.launch.py \
+  config_path:="${ACETELE_ROOT}/acetele/config/ace_follower.toml"
+
 ros2 launch data_collector_ros2 data_collector.launch.py
 ros2 launch visualization_ros2 visualization.launch.py
-ros2 launch joystick_ros2 joystick.launch.py
+ros2 run joystick_ros2 manual_control
 ```
 
-参数说明请参考各包的 `config/` 与 `launch/` 目录。
-
-## 与 ACESim 协作
-
-本仓库支持与 [ACESim](https://github.com/Xiangyuan-Xie/ACESim) 协作，借助 MuJoCo/Gazebo 等先进仿真环境进行高效数据采集与算法验证。
-
-## 开发与测试
-
-本仓库通过 [pre-commit](https://pre-commit.com/) 统一代码风格与基础质量检查。
+系统级启动：
 
 ```bash
-pip install pre-commit
-pre-commit install
+ros2 launch acetele_bringup leader_system.launch.py
+ros2 launch acetele_bringup follower_system.launch.py
 ```
 
-提交前可执行：
+主要 topic：
+
+- `/ace_leader/arm/command`
+- `/ace_follower/arm/state`
+- `/ace_leader/gripper/command`
+- `/ace_follower/gripper/state`
+- `/ace_leader/arm/sync_mode`
+- `/ace_follower/arm/sync_status`
+- `/ace_follower/arm/external_joint_torque`
+- `/ace_follower/arm/external_wrench`
+- `/fmu/in/arm_joint_state`
+
+<p align="right">(<a href="#readme-top">返回顶部</a>)</p>
+
+### 数据与诊断工具
+
+rosbag 转 HDF5：
 
 ```bash
+python -m acetele.tools.bag2hdf5 /path/to/rosbag /tmp/session.hdf5 \
+  --sync-topic /ace_leader/arm/command
+```
+
+HDF5 可视化：
+
+```bash
+python -m acetele.tools.hdf5_viewer /tmp/session.hdf5 --stride 2
+```
+
+硬件标定与诊断：
+
+```bash
+python -m acetele.core.calibrate
+python -m acetele.tools.backlash_diagnostics hold-error --target 0,0,0,0
+python -m acetele.tools.gravity_compensation_diagnostics auto-calibrate
+python -m acetele.tools.feetech_pid_autotune --ids 0,1,2,3
+```
+
+以上硬件命令会接触真实舵机或控制参数，运行前请确认机器人处于安全状态。
+
+<p align="right">(<a href="#readme-top">返回顶部</a>)</p>
+
+## 目录结构
+
+```text
+ACETele/
+├── acetele/
+│   ├── config/          TOML 配置入口与机器人配置
+│   ├── core/            机器人创建与标定入口
+│   ├── deploy/          ROS 2 部署包与第三方消息/相机子模块
+│   ├── equipment/       硬件抽象、FEETECH 驱动、夹爪和手柄
+│   ├── robot/           ace_leader / ace_follower 机器人实现
+│   ├── tools/           数据转换、可视化和硬件诊断工具
+│   └── utils/           遥操作同步、夹爪转换和外力估计辅助逻辑
+├── tests/               单元测试与 ROS 2 行为测试
+├── pyproject.toml       构建配置与包元数据
+├── setup.py             legacy setuptools 入口
+├── LICENSE              Apache-2.0 许可证
+└── README.md
+```
+
+<p align="right">(<a href="#readme-top">返回顶部</a>)</p>
+
+## 路线图
+
+- [x] Python 包形式的机器人创建入口与 TOML 配置系统。
+- [x] FEETECH 机械臂、夹爪、重力补偿和外力估计。
+- [x] 主从同步遥操作状态机。
+- [x] ROS 2 机器人节点、数据采集节点、手柄节点和可视化节点。
+- [x] 机械臂 topic 与夹爪 topic 分离，同时保留 PX4 5D 状态适配。
+- [ ] 完善真实硬件部署文档，包括串口权限、标定、安全检查和故障恢复。
+- [ ] 补充数据集格式、诊断工具和 ROS 2 bringup 示例。
+- [ ] 建立稳定版本发布策略。
+
+<p align="right">(<a href="#readme-top">返回顶部</a>)</p>
+
+## 贡献
+
+欢迎提交 issue 和 pull request，尤其是：
+
+- 修复硬件驱动、ROS 2 节点或配置问题。
+- 增加新的机器人、夹爪、舵机或手柄适配。
+- 补充真实硬件部署经验、数据采集流程和诊断示例。
+- 改进测试覆盖、文档和工具链。
+
+推荐流程：
+
+```bash
+git checkout -b feature/my-feature
+python -m pytest
 pre-commit run --all-files
+git commit -m "feat: add my feature"
 ```
 
-主要检查项：
+提交 PR 时请说明改动背景、影响范围、测试结果，以及是否需要真实硬件或 ROS 2 外部依赖。
 
-- 代码格式化：`black`、`isort`。
-- 代码质量：`flake8`。
-- 类型检查：`mypy`。
-- 其他基础检查：YAML 合法性、大文件检测、尾空格等。
+<p align="right">(<a href="#readme-top">返回顶部</a>)</p>
 
-## 贡献指南
+## 许可证
 
-欢迎参与改进，包括修复缺陷、补充文档、扩展硬件设备驱动或优化工具链。推荐流程如下：
+本项目采用 [Apache License 2.0](LICENSE) 开源协议。选择 Apache-2.0 是因为它与仓库内主要 ROS 2 子包的 `package.xml` 保持一致，属于宽松许可证，并包含明确的专利授权条款，适合机器人软硬件集成项目。
 
-1. Fork 本仓库并创建功能分支：
+第三方子模块与外部依赖保留各自许可证，例如 `acetele/deploy/px4_msgs` 使用 BSD 3-Clause，`acetele/deploy/realsense-ros` 使用其上游许可证。复用或再分发时请同时遵守相关第三方许可证。
 
-   ```bash
-   git checkout -b feature/my-awesome-feature
-   ```
+<p align="right">(<a href="#readme-top">返回顶部</a>)</p>
 
-2. 在本地实现与自测：
-   - 确认与 ROS 2 等外部依赖能正常协同；
-   - 运行 `pre-commit run --all-files` 确保检查通过。
-3. 提交并推送：
+## 联系
 
-   ```bash
-   git commit -am "Add awesome feature"
-   git push origin feature/my-awesome-feature
-   ```
+维护者：Xiangyuan Xie
 
-4. 发起 Pull Request，并说明背景、改动内容与依赖变化。
+- Email: <dragonboat_xxy@163.com>
+- Project Link: <https://github.com/Xiangyuan-Xie/ACETele>
 
-## 开源协议
-
-当前仓库根目录尚未提供 LICENSE 文件，因此本 README 不构成法律意义上的授权声明。请在使用前与维护者确认授权条款，并在正式对外发布前补充 LICENSE 文件。
+<p align="right">(<a href="#readme-top">返回顶部</a>)</p>
 
 ## 致谢
 
-感谢以下开源项目与社区支持：
+- [ROS 2](https://docs.ros.org/)
+- [Pinocchio](https://stack-of-tasks.github.io/pinocchio/)
+- [PX4](https://px4.io/)
+- [Intel RealSense ROS](https://github.com/IntelRealSense/realsense-ros)
+- [othneildrew/Best-README-Template](https://github.com/othneildrew/Best-README-Template)
+- FEETECH 舵机 SDK 与开源机器人社区
 
-- [Pinocchio](https://stack-of-tasks.github.io/pinocchio/)：机器人动力学建模与算法库。
-- [ROS 2](https://www.ros.org/) 及相关生态工具。
-
-也感谢所有对本项目提出建议、报告问题和贡献代码的开发者。
+<p align="right">(<a href="#readme-top">返回顶部</a>)</p>
