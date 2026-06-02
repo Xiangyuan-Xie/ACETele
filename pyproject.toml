@@ -10,8 +10,10 @@ readme = { file = "README.md", content-type = "text/markdown" }
 authors = [
     { name = "Xiangyuan Xie", email = "dragonboat_xxy@163.com" }
 ]
+license = { text = "Apache-2.0" }
 keywords = ["python", "robotic", "teleoperation"]
 classifiers = [
+    "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent"
 ]

@@ -19,3 +19,4 @@ def setup_py_value(option: str) -> str:
 def test_legacy_setup_py_exposes_project_metadata():
     assert setup_py_value("--name") == "acetele"
     assert setup_py_value("--version") == "0.1.0"
+    assert setup_py_value("--license") == "Apache-2.0"

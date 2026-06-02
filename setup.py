@@ -20,6 +20,7 @@ setup(
     long_description_content_type="text/markdown",
     author="Xiangyuan Xie",
     author_email="dragonboat_xxy@163.com",
+    license="Apache-2.0",
     packages=find_packages(where="."),
     package_data={
         "acetele.config": ["*.toml"],
@@ -39,6 +40,7 @@ setup(
     ],
     keywords=["python", "robotic", "teleoperation"],
     classifiers=[
+        "License :: OSI Approved :: Apache Software License",
         "Programming Language :: Python :: 3",
         "Operating System :: OS Independent",
     ],
