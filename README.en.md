@@ -237,7 +237,7 @@ Key fields:
 | `linker.single.joint_ids` | Servo IDs for each arm joint |
 | `linker.single.joint_signs` | Arm joint direction convention |
 | `linker.single.home_poses` | Calibrated arm joint home positions |
-| `linker.single.servo_types` | Servo model configuration, such as `HL3950`, `HL3930`, and `HL3915` |
+| `linker.single.servo_types` | Servo model configuration, such as `HL3960`, `HL3950`, `HL3930`, and `HL3915` |
 | `gripper.single` | Gripper configuration, including servo ID, port, direction, home pose, gripper type, and force-control switch |
 
 Here, the `mock` backend is used for local API checks and no-hardware debugging; the `default`

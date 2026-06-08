@@ -16,6 +16,8 @@ from acetele.equipment.feetech.feetech_driver import (
 from acetele.equipment.feetech.linker import Linker
 from acetele.equipment.feetech.servo_specs import (
     HLS_PROFILE_DEFAULTS_BY_SERVO,
+    KT_MAPPING,
+    NO_LOAD_CURRENT,
     PROFILE_ACCELERATION_UNIT_RAD_PER_SEC2,
     PROFILE_VELOCITY_UNIT_RAD_PER_SEC,
 )
@@ -408,10 +410,17 @@ def test_set_position_sends_multiturn_adjusted_position():
 
 def test_hls_profile_defaults_match_official_initial_values():
     assert HLS_PROFILE_DEFAULTS_BY_SERVO == {
+        "HL3960": {"acceleration": 0, "current": 1000, "velocity": 110},
         "HL3950": {"acceleration": 0, "current": 1000, "velocity": 110},
         "HL3930": {"acceleration": 250, "current": 1000, "velocity": 100},
         "HL3915": {"acceleration": 0, "current": 500, "velocity": 250},
     }
+
+
+def test_hl3960_servo_specs_use_supplied_constants_and_hl3950_profile():
+    assert KT_MAPPING["HL3960"] == pytest.approx(1.0 / 14.84)
+    assert NO_LOAD_CURRENT["HL3960"] == 300
+    assert HLS_PROFILE_DEFAULTS_BY_SERVO["HL3960"] == HLS_PROFILE_DEFAULTS_BY_SERVO["HL3950"]
 
 
 def test_feetech_driver_does_not_accept_servo_types(monkeypatch):

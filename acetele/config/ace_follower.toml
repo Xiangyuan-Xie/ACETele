@@ -5,11 +5,11 @@ backend = "ros2"
 [linker.single]
 port = "/dev/ttyCH341USB0"
 joint_ids = [0, 1, 2, 3]
-joint_signs = [-1, 1, 1, -1]
+joint_signs = [1, 1, 1, -1]
 home_poses = [-1.57, 3.14, 0.0, 0.0]
 enable_gravity_compensation = false
 enable_estimate_external_torque = true
-servo_types = ["HL3950", "HL3930", "HL3915", "HL3915"]
+servo_types = ["HL3960", "HL3950", "HL3930", "HL3915"]
 
 [gripper.single]
 port = "/dev/ttyCH341USB0"
