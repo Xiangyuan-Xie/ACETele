@@ -1,3 +1,4 @@
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from acetele.config.config_loader import ConfigLoader
@@ -76,6 +77,8 @@ gripper_type = "ace_leader"
 
 
 def test_ace_follower_pin_model_path_exists_and_loads():
+    import pinocchio as pin
+
     loader = ConfigLoader(Path("acetele/config/ace_follower.toml"))
 
     class TestRobot(BaseRobot):
@@ -89,3 +92,26 @@ def test_ace_follower_pin_model_path_exists_and_loads():
     assert robot._urdf_model_path.endswith("ace_follower/description/ace_follower.urdf")
     assert model.nv == 5
     assert model.getFrameId("link_5") < len(model.frames)
+    reduced_model = pin.buildReducedModel(model, [model.getJointId("joint_5")], pin.neutral(model))
+    assert reduced_model.nv == 4
+
+
+def test_ace_follower_urdf_is_arm_only_x500_model():
+    urdf_path = Path("acetele/robot/ace_follower/description/ace_follower.urdf")
+    root = ET.parse(urdf_path).getroot()
+
+    assert root.attrib["name"] == "ace_follower"
+
+    link_names = {link.attrib["name"] for link in root.findall("link")}
+    joint_names = {joint.attrib["name"] for joint in root.findall("joint")}
+    assert link_names == {"base_link", "link_1", "link_2", "link_3", "link_4", "link_5"}
+    assert joint_names == {"joint_1", "joint_2", "joint_3", "joint_4", "joint_5"}
+
+    base_link = root.find("./link[@name='base_link']")
+    assert base_link is not None
+    assert base_link.find("inertial") is None
+    assert base_link.find("visual") is None
+    assert base_link.find("collision") is None
+
+    mesh_filenames = {mesh.attrib["filename"] for mesh in root.findall(".//mesh")}
+    assert mesh_filenames == {f"meshes/link_{index}.STL" for index in range(1, 6)}
