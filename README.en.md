@@ -238,7 +238,7 @@ Key fields:
 | `linker.single.joint_signs` | Arm joint direction convention |
 | `linker.single.home_poses` | Calibrated arm joint home positions |
 | `linker.single.servo_types` | Servo model configuration, such as `HL3960`, `HL3950`, `HL3930`, and `HL3915` |
-| `gripper.single` | Gripper configuration, including servo ID, port, direction, home pose, gripper type, and force-control switch |
+| `gripper.single` | Gripper configuration, including servo ID, port, direction, home pose, and gripper type |
 
 Here, the `mock` backend is used for local API checks and no-hardware debugging; the `default`
 backend directly accesses real FEETECH devices; the `ros2` backend is mainly used for robot interface
@@ -295,8 +295,6 @@ Common topics:
 - `/ace_follower/gripper/state`
 - `/ace_leader/arm/sync_mode`
 - `/ace_follower/arm/sync_status`
-- `/ace_follower/arm/external_joint_torque`
-- `/ace_follower/arm/external_wrench`
 - `/fmu/in/arm_joint_state`
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>

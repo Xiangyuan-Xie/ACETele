@@ -9,7 +9,7 @@ import numpy as np
 from acetele.config.config_loader import ConfigLoader
 from acetele.core.make_robot import make_robot
 from acetele.equipment.feetech.feetech_driver import FeeTechDriver, TorqueEnable
-from acetele.equipment.feetech.gripper import Gripper, GripperForceControlState
+from acetele.equipment.feetech.gripper import Gripper
 from acetele.equipment.feetech.linker import Linker
 from acetele.robot.base_robot import BaseEquipmentLibrary, BaseRobot
 
@@ -64,7 +64,7 @@ class AceFollowerRobot(BaseRobot):
             gripper_driver = FeeTechDriver([gripper_id], gripper_config["port"])
             self._drivers = (self._driver, gripper_driver)
         arm_pin_model = None
-        if bool(single_arm_config["enable_estimate_external_torque"]):
+        if bool(single_arm_config["enable_gravity_compensation"]):
             fixed_joint_names = []
             if gripper_id is not None:
                 fixed_joint_names = [f"joint_{gripper_id + 1}"]
@@ -116,15 +116,6 @@ class AceFollowerRobot(BaseRobot):
             )
         return AceRobotState(**combined_state)
 
-    def get_gripper_force_control_state(self) -> Optional[GripperForceControlState]:
-        if self._equipments.gripper is None:
-            return None
-        return self._equipments.gripper.get_force_control_state()
-
-    def reset_gripper_force_control(self):
-        if self._equipments.gripper is not None:
-            self._equipments.gripper.reset_force_control()
-
     def set_position(
         self,
         positions: Sequence[float],
@@ -175,28 +166,27 @@ class AceFollowerRobot(BaseRobot):
             gripper = self._equipments.gripper
             assert gripper is not None
             gripper_position = float(positions_array[gripper_index])
-            if not gripper.set_fragile_position(gripper_position):
-                gripper_profile_kwargs: dict[str, float] = {}
-                for command_name, gripper_name in (
-                    ("velocities", "velocity"),
-                    ("accelerations", "acceleration"),
-                    ("torque", "torque"),
-                ):
-                    values = profile_values[command_name]
-                    if values is None:
-                        continue
-                    values_array = np.asarray(values, dtype=float)
-                    gripper_profile_kwargs[gripper_name] = (
-                        float(values_array)
-                        if values_array.ndim == 0
-                        else float(values_array[gripper_index])
-                        if len(values_array) == len(ids_array)
-                        else float(values_array)
-                    )
-                gripper.set_position(
-                    gripper_position,
-                    **gripper_profile_kwargs,
+            gripper_profile_kwargs: dict[str, float] = {}
+            for command_name, gripper_name in (
+                ("velocities", "velocity"),
+                ("accelerations", "acceleration"),
+                ("torque", "torque"),
+            ):
+                values = profile_values[command_name]
+                if values is None:
+                    continue
+                values_array = np.asarray(values, dtype=float)
+                gripper_profile_kwargs[gripper_name] = (
+                    float(values_array)
+                    if values_array.ndim == 0
+                    else float(values_array[gripper_index])
+                    if len(values_array) == len(ids_array)
+                    else float(values_array)
                 )
+            gripper.set_position(
+                gripper_position,
+                **gripper_profile_kwargs,
+            )
 
     def set_torque_enable(self, enable: TorqueEnable, ids: Optional[Sequence[int]] = None):
         ids_array = self.ids if ids is None else np.asarray(ids)

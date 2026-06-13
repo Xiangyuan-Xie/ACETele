@@ -233,7 +233,7 @@ config_file = "ace_leader.toml"
 | `linker.single.joint_signs` | 机械臂关节方向约定 |
 | `linker.single.home_poses` | 标定后的机械臂关节Home位 |
 | `linker.single.servo_types` | 舵机型号配置，例如 `HL3960`、`HL3950`、`HL3930`、`HL3915` |
-| `gripper.single` | 夹爪相关配置，包括舵机ID、串口、方向、Home位、夹爪类型和力控开关 |
+| `gripper.single` | 夹爪相关配置，包括舵机ID、串口、方向、Home位和夹爪类型 |
 
 其中，`mock` 后端用于本地 API 自检与无硬件调试；`default` 后端会直接访问真实 FEETECH 设备；`ros2` 后端主要用于 ROS2 节点内部的机器人接口封装。
 
@@ -288,8 +288,6 @@ ros2 launch acetele_bringup follower_system.launch.py
 - `/ace_follower/gripper/state`
 - `/ace_leader/arm/sync_mode`
 - `/ace_follower/arm/sync_status`
-- `/ace_follower/arm/external_joint_torque`
-- `/ace_follower/arm/external_wrench`
 - `/fmu/in/arm_joint_state`
 
 <p align="right">(<a href="#readme-top">返回顶部</a>)</p>

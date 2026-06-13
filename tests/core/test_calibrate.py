@@ -60,7 +60,6 @@ joint_ids = [1, 2, 3]
 joint_signs = [1, -1, 1]
 home_poses = [1.5707963267948966, 1.5707963267948966, 0.001]
 enable_gravity_compensation = false
-enable_estimate_external_torque = false
 servo_types = ["HL3915", "HL3915", "HL3915"]
 """,
     )
@@ -97,7 +96,6 @@ joint_ids = [0, 1]
 joint_signs = [1, -1]
 home_poses = [1.5707963267948966, 0.5]
 enable_gravity_compensation = false
-enable_estimate_external_torque = false
 servo_types = ["HL3915", "HL3915"]
 
 [gripper.single]
@@ -134,7 +132,6 @@ joint_ids = [0, 1]
 joint_signs = [1, -1]
 home_poses = [1.5707963267948966, 0.5]
 enable_gravity_compensation = false
-enable_estimate_external_torque = false
 servo_types = ["HL3915", "HL3915"]
 
 [gripper.single]
@@ -179,7 +176,6 @@ joint_ids = [0, 1]
 joint_signs = [1, -1]
 home_poses = [1.5707963267948966, 0.5]
 enable_gravity_compensation = false
-enable_estimate_external_torque = false
 servo_types = ["HL3915", "HL3915"]
 
 [gripper.single]
@@ -210,7 +206,6 @@ joint_ids = [0, 1]
 joint_signs = [1, -1]
 home_poses = [1.5707963267948966, 0.5]
 enable_gravity_compensation = false
-enable_estimate_external_torque = false
 servo_types = ["HL3915", "HL3915"]
 
 [gripper.single]
@@ -241,7 +236,6 @@ joint_ids = [0]
 joint_signs = [1]
 home_poses = [0.0]
 enable_gravity_compensation = false
-enable_estimate_external_torque = false
 servo_types = ["HL3915"]
 
 [gripper.single]
@@ -273,7 +267,6 @@ joint_ids = [1]
 joint_signs = [1]
 home_poses = [0.0]
 enable_gravity_compensation = false
-enable_estimate_external_torque = false
 servo_types = ["HL3915"]
 
 [linker.dual.right]
@@ -282,7 +275,6 @@ joint_ids = [2]
 joint_signs = [-1]
 home_poses = [3.141592653589793]
 enable_gravity_compensation = false
-enable_estimate_external_torque = false
 servo_types = ["HL3915"]
 """,
     )
@@ -310,7 +302,6 @@ joint_ids = [1]
 joint_signs = [-1]
 home_poses = [3.141592653589793]
 enable_gravity_compensation = false
-enable_estimate_external_torque = false
 servo_types = ["HL3915"]
 """
     )
@@ -336,7 +327,6 @@ joint_ids = [1]
 joint_signs = [1]
 home_poses = [0.0]
 enable_gravity_compensation = false
-enable_estimate_external_torque = false
 servo_types = ["HL3915"]
 """,
     )

@@ -7,6 +7,7 @@ from threading import Lock
 import numpy as np
 import pytest
 
+from acetele.equipment.base_equipment import BaseEquipment
 from acetele.equipment.feetech.feetech_driver import (
     FeeTechDriver,
     FeeTechStateTimeoutError,
@@ -21,7 +22,6 @@ from acetele.equipment.feetech.servo_specs import (
     PROFILE_ACCELERATION_UNIT_RAD_PER_SEC2,
     PROFILE_VELOCITY_UNIT_RAD_PER_SEC,
 )
-from acetele.utils.external_torque import ExternalTorqueObserver
 
 
 def profile_payload(
@@ -191,7 +191,6 @@ def test_control_loop_sleeps_to_maintain_control_period(monkeypatch):
     linker._null_space_regulation = lambda joint_pos, joint_vel: np.zeros(4)
     linker._gravity_compensation = lambda joint_pos, joint_vel: np.ones(4)
     linker._friction_compensation = lambda tau_g, joint_vel: np.zeros(4)
-    linker._torque_feedback = lambda joint_vel: np.zeros(4)
     linker.set_torque = lambda tau: linker.torque_commands.append(np.array(tau))
 
     perf_counter_values = iter([10.0, 10.001])
@@ -732,7 +731,6 @@ def make_linker_for_encoding(ids=(0, 1, 2, 3)):
     linker._pin_model = None
     linker._pin_data = None
     linker._enable_gravity_compensation = False
-    linker._enable_estimate_external_torque = False
     return linker
 
 
@@ -805,7 +803,6 @@ def minimal_linker_config():
         "home_poses": [0.0, 0.0],
         "port": "/dev/test",
         "enable_gravity_compensation": False,
-        "enable_estimate_external_torque": False,
         "servo_types": ["HL3915", "HL3915"],
     }
 
@@ -849,7 +846,6 @@ def test_linker_requires_servo_types():
         "home_poses": [0.0, 0.0, 0.0],
         "port": "/dev/test",
         "enable_gravity_compensation": False,
-        "enable_estimate_external_torque": False,
     }
     driver = PositionRecordingDriver(({0: 0, 1: 0, 2: 0}, {0: 0, 1: 0, 2: 0}, {0: 0, 1: 0, 2: 0}))
 
@@ -864,7 +860,6 @@ def test_linker_rejects_invalid_servo_types():
         "home_poses": [0.0, 0.0, 0.0],
         "port": "/dev/test",
         "enable_gravity_compensation": False,
-        "enable_estimate_external_torque": False,
         "servo_types": ["HL3915", "HL3915"],
     }
     driver = PositionRecordingDriver(({0: 0, 1: 0, 2: 0}, {0: 0, 1: 0, 2: 0}, {0: 0, 1: 0, 2: 0}))
@@ -892,7 +887,6 @@ def test_linker_constructs_feetech_driver_without_servo_types(monkeypatch):
         "home_poses": [0.0, 0.0, 0.0],
         "port": "/dev/test",
         "enable_gravity_compensation": False,
-        "enable_estimate_external_torque": False,
         "servo_types": ["HL3950", "HL3930", "HL3915"],
     }
 
@@ -911,7 +905,6 @@ def test_linker_plain_position_fills_model_profile_defaults():
         "home_poses": [0.0, 0.0, 0.0],
         "port": "/dev/test",
         "enable_gravity_compensation": False,
-        "enable_estimate_external_torque": False,
         "servo_types": ["HL3950", "HL3930", "HL3915"],
     }
     linker = Linker(config, driver=driver)
@@ -932,7 +925,6 @@ def test_linker_metric_profile_reaches_hls_payload():
         "home_poses": [0.0],
         "port": "/dev/test",
         "enable_gravity_compensation": False,
-        "enable_estimate_external_torque": False,
         "servo_types": ["HL3915"],
     }
     linker = Linker(config, driver=driver)
@@ -1110,7 +1102,7 @@ def test_act_signed_torque_round_trips_set_torque_direction():
 def test_linker_state_keeps_raw_joint_angles_for_dynamics():
     driver = PositionRecordingDriver(
         (
-            {0: 0, 4: 512},
+            {0: 0, 4: 6144},
             {0: 0, 4: 0},
             {0: 0, 4: 0},
         )
@@ -1119,119 +1111,43 @@ def test_linker_state_keeps_raw_joint_angles_for_dynamics():
     linker._driver = driver
 
     state = linker.get_linker_state()
+    positions, _, _ = linker.act()
 
     assert state.public_positions[0] == pytest.approx(0.0)
-    assert state.public_positions[1] == pytest.approx(512 * np.pi / 2048.0)
-    assert state.raw_positions[1] == pytest.approx(512 * np.pi / 2048.0)
+    assert state.public_positions[1] == pytest.approx(-np.pi)
+    assert state.raw_positions[1] == pytest.approx(3 * np.pi)
+    np.testing.assert_allclose(positions, state.public_positions)
 
 
-def test_external_torque_estimation_requires_pin_model():
-    config = {
-        "joint_ids": [0, 1],
-        "joint_signs": [1, 1],
-        "home_poses": [0.0, 0.0],
-        "port": "/dev/test",
-        "enable_gravity_compensation": False,
-        "enable_estimate_external_torque": True,
-        "servo_types": ["HL3915", "HL3915"],
-    }
-    driver = PositionRecordingDriver(({0: 0, 1: 0}, {0: 0, 1: 0}, {0: 0, 1: 0}))
-
-    with pytest.raises(ValueError, match="Pinocchio model is None"):
-        Linker(config, driver=driver)
-
-
-def test_linker_exposes_external_torque_metadata_when_disabled():
+def test_linker_state_wraps_public_joint_angles_to_half_open_pi_range():
+    driver = PositionRecordingDriver(
+        (
+            {0: 3072, 1: 3072},
+            {0: 0, 1: 0},
+            {0: 0, 1: 0},
+        )
+    )
     linker = make_linker_for_encoding(ids=(0, 1))
+    linker._signs = np.array([1, -1])
+    linker._driver = driver
 
-    assert linker.external_torque_estimation_enabled is False
-    assert linker.external_wrench_frame_name == "link_5"
+    state = linker.get_linker_state()
 
-
-def test_external_torque_observer_is_public_utils_import():
-    assert ExternalTorqueObserver.__name__ == "ExternalTorqueObserver"
-    assert list(inspect.signature(ExternalTorqueObserver.__init__).parameters) == ["self", "pin_model", "dof"]
-
-
-def test_linker_external_torque_metadata_uses_fixed_frame():
-    pin_model = types.SimpleNamespace(
-        nv=2,
-        frames=[object(), object()],
-        createData=lambda: types.SimpleNamespace(M=np.eye(2), g=np.zeros(2), C=np.zeros((2, 2))),
-        getFrameId=lambda name: 0 if name == "link_5" else 2,
-    )
-    config = {
-        "joint_ids": [0, 1],
-        "joint_signs": [1, 1],
-        "home_poses": [0.0, 0.0],
-        "port": "/dev/test",
-        "enable_gravity_compensation": False,
-        "enable_estimate_external_torque": True,
-        "external_wrench_frame": "tool_tip",
-        "servo_types": ["HL3915", "HL3915"],
-    }
-    driver = PositionRecordingDriver(({0: 0, 1: 0}, {0: 0, 1: 0}, {0: 0, 1: 0}))
-    linker = Linker(config, driver=driver, pin_model=pin_model)
-
-    assert linker.external_torque_estimation_enabled is True
-    assert linker.external_wrench_frame_name == "link_5"
+    np.testing.assert_allclose(state.raw_positions, np.array([1.5 * np.pi, -1.5 * np.pi]))
+    np.testing.assert_allclose(state.public_positions, np.array([-0.5 * np.pi, 0.5 * np.pi]))
 
 
-def test_linker_external_torque_estimator_initializes_and_guards_bad_dt(monkeypatch):
-    pin_model = types.SimpleNamespace(
-        nv=2,
-        frames=[object(), object()],
-        createData=lambda: types.SimpleNamespace(M=np.eye(2), g=np.zeros(2), C=np.zeros((2, 2))),
-        getFrameId=lambda _name: 0,
-    )
-    driver = PositionRecordingDriver(({0: 0, 1: 0}, {0: 0, 1: 0}, {0: 0, 1: 0}))
-    linker = Linker(
-        {
-            "joint_ids": [0, 1],
-            "joint_signs": [1, 1],
-            "home_poses": [0.0, 0.0],
-            "port": "/dev/test",
-            "enable_gravity_compensation": False,
-            "enable_estimate_external_torque": True,
-            "servo_types": ["HL3915", "HL3915"],
-        },
-        driver=driver,
-        pin_model=pin_model,
-    )
+def test_linker_exposes_only_plain_arm_control_api():
+    for name in (
+        "external_" + "torque_estimation_enabled",
+        "external_" + "wrench_frame_name",
+        "reset_external_" + "torque_estimator",
+        "update_momentum_observer",
+        "estimate_joint_" + "external_torque",
+        "external_" + "wrench_from_joint_torque",
+        "apply_torque_" + "feedback",
+        "_torque_" + "feedback",
+    ):
+        assert not hasattr(Linker, name)
 
-    def fake_compute_all_terms(_model, data, _joint_pos, _joint_vel):
-        data.M = np.eye(2)
-        data.g = np.zeros(2)
-        data.C = np.zeros((2, 2))
-
-    monkeypatch.setattr("acetele.utils.external_torque.pin.computeAllTerms", fake_compute_all_terms)
-
-    first = linker.estimate_joint_external_torque(
-        np.array([0.0, 0.0]),
-        np.array([0.3, -0.4]),
-        np.array([10.0, -10.0]),
-        0.004,
-    )
-    second = linker.estimate_joint_external_torque(
-        np.array([0.0, 0.0]),
-        np.array([0.3, -0.4]),
-        np.array([10.0, -10.0]),
-        0.0,
-    )
-    third = linker.estimate_joint_external_torque(
-        np.array([0.0, 0.0]),
-        np.array([0.3, -0.4]),
-        np.array([10.0, -10.0]),
-        0.5,
-    )
-
-    np.testing.assert_allclose(first, np.zeros(2))
-    np.testing.assert_allclose(second, np.zeros(2))
-    np.testing.assert_allclose(third, np.zeros(2))
-    np.testing.assert_allclose(linker._external_torque_observer._p_hat, np.array([0.3, -0.4]))
-
-
-def test_linker_exposes_single_wrench_mapping_api():
-    removed_api = "estimate_ee_external" + "_wrench"
-    assert not hasattr(Linker, removed_api)
-    assert hasattr(Linker, "external_wrench_from_joint_torque")
+    assert not hasattr(BaseEquipment, "apply_torque_" + "feedback")

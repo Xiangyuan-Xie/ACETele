@@ -17,7 +17,7 @@ acetele/equipment/    Base equipment contracts, FEETECH driver/linker/gripper, j
 acetele/robot/        ace_leader and ace_follower implementations for default, ros2, and mock backends.
 acetele/deploy/       ROS 2 packages plus PX4 and RealSense deployment dependencies.
 acetele/tools/        rosbag/HDF5 tooling and hardware diagnostics.
-acetele/utils/        Teleop sync enums, gripper scaling, external torque observer helpers.
+acetele/utils/        Teleop sync enums and gripper scaling helpers.
 tests/                Unit tests and ROS 2 behavior tests.
 ```
 

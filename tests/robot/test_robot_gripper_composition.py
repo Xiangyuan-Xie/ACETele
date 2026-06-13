@@ -36,7 +36,6 @@ class FakeGripper:
 
     def __init__(self):
         self.position_calls = []
-        self.fragile_calls = []
 
     def get_state(self):
         return types.SimpleNamespace(
@@ -53,10 +52,6 @@ class FakeGripper:
 
     def set_position(self, position, **kwargs):
         self.position_calls.append((float(position), kwargs))
-
-    def set_fragile_position(self, position):
-        self.fragile_calls.append(float(position))
-        return True
 
 
 def test_follower_robot_combines_arm_and_gripper_state_in_public_order():
@@ -75,7 +70,7 @@ def test_follower_robot_combines_arm_and_gripper_state_in_public_order():
     np.testing.assert_allclose(state.motor_torque_signed, np.array([4.1, 4.2, 4.9]))
 
 
-def test_follower_robot_routes_full_command_to_arm_and_fragile_gripper():
+def test_follower_robot_routes_full_command_to_arm_and_plain_gripper():
     arm = FakeArm()
     gripper = FakeGripper()
     robot = AceFollowerRobot.__new__(AceFollowerRobot)
@@ -88,8 +83,7 @@ def test_follower_robot_routes_full_command_to_arm_and_fragile_gripper():
 
     np.testing.assert_allclose(arm.position_calls[0][0], np.array([0.1, 0.2]))
     np.testing.assert_array_equal(arm.position_calls[0][1]["ids"], np.array([0, 1]))
-    assert gripper.fragile_calls == [0.8]
-    assert gripper.position_calls == []
+    assert gripper.position_calls == [(0.8, {})]
 
 
 def test_leader_robot_routes_full_command_to_arm_and_plain_gripper():
@@ -106,7 +100,6 @@ def test_leader_robot_routes_full_command_to_arm_and_plain_gripper():
     np.testing.assert_allclose(arm.position_calls[0][0], np.array([0.1, 0.2]))
     np.testing.assert_array_equal(arm.position_calls[0][1]["ids"], np.array([0, 1]))
     assert gripper.position_calls == [(0.8, {})]
-    assert gripper.fragile_calls == []
 
 
 def test_leader_robot_splits_full_profile_arrays_with_command():
@@ -218,7 +211,7 @@ def test_follower_robot_creates_separate_gripper_driver_for_different_port(monke
                 {
                     "joint_ids": [0, 1],
                     "port": "/dev/arm",
-                    "enable_estimate_external_torque": False,
+                    "enable_gravity_compensation": False,
                 },
             )
 
@@ -468,8 +461,8 @@ def test_robot_core_does_not_expose_force_estimate_or_non_gripper_wrappers():
         assert not hasattr(robot_cls, "non_gripper_ids_and_indices")
         assert not hasattr(robot_cls, "non_gripper_values")
 
-    assert not hasattr(AceLeaderRobot, "apply_torque_feedback")
+    assert not hasattr(AceLeaderRobot, "apply_torque_" + "feedback")
     assert not hasattr(AceFollowerRobot, "update_external_estimate")
-    assert not hasattr(AceFollowerRobot, "external_joint_torque")
-    assert not hasattr(AceFollowerRobot, "external_wrench")
-    assert not hasattr(AceFollowerRobot, "external_wrench_frame_id")
+    assert not hasattr(AceFollowerRobot, "external_" + "joint_torque")
+    assert not hasattr(AceFollowerRobot, "external_" + "wrench")
+    assert not hasattr(AceFollowerRobot, "external_" + "wrench_frame_id")

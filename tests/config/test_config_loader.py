@@ -18,7 +18,6 @@ joint_ids = [1]
 joint_signs = [1]
 home_poses = [0.0]
 enable_gravity_compensation = false
-enable_estimate_external_torque = false
 servo_types = ["HL3915"]
 
 [gripper.single]
@@ -55,7 +54,6 @@ joint_ids = [1]
 joint_signs = [1]
 home_poses = [0.0]
 enable_gravity_compensation = false
-enable_estimate_external_torque = false
 servo_types = ["HL3915"]
 
 [gripper.single]

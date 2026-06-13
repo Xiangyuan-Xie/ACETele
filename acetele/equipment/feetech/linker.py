@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from threading import Event, Lock, Thread
+from threading import Event, Thread
 from typing import Any, Dict, Optional, Sequence, Tuple
 
 import numpy as np
@@ -18,7 +18,6 @@ from acetele.equipment.feetech.servo_specs import (
     PROFILE_ACCELERATION_UNIT_RAD_PER_SEC2,
     PROFILE_VELOCITY_UNIT_RAD_PER_SEC,
 )
-from acetele.utils.external_torque import ExternalTorqueObserver
 
 
 @dataclass
@@ -28,6 +27,10 @@ class LinkerState:
     velocities: np.ndarray
     motor_torque_magnitude: np.ndarray
     motor_torque_signed: np.ndarray
+
+
+def _wrap_to_pi(values):
+    return (np.asarray(values, dtype=float) + np.pi) % (2 * np.pi) - np.pi
 
 
 class Linker(BaseEquipment):
@@ -43,7 +46,6 @@ class Linker(BaseEquipment):
 
         self._signs = np.array(config["joint_signs"])
         self._enable_gravity_compensation = config["enable_gravity_compensation"]
-        self._enable_estimate_external_torque = config["enable_estimate_external_torque"]
         self._control_period = float(config.get("control_period", 0.004))
         if "servo_types" not in config:
             raise ValueError("servo_types must be specified.")
@@ -91,30 +93,12 @@ class Linker(BaseEquipment):
             self._stiction_comp_enable_velocity = 0.9
             self._stiction_comp_gain = 0.6
 
-            self._feedback_external_torque = np.zeros(self._dof)
-            self._torque_feedback_scalar = 0.05
-            self._torque_feedback_damping = 0.0
-
-            self._lock = Lock()
             self._stop_flag = Event()
             self._control_thread = None
-
-        if self._enable_estimate_external_torque:
-            self._external_torque_observer = ExternalTorqueObserver(self._pin_model, self._dof)
 
     @property
     def ids(self):
         return self._ids
-
-    @property
-    def external_torque_estimation_enabled(self) -> bool:
-        return bool(self._enable_estimate_external_torque)
-
-    @property
-    def external_wrench_frame_name(self) -> str:
-        if not self.external_torque_estimation_enabled:
-            return "link_5"
-        return self._external_torque_observer.frame_name
 
     def act(self) -> Tuple[Sequence[float], Sequence[float], Sequence[float]]:
         state = self.get_linker_state()
@@ -124,7 +108,7 @@ class Linker(BaseEquipment):
         encoded_pos, encoded_vel, encoded_current = self._driver.get_state()
 
         raw_positions = np.array([encoded_pos[int(ft_id)] for ft_id in self._ids]) * self._signs * np.pi / 2048.0
-        public_positions = raw_positions.copy()
+        public_positions = _wrap_to_pi(raw_positions)
 
         velocities = np.array([encoded_vel[int(ft_id)] for ft_id in self._ids]) * self._signs * 0.732 * np.pi / 30
 
@@ -265,8 +249,7 @@ class Linker(BaseEquipment):
             tau_n = self._null_space_regulation(joint_pos, joint_vel)  # 零空间投影
             tau_g = self._gravity_compensation(joint_pos, joint_vel)  # 重力补偿
             tau_ss = self._friction_compensation(tau_g, joint_vel)  # 摩擦力补偿
-            tau_fb = self._torque_feedback(joint_vel)  # 力反馈
-            tau = tau_n + tau_g + tau_ss + tau_fb
+            tau = tau_n + tau_g + tau_ss
             self.set_torque(tau)
             sleep_time = self._control_period - (time.perf_counter() - loop_start)
             if sleep_time > 0.0:
@@ -295,28 +278,6 @@ class Linker(BaseEquipment):
                     tau_ss[i] -= self._stiction_comp_gain * abs(tau_g[i])
                 self._stiction_dither_flag[i] = ~self._stiction_dither_flag[i]
         return tau_ss
-
-    def _torque_feedback(self, joint_vel):
-        tau_fb = (
-            self._torque_feedback_scalar * self._feedback_external_torque - self._torque_feedback_damping * joint_vel
-        )
-        return tau_fb
-
-    def apply_torque_feedback(self, external_torque: Sequence[float]):
-        with self._lock:
-            self._feedback_external_torque = external_torque
-
-    def reset_external_torque_estimator(self, joint_pos, joint_vel):
-        self._external_torque_observer.reset(joint_pos, joint_vel)
-
-    def update_momentum_observer(self, joint_pos, joint_vel, joint_effort, dt):
-        return self._external_torque_observer.update(joint_pos, joint_vel, joint_effort, dt)
-
-    def estimate_joint_external_torque(self, joint_pos, joint_vel, joint_effort, dt):
-        return self.update_momentum_observer(joint_pos, joint_vel, joint_effort, dt)
-
-    def external_wrench_from_joint_torque(self, joint_pos, joint_torque):
-        return self._external_torque_observer.wrench_from_joint_torque(joint_pos, joint_torque)
 
 
 if __name__ == "__main__":
