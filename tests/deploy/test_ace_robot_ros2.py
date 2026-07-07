@@ -156,9 +156,22 @@ def install_fake_ros_modules(monkeypatch):
     px4_msgs_msg_module = types.ModuleType("px4_msgs.msg")
 
     class FakeArmJointState:
+        @classmethod
+        def get_fields_and_field_types(cls):
+            return {
+                "timestamp": "uint64",
+                "timestamp_sample": "uint64",
+                "sequence": "uint32",
+                "arm_position": "float[5]",
+                "arm_velocity": "float[5]",
+            }
+
         def __init__(self):
             self.timestamp = 0
+            self.timestamp_sample = 0
+            self.sequence = 0
             self.arm_position = []
+            self.arm_velocity = []
 
     px4_msgs_msg_module.ArmJointState = FakeArmJointState
     px4_msgs_msg_module.VehicleLandDetected = type("VehicleLandDetected", (), {})
@@ -173,6 +186,25 @@ def install_fake_ros_modules(monkeypatch):
     monkeypatch.setitem(sys.modules, "px4_msgs", px4_msgs_module)
     monkeypatch.setitem(sys.modules, "px4_msgs.msg", px4_msgs_msg_module)
     return FakeNode
+
+
+def test_follower_ros2_rejects_stale_px4_arm_joint_state_schema(monkeypatch):
+    install_fake_ros_modules(monkeypatch)
+    module = importlib.reload(importlib.import_module("acetele.robot.ace_follower.ace_follower_ros2"))
+
+    class OldArmJointState:
+        @classmethod
+        def get_fields_and_field_types(cls):
+            return {
+                "timestamp": "uint64",
+                "arm_position": "float[5]",
+                "arm_velocity": "float[5]",
+            }
+
+    monkeypatch.setattr(module, "ArmJointState", OldArmJointState)
+
+    with pytest.raises(RuntimeError, match="schema mismatch"):
+        module.AceFollowerROS2Robot._validate_px4_arm_joint_state_schema()
 
 
 def test_ace_robot_node_uses_config_path_parameter(monkeypatch, tmp_path):
@@ -1528,8 +1560,10 @@ def test_follower_publish_state_loop_dual_publishes_joint_state_and_px4_arm_stat
     assert len(published["px4"]) == 1
     px4_msg = published["px4"][0]
     assert px4_msg.timestamp == 1_234_567
+    assert px4_msg.timestamp_sample == 1_234_567
+    assert px4_msg.sequence == 0
     assert px4_msg.arm_position == joint_pos.tolist()
-    assert not hasattr(px4_msg, "arm_velocity")
+    assert px4_msg.arm_velocity == joint_vel.tolist()
     assert published["status"][0].data == "tracking"
     assert logged == []
     assert not hasattr(robot, "_publish_state")
@@ -1565,10 +1599,15 @@ def test_follower_publish_state_loop_publishes_gripper_state_and_px4_adapter(mon
     assert published["state"][0].position == [0.1, 0.2, 0.3, 0.4]
     assert published["gripper"][0].name == ["joint_5"]
     assert published["gripper"][0].position == [0.9]
-    assert published["px4"][0].arm_position == [0.1, 0.2, 0.3, 0.4, 0.9]
+    px4_msg = published["px4"][0]
+    assert px4_msg.timestamp == 1_234_567
+    assert px4_msg.timestamp_sample == 1_234_567
+    assert px4_msg.sequence == 0
+    assert px4_msg.arm_position == [0.1, 0.2, 0.3, 0.4, 0.9]
+    assert px4_msg.arm_velocity == [0.0, 0.0, 0.0, 0.0, 0.5]
 
 
-def test_follower_publish_state_loop_keeps_joint_state_velocity_off_px4_arm_state(monkeypatch):
+def test_follower_publish_state_loop_carries_joint_state_velocity_to_px4_arm_state(monkeypatch):
     install_fake_ros_modules(monkeypatch)
     module = importlib.reload(importlib.import_module("acetele.robot.ace_follower.ace_follower_ros2"))
     robot = module.AceFollowerROS2Robot.__new__(module.AceFollowerROS2Robot)
@@ -1615,8 +1654,18 @@ def test_follower_publish_state_loop_keeps_joint_state_velocity_off_px4_arm_stat
         joint_pos.tolist(),
         joint_pos.tolist(),
     ]
-    assert not hasattr(published["px4"][0], "arm_velocity")
-    assert not hasattr(published["px4"][1], "arm_velocity")
+    assert [msg.timestamp for msg in published["px4"]] == [1_000_000, 1_100_000]
+    assert [msg.timestamp_sample for msg in published["px4"]] == [1_000_000, 1_100_000]
+    assert [msg.sequence for msg in published["px4"]] == [0, 1]
+    np.testing.assert_allclose(
+        published["px4"][0].arm_velocity,
+        [0.2, 0.4, 2.0, np.nan, -2.0],
+        equal_nan=True,
+    )
+    np.testing.assert_allclose(
+        published["px4"][1].arm_velocity,
+        [0.8, 1.0, 2.0, 0.4, -2.0],
+    )
     assert logged == []
 
 

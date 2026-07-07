@@ -31,6 +31,8 @@ class AceFollowerROS2Robot(Node, AceFollowerRobot):
             "/ace_follower/arm/state",
             qos,
         )
+        self._validate_px4_arm_joint_state_schema()
+        self._px4_arm_state_sequence = 0
         self._px4_arm_state_pub = self.create_publisher(
             ArmJointState,
             "/fmu/in/arm_joint_state",
@@ -117,6 +119,23 @@ class AceFollowerROS2Robot(Node, AceFollowerRobot):
             self._sync_status = FollowerSyncStatus.READY
         elif sync_mode == LeaderSyncMode.STOP:
             self._sync_status = FollowerSyncStatus.LOST
+
+    @staticmethod
+    def _validate_px4_arm_joint_state_schema():
+        fields = ArmJointState.get_fields_and_field_types()
+        required_fields = {
+            "timestamp",
+            "timestamp_sample",
+            "sequence",
+            "arm_position",
+            "arm_velocity",
+        }
+        if not required_fields.issubset(fields):
+            raise RuntimeError(
+                "px4_msgs.msg.ArmJointState schema mismatch: expected fields "
+                "timestamp, timestamp_sample, sequence, arm_position, arm_velocity. "
+                f"Got {fields}. Rebuild/source the workspace px4_msgs package."
+            )
 
     def _control_loop(self):
         now_ns = self.get_clock().now().nanoseconds
@@ -212,9 +231,22 @@ class AceFollowerROS2Robot(Node, AceFollowerRobot):
                 self._warned_invalid_px4_arm_state_length = True
             return
 
+        px4_velocities = list(msg.velocity)
+        if gripper_state is not None:
+            px4_velocities = px4_velocities + list(np.asarray(gripper_state[1], dtype=float))
+
+        if len(px4_velocities) != 5:
+            px4_velocities = [0.0] * 5
+
         px4_msg = ArmJointState()
-        px4_msg.timestamp = now.nanoseconds // 1000
+        timestamp_us = now.nanoseconds // 1000
+        px4_msg.timestamp = timestamp_us
+        px4_msg.timestamp_sample = timestamp_us
+        sequence = getattr(self, "_px4_arm_state_sequence", 0)
+        px4_msg.sequence = sequence
         px4_msg.arm_position = px4_positions
+        px4_msg.arm_velocity = px4_velocities
+        self._px4_arm_state_sequence = (sequence + 1) & 0xFFFFFFFF
         self._px4_arm_state_pub.publish(px4_msg)
 
     def close(self):
