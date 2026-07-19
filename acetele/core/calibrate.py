@@ -1,13 +1,20 @@
+from __future__ import annotations
+
+import argparse
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Optional, Sequence, Tuple
 
 import numpy as np
-import tomli
 
 from acetele.config.config_loader import ConfigLoader
-from acetele.equipment.feetech.feetech_driver import FeeTechDriver
-from acetele.utils.gripper import decode_normalized_gripper_home_pose
+from acetele.config.robot_config import ArmConfig, FeeTechGripperConfig
+from acetele.equipment.feetech.feetech_driver import (
+    FEETECH_SIGNED_15_BIT_MAX,
+    FeeTechDriver,
+    normalize_feetech_servo_ids,
+)
+from acetele.equipment.feetech.servo_specs import validate_feetech_servo_models
 
 
 class CalibrationError(RuntimeError):
@@ -38,182 +45,228 @@ class Calibration:
         config_path: Optional[Path] = None,
         driver_factory: Callable[[Any, str], FeeTechDriver] = FeeTechDriver,
     ):
-        self._config_loader = None if config_path is not None else ConfigLoader()
-        self._robot_type = None
-        self._backend = None
-        self._linker_config, self._gripper_config = self._load_robot_config(config_path)
+        self._config_loader = ConfigLoader() if config_path is None else ConfigLoader(config_path)
+        self._robot_config = self._config_loader.get_robot_config()
         self._driver_factory = driver_factory
 
-    def calibrate(self):
-        results = []
-        for i, linker_config in enumerate(self._linker_config):
-            gripper_config = self._gripper_config[i] if i < len(self._gripper_config) else None
-            results.extend(self._calibrate_arm(i, linker_config, gripper_config))
-        return tuple(results)
+    def calibrate(self) -> tuple[ArmCalibrationResult, ...]:
+        if self._robot_config.backend != "physical":
+            raise CalibrationError(
+                "Calibration requires backend='physical'; "
+                f"got backend='{self._robot_config.backend}'"
+            )
 
-    def _calibrate_arm(self, arm_index, linker_config, gripper_config=None):
-        if gripper_config is not None and "joint_id" not in gripper_config:
-            raise CalibrationError("gripper.single.joint_id must be specified.")
-        if gripper_config is not None and "port" not in gripper_config:
-            raise CalibrationError("gripper.single.port must be specified.")
-
-        if gripper_config is None or gripper_config["port"] == linker_config["port"]:
-            try:
-                group = _CalibrationGroup(
-                    arm_index=arm_index,
-                    port=linker_config["port"],
-                    ids=self._calibration_ids(linker_config, gripper_config),
-                    encoded_home_poses=tuple(
-                        int(pose) for pose in self._encode_home_poses(linker_config, gripper_config)
-                    ),
-                    label="arm",
-                )
-            except Exception as exc:
+        groups: list[_CalibrationGroup] = []
+        for index, assembly in enumerate(self._robot_config.arm_assemblies):
+            end_effector = assembly.end_effector
+            if end_effector is not None and not isinstance(end_effector, FeeTechGripperConfig):
                 raise CalibrationError(
-                    f"Failed to calibrate arm {arm_index} on port {linker_config['port']}: {exc}"
-                ) from exc
-            return (self._calibrate_group(group),)
+                    f"Calibration does not support {type(end_effector).__name__} on arm {index}"
+                )
+            try:
+                validate_feetech_servo_models(
+                    assembly.arm.servo_models,
+                    context=f"arm {index}",
+                )
+                if isinstance(end_effector, FeeTechGripperConfig):
+                    validate_feetech_servo_models(
+                        (end_effector.servo_model,),
+                        context=f"gripper on arm {index}",
+                    )
+            except ValueError as exc:
+                raise CalibrationError(str(exc)) from exc
+            groups.extend(self._build_calibration_groups(index, assembly.arm, end_effector))
 
-        try:
-            arm_group = _CalibrationGroup(
+        return tuple(self._calibrate_group(group) for group in groups)
+
+    def _build_calibration_groups(
+        self,
+        arm_index: int,
+        arm: ArmConfig,
+        gripper: Optional[FeeTechGripperConfig] = None,
+    ) -> tuple[_CalibrationGroup, ...]:
+        if arm.port is None:
+            raise CalibrationError(f"arm {arm_index} requires a serial port for calibration")
+        if gripper is not None and gripper.port is None:
+            raise CalibrationError(f"gripper on arm {arm_index} requires a serial port for calibration")
+
+        if gripper is None or gripper.port == arm.port:
+            group = self._make_calibration_group(
                 arm_index=arm_index,
-                port=linker_config["port"],
-                ids=self._calibration_ids(linker_config),
-                encoded_home_poses=tuple(int(pose) for pose in self._encode_home_poses(linker_config)),
+                port=arm.port,
+                ids=self._calibration_ids(arm, gripper),
+                encoded_home_poses=self._encode_home_poses(arm, gripper),
                 label="arm",
             )
-        except Exception as exc:
-            raise CalibrationError(
-                f"Failed to calibrate arm {arm_index} on port {linker_config['port']}: {exc}"
-            ) from exc
+            return (group,)
 
+        arm_group = self._make_calibration_group(
+            arm_index=arm_index,
+            port=arm.port,
+            ids=self._calibration_ids(arm),
+            encoded_home_poses=self._encode_home_poses(arm),
+            label="arm",
+        )
+        assert gripper.port is not None
+        gripper_group = self._make_calibration_group(
+            arm_index=arm_index,
+            port=gripper.port,
+            ids=gripper.joint_ids,
+            encoded_home_poses=self._encode_gripper_home_pose(gripper),
+            label="gripper",
+        )
+        return arm_group, gripper_group
+
+    @staticmethod
+    def _make_calibration_group(
+        *,
+        arm_index: int,
+        port: str,
+        ids: Tuple[int, ...],
+        encoded_home_poses: Sequence[float],
+        label: str,
+    ) -> _CalibrationGroup:
+        encoded = np.asarray(encoded_home_poses, dtype=float)
+        label_text = " gripper" if label == "gripper" else ""
+        context = f"arm {arm_index}{label_text} on port {port}"
         try:
-            gripper_group = _CalibrationGroup(
-                arm_index=arm_index,
-                port=gripper_config["port"],
-                ids=(self._gripper_joint_id(gripper_config),),
-                encoded_home_poses=tuple(int(pose) for pose in self._encode_single_gripper_home_pose(gripper_config)),
-                label="gripper",
+            normalized_ids = normalize_feetech_servo_ids(
+                ids,
+                field_name=f"servo IDs for {context}",
             )
-        except Exception as exc:
+        except ValueError as exc:
+            raise CalibrationError(str(exc)) from exc
+        if encoded.ndim != 1 or len(encoded) != len(ids):
             raise CalibrationError(
-                f"Failed to calibrate arm {arm_index} gripper on port {gripper_config['port']}: {exc}"
-            ) from exc
+                f"Encoded home poses for {context} must match the configured joint count"
+            )
+        if not np.all(np.isfinite(encoded)) or np.any(
+            np.abs(encoded) > FEETECH_SIGNED_15_BIT_MAX
+        ):
+            raise CalibrationError(
+                f"Encoded home poses for {context} must be within the signed 15-bit range "
+                f"[-{FEETECH_SIGNED_15_BIT_MAX}, {FEETECH_SIGNED_15_BIT_MAX}]"
+            )
+        return _CalibrationGroup(
+            arm_index=arm_index,
+            port=port,
+            ids=normalized_ids,
+            encoded_home_poses=tuple(int(value) for value in encoded),
+            label=label,
+        )
 
-        return tuple(self._calibrate_group(group) for group in (arm_group, gripper_group))
-
-    def _calibrate_group(self, group: _CalibrationGroup):
+    def _calibrate_group(self, group: _CalibrationGroup) -> ArmCalibrationResult:
         driver = self._driver_factory(group.ids, group.port)
+        result: Optional[ArmCalibrationResult] = None
+        calibration_error: Optional[BaseException] = None
         try:
             home_poses = np.asarray(group.encoded_home_poses, dtype=int)
             driver.calibrate(group.ids, home_poses)
-            pos, _, _ = driver.get_state()
+            positions, _, _ = driver.get_state()
             result = ArmCalibrationResult(
                 arm_index=group.arm_index,
                 port=group.port,
                 ids=group.ids,
                 encoded_home_poses=group.encoded_home_poses,
-                positions_after_calibration=dict(pos),
+                positions_after_calibration=dict(positions),
             )
-            label_text = "夹爪" if group.label == "gripper" else ""
-            print(f"臂{group.arm_index}{label_text}标定完成，当前姿态：{np.array(list(pos.values()))}.")
-            return result
-        except Exception as exc:
-            label_text = " gripper" if group.label == "gripper" else ""
-            raise CalibrationError(
-                f"Failed to calibrate arm {group.arm_index}{label_text} on port {group.port}: {exc}"
-            ) from exc
-        finally:
+        except BaseException as exc:
+            calibration_error = exc
+
+        close_error: Optional[BaseException] = None
+        try:
             driver.close()
+        except BaseException as exc:
+            close_error = exc
 
-    @staticmethod
-    def _calibration_ids(linker_config, gripper_config=None):
-        ids = tuple(linker_config["joint_ids"])
-        if gripper_config is None:
-            return ids
-        return ids + (Calibration._gripper_joint_id(gripper_config),)
-
-    @staticmethod
-    def _encode_home_poses(linker_config, gripper_config=None):
-        if gripper_config is not None:
-            if "port" not in gripper_config:
-                raise ValueError("gripper.single.port must be specified.")
-            home_poses = np.asarray(tuple(linker_config["home_poses"]) + (float(gripper_config.get("home_pose", 0.0)),))
-            joint_signs = np.asarray(
-                tuple(linker_config["joint_signs"]) + (float(gripper_config["joint_sign"]),),
-                dtype=float,
+        label_text = " gripper" if group.label == "gripper" else ""
+        if calibration_error is not None:
+            if not isinstance(calibration_error, Exception):
+                raise calibration_error
+            close_detail = (
+                ""
+                if close_error is None
+                else f"; additionally failed to close driver: {close_error}"
             )
-            gripper_home_pose = home_poses[-1]
-            if not 0.0 <= gripper_home_pose <= 1.0:
-                raise ValueError("Gripper home pose must be between 0.0 and 1.0.")
-            gripper_scale = decode_normalized_gripper_home_pose(
-                [gripper_home_pose],
-                [Calibration._gripper_joint_id(gripper_config)],
-                Calibration._gripper_joint_id(gripper_config),
-                gripper_config["gripper_type"],
-            )[0]
-            home_poses[-1] = gripper_scale
-            return np.rint(home_poses * joint_signs * 2048.0 / np.pi).astype(int)
+            raise CalibrationError(
+                f"Failed to calibrate arm {group.arm_index}{label_text} on port "
+                f"{group.port}: {calibration_error}{close_detail}"
+            ) from calibration_error
+        if close_error is not None:
+            if not isinstance(close_error, Exception):
+                raise close_error
+            raise CalibrationError(
+                f"Calibration completed for arm {group.arm_index}{label_text} on port "
+                f"{group.port}, but failed to close driver: {close_error}"
+            ) from close_error
 
-        home_poses = np.asarray(linker_config["home_poses"], dtype=float)
-        joint_signs = np.array(linker_config["joint_signs"], dtype=float)
-        return np.rint(home_poses * joint_signs * 2048.0 / np.pi).astype(int)
-
-    @staticmethod
-    def _encode_single_gripper_home_pose(gripper_config):
-        if "port" not in gripper_config:
-            raise ValueError("gripper.single.port must be specified.")
-        gripper_home_pose = float(gripper_config.get("home_pose", 0.0))
-        if not 0.0 <= gripper_home_pose <= 1.0:
-            raise ValueError("Gripper home pose must be between 0.0 and 1.0.")
-        gripper_scale = decode_normalized_gripper_home_pose(
-            [gripper_home_pose],
-            [Calibration._gripper_joint_id(gripper_config)],
-            Calibration._gripper_joint_id(gripper_config),
-            gripper_config["gripper_type"],
-        )[0]
-        return np.rint(
-            np.asarray([gripper_scale], dtype=float) * float(gripper_config["joint_sign"]) * 2048.0 / np.pi
-        ).astype(int)
+        assert result is not None
+        label_text_zh = "夹爪" if group.label == "gripper" else ""
+        print(
+            f"臂{group.arm_index}{label_text_zh}标定完成，"
+            f"当前姿态：{np.array(list(result.positions_after_calibration.values()))}."
+        )
+        return result
 
     @staticmethod
-    def _gripper_joint_id(gripper_config):
-        if "joint_id" not in gripper_config:
-            raise ValueError("gripper.single.joint_id must be specified.")
-        return int(gripper_config["joint_id"])
+    def _calibration_ids(
+        arm: ArmConfig,
+        gripper: Optional[FeeTechGripperConfig] = None,
+    ) -> Tuple[int, ...]:
+        return arm.joint_ids if gripper is None else arm.joint_ids + gripper.joint_ids
 
-    def _load_robot_config(self, config_path):
-        if config_path is None:
-            return self._config_loader.get_linker_config(), self._config_loader.get_gripper_config()
+    @staticmethod
+    def _encode_home_poses(
+        arm: ArmConfig,
+        gripper: Optional[FeeTechGripperConfig] = None,
+    ) -> np.ndarray:
+        with np.errstate(over="ignore", invalid="ignore"):
+            arm_home_poses = np.rint(
+                np.asarray(arm.home_poses, dtype=float)
+                * np.asarray(arm.joint_signs, dtype=float)
+                * 2048.0
+                / np.pi
+            )
+        if gripper is None:
+            return arm_home_poses
+        gripper_home_pose = np.asarray(
+            [
+                int(np.rint(gripper.home_pose * gripper.travel_range_counts))
+                * gripper.joint_sign
+            ],
+            dtype=int,
+        )
+        return np.concatenate((arm_home_poses, gripper_home_pose))
 
-        config_path = Path(config_path).expanduser().resolve()
-        with open(config_path, "rb") as f:
-            config = tomli.load(f)
+    @staticmethod
+    def _encode_gripper_home_pose(gripper: FeeTechGripperConfig) -> np.ndarray:
+        return np.asarray(
+            [
+                int(np.rint(gripper.home_pose * gripper.travel_range_counts))
+                * gripper.joint_sign
+            ],
+            dtype=int,
+        )
 
-        if "config_file" in config.get("basic", {}):
-            self._config_loader = ConfigLoader(config_path)
-            return self._config_loader.get_linker_config(), self._config_loader.get_gripper_config()
+    def get_robot_type(self) -> str:
+        return self._robot_config.robot_type
 
-        self._robot_type = config.get("basic", {}).get("robot_type")
-        self._backend = config.get("basic", {}).get("backend")
-        linker_config = ConfigLoader._get_equipment_config(config, "linker")
-        if not linker_config:
-            raise ValueError("Linker type not supported")
-        return linker_config, ConfigLoader._get_equipment_config(config, "gripper")
+    def get_backend(self) -> str:
+        return self._robot_config.backend
 
-    def get_robot_type(self):
-        if self._config_loader is not None:
-            return self._config_loader.get_robot_type()
-        return self._robot_type
-
-    def get_backend(self):
-        if self._config_loader is not None:
-            return self._config_loader.get_backend()
-        return self._backend
+    def get_runtime(self) -> str:
+        return self._robot_config.runtime
 
 
-def main():
-    calibration = Calibration()
+def main(argv: Optional[Sequence[str]] = None) -> None:
+    parser = argparse.ArgumentParser(description="Calibrate configured physical FEETECH joints")
+    parser.add_argument(
+        "--config",
+        type=Path,
+        help="path to a robot TOML config or an entry config containing basic.config_file",
+    )
+    args = parser.parse_args(argv)
+    calibration = Calibration(config_path=args.config)
     calibration.calibrate()
 
 

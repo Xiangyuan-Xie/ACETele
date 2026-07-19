@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Sequence
+
 import numpy as np
 
 KT_MAPPING = {
@@ -22,6 +24,25 @@ HLS_PROFILE_DEFAULTS_BY_SERVO = {
     "HL3930": {"acceleration": 250, "current": 1000, "velocity": 100},
     "HL3915": {"acceleration": 0, "current": 500, "velocity": 250},
 }
+
+
+def validate_feetech_servo_models(
+    servo_models: Sequence[str],
+    *,
+    context: str,
+) -> None:
+    supported_models = (
+        set(HLS_PROFILE_DEFAULTS_BY_SERVO)
+        & set(KT_MAPPING)
+        & set(NO_LOAD_CURRENT)
+    )
+    unknown_models = sorted(set(servo_models) - supported_models)
+    if unknown_models:
+        raise ValueError(
+            f"{context} has unsupported servo models: {unknown_models}; "
+            "each model must define profile, KT, and no-load-current data"
+        )
+
 
 PROFILE_VELOCITY_UNIT_RAD_PER_SEC = 0.732 * np.pi / 30.0
 PROFILE_ACCELERATION_UNIT_RAD_PER_SEC2 = 8.7 * np.pi / 180.0

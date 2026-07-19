@@ -10,10 +10,8 @@ os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "hide"
 os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
 import pygame  # noqa: E402
 
-from acetele.equipment.base_equipment import BaseEquipment  # noqa: E402
 
-
-class JoystickDriver(BaseEquipment):
+class JoystickDriver:
     """
     Unified Joystick Driver using threading and Pygame.
     Can be configured for specific devices via name matching and axis/button mapping.
@@ -37,7 +35,6 @@ class JoystickDriver(BaseEquipment):
             button_map: Dictionary mapping button index to name (e.g. {0: "A", 1: "B"}).
             hat_map: Dictionary mapping hat index to name.
         """
-        super().__init__()
         self.device_name_pattern = device_name_pattern
         self.axis_map = axis_map or {}
         self.button_map = button_map or {}
@@ -46,6 +43,8 @@ class JoystickDriver(BaseEquipment):
         # Thread control
         self._stop_event = threading.Event()
         self._data_lock = threading.Lock()
+        self._pygame_cleanup_lock = threading.Lock()
+        self._pygame_cleaned = False
 
         # Shared data
         self._latest_data: Optional[Dict] = None
@@ -64,75 +63,81 @@ class JoystickDriver(BaseEquipment):
                         break
                 time.sleep(0.1)
             else:
+                try:
+                    self.close()
+                except RuntimeError as cleanup_error:
+                    raise RuntimeError(
+                        "No joystick detected, and the joystick worker thread did not stop."
+                    ) from cleanup_error
                 raise RuntimeError("No joystick detected; please check USB/IP mapping and device name.")
 
     def _worker(self):
-        pygame.init()
+        try:
+            pygame.init()
+            pygame.joystick.init()
+            joystick = self._connect_joystick()
 
-        pygame.joystick.init()
-        joystick = self._connect_joystick()
-
-        while not self._stop_event.is_set():
-            if not joystick:
-                pygame.joystick.quit()
-                pygame.joystick.init()
-                joystick = self._connect_joystick()
+            while not self._stop_event.is_set():
                 if not joystick:
-                    time.sleep(1.0)
-                    continue
-                else:
+                    pygame.joystick.quit()
+                    pygame.joystick.init()
+                    joystick = self._connect_joystick()
+                    if not joystick:
+                        self._stop_event.wait(1.0)
+                        continue
                     print(f"JoystickDriver connected to: {joystick.get_name()}")
 
-            pygame.event.pump()
+                pygame.event.pump()
 
-            if not pygame.joystick.get_init():
-                joystick = None
-                continue
+                if not pygame.joystick.get_init():
+                    joystick = None
+                    continue
 
-            if not joystick.get_init():
-                joystick.init()
+                if not joystick.get_init():
+                    joystick.init()
 
-            num_axes = joystick.get_numaxes()
-            num_buttons = joystick.get_numbuttons()
-            num_hats = joystick.get_numhats()
+                num_axes = joystick.get_numaxes()
+                num_buttons = joystick.get_numbuttons()
+                num_hats = joystick.get_numhats()
 
-            raw_axes = np.array([joystick.get_axis(i) for i in range(num_axes)])
-            raw_buttons = np.array([joystick.get_button(i) for i in range(num_buttons)])
-            raw_hats = np.array([joystick.get_hat(i) for i in range(num_hats)])
+                raw_axes = np.array([joystick.get_axis(i) for i in range(num_axes)])
+                raw_buttons = np.array([joystick.get_button(i) for i in range(num_buttons)])
+                raw_hats = np.array([joystick.get_hat(i) for i in range(num_hats)])
 
-            mapped_data = {
-                "timestamp": time.time(),
-                "connected": True,
-                "name": self._connected_device_name,
-                "raw": {"axes": raw_axes, "buttons": raw_buttons, "hats": raw_hats},
-                "mapped": {},
-            }
+                mapped_data = {
+                    "timestamp": time.time(),
+                    "connected": True,
+                    "name": self._connected_device_name,
+                    "raw": {"axes": raw_axes, "buttons": raw_buttons, "hats": raw_hats},
+                    "mapped": {},
+                }
 
-            if self.axis_map:
-                for i, val in enumerate(raw_axes):
-                    if i in self.axis_map:
-                        name = self.axis_map[i]
-                        mapped_data["mapped"][name] = val
+                for source, mapping in (
+                    (raw_axes, self.axis_map),
+                    (raw_buttons, self.button_map),
+                    (raw_hats, self.hat_map),
+                ):
+                    for index, value in enumerate(source):
+                        if index in mapping:
+                            mapped_data["mapped"][mapping[index]] = value
 
-            if self.button_map:
-                for i, val in enumerate(raw_buttons):
-                    if i in self.button_map:
-                        name = self.button_map[i]
-                        mapped_data["mapped"][name] = val
+                with self._data_lock:
+                    self._latest_data = mapped_data
+                    self._is_connected = True
 
-            if self.hat_map:
-                for i, val in enumerate(raw_hats):
-                    if i in self.hat_map:
-                        name = self.hat_map[i]
-                        mapped_data["mapped"][name] = val
+                self._stop_event.wait(0.01)
+        finally:
+            self._cleanup_pygame()
 
-            with self._data_lock:
-                self._latest_data = mapped_data
-                self._is_connected = True
-
-            time.sleep(0.01)
-
-        pygame.quit()
+    def _cleanup_pygame(self):
+        with self._pygame_cleanup_lock:
+            if self._pygame_cleaned:
+                return
+            try:
+                pygame.joystick.quit()
+            finally:
+                self._pygame_cleaned = True
+                pygame.quit()
 
     def _connect_joystick(self):
         if pygame.joystick.get_count() == 0:
@@ -175,8 +180,9 @@ class JoystickDriver(BaseEquipment):
         self._stop_event.set()
         if self._thread.is_alive():
             self._thread.join(timeout=1.0)
-        pygame.joystick.quit()
-        pygame.quit()
+        if self._thread.is_alive():
+            raise RuntimeError("Timed out waiting for joystick worker thread to stop")
+        self._cleanup_pygame()
 
 
 # --------------------------------------------------------------------------------

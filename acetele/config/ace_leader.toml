@@ -1,19 +1,24 @@
 [basic]
 robot_type = "ace_leader"
-backend = "ros2"
+backend = "physical"
+runtime = "ros2"
 
-[linker.single]
+[arms.single]
 port = "/dev/ttyUSB0"
 joint_ids = [0, 1, 2, 3]
+joint_names = ["joint_1", "joint_2", "joint_3", "joint_4"]
 joint_signs = [1, -1, -1, -1]
 home_poses = [0.0, 0.0, 0.0, 0.0]
 enable_gravity_compensation = true
-servo_types = ["HL3915", "HL3915", "HL3915", "HL3915"]
+enable_adaptive_compensation = true
+servo_models = ["HL3915", "HL3915", "HL3915", "HL3915"]
 
-[gripper.single]
+[arms.single.end_effector]
+kind = "gripper"
 port = "/dev/ttyUSB0"
 joint_id = 4
+joint_name = "joint_5"
 joint_sign = 1
 home_pose = 0.0
-servo_type = "HL3915"
-gripper_type = "ace_leader"
+servo_model = "HL3915"
+travel_range_rad = 0.7853981633974483

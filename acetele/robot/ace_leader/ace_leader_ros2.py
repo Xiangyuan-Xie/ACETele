@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from typing import Optional, Sequence, Tuple
 
 import numpy as np
@@ -8,6 +10,7 @@ from sensor_msgs.msg import JointState
 from std_msgs.msg import String
 
 from acetele.config.config_loader import ConfigLoader
+from acetele.config.robot_config import FeeTechGripperConfig, RobotConfig
 from acetele.equipment.feetech.feetech_driver import TorqueEnable
 from acetele.robot.ace_leader.ace_leader import AceLeaderRobot
 from acetele.utils.teleop_sync import (
@@ -17,9 +20,44 @@ from acetele.utils.teleop_sync import (
 
 
 class AceLeaderROS2Robot(Node, AceLeaderRobot):
-    def __init__(self, config_loader: ConfigLoader):
-        Node.__init__(self, "ace_leader_robot_node")
-        AceLeaderRobot.__init__(self, config_loader)
+    def __init__(self, config_loader: ConfigLoader | RobotConfig):
+        robot_config = (
+            config_loader
+            if isinstance(config_loader, RobotConfig)
+            else config_loader.get_robot_config()
+        )
+        configured_end_effector = robot_config.arm_assemblies[0].end_effector
+        if configured_end_effector is not None and not isinstance(
+            configured_end_effector,
+            FeeTechGripperConfig,
+        ):
+            raise RuntimeError("ACE leader ROS 2 currently supports only a normalized gripper end effector")
+        node_initialized = False
+        robot_initialized = False
+        try:
+            Node.__init__(self, "ace_leader_robot_node")
+            node_initialized = True
+            AceLeaderRobot.__init__(self, robot_config)
+            robot_initialized = True
+            self._initialize_ros_interfaces()
+        except BaseException as initialization_error:
+            cleanup_error: Optional[BaseException] = None
+            if robot_initialized:
+                try:
+                    AceLeaderRobot.close(self)
+                except BaseException as exc:
+                    cleanup_error = exc
+            if node_initialized:
+                try:
+                    self.destroy_node()
+                except BaseException as exc:
+                    if cleanup_error is None:
+                        cleanup_error = exc
+            if cleanup_error is not None:
+                raise initialization_error from cleanup_error
+            raise
+
+    def _initialize_ros_interfaces(self) -> None:
         self.declare_parameter("control_rate", 100.0)
         self._control_rate = self.get_parameter("control_rate").value
         self.declare_parameter("publish_rate", 100.0)
@@ -152,8 +190,7 @@ class AceLeaderROS2Robot(Node, AceLeaderRobot):
         if now_ns is not None and self._last_ready_lock_ns is not None:
             if now_ns - self._last_ready_lock_ns < self._ready_lock_period_ns:
                 return
-        single_arm = getattr(getattr(self, "_equipments", None), "single_arm", None)
-        arm_ids = np.asarray(getattr(single_arm, "ids", getattr(self, "ids", []))).astype(int).tolist()
+        arm_ids = np.asarray(self.arm.ids).astype(int).tolist()
         if arm_ids:
             self.set_position(
                 self._sync_target_position,
@@ -174,8 +211,7 @@ class AceLeaderROS2Robot(Node, AceLeaderRobot):
         if self._sync_target_position is None:
             follower_pos, _, _ = latest_follower_state
             self._sync_target_position = np.asarray(follower_pos, dtype=float).tolist()
-            single_arm = getattr(getattr(self, "_equipments", None), "single_arm", None)
-            arm_ids = np.asarray(getattr(single_arm, "ids", getattr(self, "ids", []))).astype(int).tolist()
+            arm_ids = np.asarray(self.arm.ids).astype(int).tolist()
             if arm_ids:
                 self.set_position(
                     self._sync_target_position,
@@ -203,12 +239,10 @@ class AceLeaderROS2Robot(Node, AceLeaderRobot):
             self._sync_stable_since_ns = None
 
     def _control_loop(self):
-        single_arm = getattr(getattr(self, "_equipments", None), "single_arm", None)
-        if single_arm is not None and hasattr(single_arm, "act"):
-            joint_pos, joint_vel, joint_effort = single_arm.act()
-        else:
-            joint_pos, joint_vel, joint_effort = self.act()
-        gripper = getattr(getattr(self, "_equipments", None), "gripper", None)
+        arm = self.arm
+        arm_state = arm.get_state()
+        joint_pos, joint_vel, joint_effort = arm_state.act()
+        gripper = self.end_effector
         if gripper is not None:
             self._latest_gripper_command = gripper.act()
         else:
@@ -275,7 +309,7 @@ class AceLeaderROS2Robot(Node, AceLeaderRobot):
                     gripper_pos, _, _ = self._latest_gripper_command
                     gripper_value = float(np.asarray(gripper_pos, dtype=float)[0])
                 if gripper_value is None or gripper_value >= 1.0:
-                    arm_ids = np.asarray(getattr(single_arm, "ids", getattr(self, "ids", []))).astype(int).tolist()
+                    arm_ids = np.asarray(arm.ids).astype(int).tolist()
                     if arm_ids:
                         self.set_torque_enable(TorqueEnable.Disable, ids=arm_ids)
                     self._sync_mode = LeaderSyncMode.TRACKING
@@ -306,9 +340,7 @@ class AceLeaderROS2Robot(Node, AceLeaderRobot):
         joint_pos, joint_vel, joint_effort = self._latest_arm_command
         msg = JointState()
         msg.header.stamp = self.get_clock().now().to_msg()
-        single_arm = getattr(getattr(self, "_equipments", None), "single_arm", None)
-        arm_ids = np.asarray(getattr(single_arm, "ids", getattr(self, "ids", range(len(joint_pos))))).astype(int)
-        msg.name = [f"joint_{i+1}" for i in arm_ids]
+        msg.name = list(self.arm.joint_names)
         msg.position = joint_pos.tolist()
         msg.velocity = joint_vel.tolist()
         msg.effort = joint_effort.tolist()
@@ -320,8 +352,7 @@ class AceLeaderROS2Robot(Node, AceLeaderRobot):
         gripper_pos, gripper_vel, gripper_effort = self._latest_gripper_command
         gripper_msg = JointState()
         gripper_msg.header.stamp = msg.header.stamp
-        gripper_id = getattr(self, "gripper_id", None)
-        gripper_msg.name = [] if gripper_id is None else [f"joint_{int(gripper_id) + 1}"]
+        gripper_msg.name = list(self.end_effector.joint_names)
         gripper_msg.position = np.asarray(gripper_pos, dtype=float).tolist()
         gripper_msg.velocity = np.asarray(gripper_vel, dtype=float).tolist()
         gripper_msg.effort = np.asarray(gripper_effort, dtype=float).tolist()
