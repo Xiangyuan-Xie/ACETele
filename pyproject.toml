@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "acetele"
-version = "0.1.0"
+version = "0.2.0"
 description = "A real-time remote teleoperation system for controlling robotic platforms."
 readme = { file = "README.md", content-type = "text/markdown" }
 authors = [
@@ -29,8 +29,18 @@ dependencies = [
     "tqdm",
 ]
 
+[tool.setuptools]
+include-package-data = false
+
 [tool.setuptools.packages.find]
 where = ["."]
+include = ["acetele*"]
+exclude = [
+    "acetele.deploy.px4_msgs*",
+    "acetele.deploy.realsense-ros*",
+    "build*",
+    "tests*",
+]
 
 [tool.setuptools.package-data]
 "acetele.config" = ["*.toml"]
