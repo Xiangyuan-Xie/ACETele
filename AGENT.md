@@ -13,11 +13,11 @@ The project is experimental. Treat hardware-facing code as safety-critical: seri
 ```text
 acetele/config/       TOML config loader and default robot configs.
 acetele/core/         make_robot factory and FEETECH calibration entry point.
-acetele/equipment/    Base equipment contracts, FEETECH driver/linker/gripper, joystick driver.
-acetele/robot/        ace_leader and ace_follower implementations for default, ros2, and mock backends.
+acetele/equipment/    Joint-device contract, FEETECH arm/gripper, dexterous hands, joystick driver.
+acetele/robot/        Shared joint-robot composition plus leader/follower topology and ROS 2 adapters.
 acetele/deploy/       ROS 2 packages plus PX4 and RealSense deployment dependencies.
 acetele/tools/        rosbag/HDF5 tooling and hardware diagnostics.
-acetele/utils/        Teleop sync enums and gripper scaling helpers.
+acetele/utils/        Teleop sync enums plus angle and joint-ID helpers.
 tests/                Unit tests and ROS 2 behavior tests.
 ```
 
@@ -31,24 +31,37 @@ acetele/equipment/feetech/feetech_sdk/
 
 ## Core Contracts
 
-`ConfigLoader` reads `acetele/config/default.toml`, optionally follows `basic.config_file`, and maps `(basic.robot_type, basic.backend)` through `_ROBOT_MAP`.
+`ConfigLoader` reads `acetele/config/default.toml`, optionally follows `basic.config_file`, and returns
+a typed `RobotConfig`. `make_robot()` owns the single `(robot_type, runtime)` entry-point map.
 
 Supported robot types:
 
 ```text
 ace_leader
 ace_follower
+ace_follower_dual
 ```
 
-Supported backends:
+Device backends and runtimes are separate:
 
 ```text
-default  Real FEETECH hardware classes.
-ros2     ROS 2 Node + robot class mixins.
-mock     In-memory robot classes for tests and no-hardware checks.
+backend = physical | mock
+runtime = standalone | ros2
 ```
 
-`BaseRobot.act()` returns `(positions, velocities, efforts)`. Direct robot APIs use combined joint order: arm joint IDs first, then the optional gripper joint ID.
+Each `[arms.<name>]` table contains one arm and its optional nested
+`[arms.<name>.end_effector]`. Do not restore the removed `[linker.*]`, `[gripper.*]`, `variant`, or
+`gripper_type` schema. Gripper travel is an explicit physical value in `travel_range_rad`.
+
+`JointDevice` is the shared arm/end-effector protocol, and every device returns `JointDeviceState`.
+`CompositeJointDevice` implements command routing and state aggregation. `JointRobot` builds named
+`ArmAssembly` instances and owns shared serial drivers. Direct robot APIs use combined joint order:
+all arm joints first, then configured end-effector joints in arm order.
+
+`BaseRobot.act()` returns `(positions, velocities, efforts)`.
+`BaseRobot.name` uses `<robot_type>_<backend>_<runtime>`. Hardware `joint_ids` are independent from
+URDF/Pinocchio/ROS 2 names. Every arm TOML table must explicitly define `joint_names`, and every
+FEETECH gripper must define `joint_name`; never derive kinematic names from servo bus IDs.
 
 ROS 2 topics intentionally split arm and gripper traffic:
 
@@ -63,14 +76,16 @@ ROS 2 topics intentionally split arm and gripper traffic:
 
 The PX4 bridge still publishes `/fmu/in/arm_joint_state` as the 5D `[arm..., gripper]` vector expected by the adapter.
 
-`Linker` arm positions are radians. `Gripper` public positions are normalized to `[0.0, 1.0]`. `set_position()` APIs accept `velocities`, `accelerations`, and `torque`; do not reintroduce older singular/profile/current keyword arguments unless the tests and callers are intentionally changed.
+`FeeTechArm` positions are radians. `FeeTechGripper` public positions are normalized to `[0.0, 1.0]`.
+`set_position()` APIs accept `velocities`, `accelerations`, and `torque`; do not reintroduce older
+singular/profile/current keyword arguments unless the tests and callers are intentionally changed.
 
 ## Hardware Safety
 
 Ask before running commands that may touch hardware, serial ports, ROS 2 live nodes, or servo nonvolatile state. This includes:
 
 ```bash
-python -m acetele.core.calibrate
+python -m acetele.core.calibrate --config /path/to/physical_robot.toml
 python -m acetele.tools.backlash_diagnostics ...
 python -m acetele.tools.gravity_compensation_diagnostics ...
 python -m acetele.tools.feetech_pid_autotune ...
@@ -79,6 +94,9 @@ ros2 launch acetele_bringup follower_system.launch.py
 ```
 
 Before hardware runs, confirm the intended config file, serial port, robot side, power state, mechanical clearance, and emergency stop plan.
+
+Calibration rejects `backend="mock"` before creating a driver. Do not add an implicit backend
+override or bypass this check.
 
 Prefer `backend="mock"` or test doubles for local validation. Never change calibration offsets, PID values, torque enable behavior, current limits, or gravity compensation constants as a casual refactor.
 
@@ -138,7 +156,9 @@ If a change affects installed resources, update both packaging files and `tests/
 
 ## ROS 2 Notes
 
-`ace_robot_ros2/ace_robot_node.py` creates a `ConfigLoader` with `backend_override="ros2"`. Passing `config_path` selects the robot TOML file at launch time.
+`ace_robot_ros2/ace_robot_node.py` creates a `ConfigLoader` with `runtime_override="ros2"`; the
+configured `physical` or `mock` device backend remains unchanged. Passing `config_path` selects the
+robot TOML file at launch time.
 
 Useful commands:
 
@@ -153,13 +173,20 @@ ros2 run joystick_ros2 manual_control
 
 ## Common Change Patterns
 
-When adding a robot or backend:
+When adding a robot topology or runtime:
 
 1. Add the implementation under `acetele/robot/...`.
-2. Update `_ROBOT_MAP` in `acetele/config/config_loader.py`.
+2. Update `_ROBOT_ENTRYPOINTS` in `acetele/core/make_robot.py`.
 3. Add or update TOML config files under `acetele/config/`.
 4. Add tests for config loading and factory behavior.
 5. Update README usage/configuration notes.
+
+When adding an end effector:
+
+1. Add a descriptive typed config and a `JointDevice` implementation.
+2. Put dexterous-hand models under `acetele/equipment/dexterous_hands/`.
+3. Register creation in `end_effector_factory.py`.
+4. Keep model codes such as O6 contextualized by the directory and class/config names.
 
 When changing arm or gripper command semantics:
 

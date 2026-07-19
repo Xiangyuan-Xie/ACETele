@@ -167,16 +167,19 @@ colcon build --symlink-install
 source install/setup.bash
 ```
 
-### Sanity Check
+### Hardware Check
 
-The default configuration `acetele/config/default.toml` points to `ace_leader.toml`, and `ace_leader`
-uses the `mock` backend by default. After installation, run a no-hardware check first:
+The default configuration `acetele/config/default.toml` points to `ace_leader.toml`. The leader uses
+the `physical` device backend with the `standalone` runtime and accesses `/dev/ttyUSB0` by default.
+Connect the arm, verify the serial-port name and permissions, then run:
 
 ```bash
 python -m acetele.core.make_robot
 ```
 
-Press `Ctrl+C` once it starts printing mock states.
+Press `Ctrl+C` once it starts printing physical joint states. In a no-hardware environment, run the
+test suite or explicitly construct `ConfigLoader(..., backend_override="mock")`; do not rely on the
+project default.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -185,7 +188,8 @@ Press `Ctrl+C` once it starts printing mock states.
 ### Python API
 
 `make_robot()` is the unified Python creation entry point. It reads `ConfigLoader` configuration and
-selects and instantiates the matching robot class from `(robot_type, backend)`.
+selects the robot entry point from `(robot_type, runtime)`. The `backend` field only selects physical
+or mock devices.
 
 ```python
 from acetele.core.make_robot import make_robot
@@ -210,6 +214,9 @@ config = ConfigLoader(Path("acetele/config/ace_follower.toml"))
 robot = make_robot(config)
 ```
 
+`robot.name` includes the topology, device backend, and runtime, for example
+`ace_follower_physical_ros2` or `ace_leader_physical_standalone`.
+
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 ### Configuration System
@@ -231,18 +238,41 @@ Key fields:
 
 | Field | Purpose |
 | --- | --- |
-| `basic.robot_type` | Robot configuration, currently supporting `ace_leader` and `ace_follower` |
-| `basic.backend` | Runtime backend configuration, currently including `mock`, `default`, and `ros2` |
-| `linker.single.port` | Serial port for arm servos |
-| `linker.single.joint_ids` | Servo IDs for each arm joint |
-| `linker.single.joint_signs` | Arm joint direction convention |
-| `linker.single.home_poses` | Calibrated arm joint home positions |
-| `linker.single.servo_types` | Servo model configuration, such as `HL3960`, `HL3950`, `HL3930`, and `HL3915` |
-| `gripper.single` | Gripper configuration, including servo ID, port, direction, home pose, and gripper type |
+| `basic.robot_type` | Robot topology: `ace_leader`, `ace_follower`, or `ace_follower_dual` |
+| `basic.backend` | Device backend: `mock` or `physical` |
+| `basic.runtime` | Runtime entry point: `standalone` or `ros2` |
+| `arms.<name>.port` | Servo serial port for that arm |
+| `arms.<name>.joint_ids` | Servo IDs for the arm joints |
+| `arms.<name>.joint_names` | Required ordered arm joint names for URDF, Pinocchio, and ROS2 |
+| `arms.<name>.joint_signs` | Arm joint direction convention |
+| `arms.<name>.home_poses` | Calibrated arm joint home positions |
+| `arms.<name>.servo_models` | Servo models such as `HL3960`, `HL3950`, `HL3930`, and `HL3915` |
+| `arms.<name>.end_effector` | Optional gripper or dexterous-hand configuration bound to the arm |
+| `arms.<name>.end_effector.joint_name` | Required kinematic and ROS2 joint name for a FEETECH gripper |
+| `travel_range_rad` | Physical servo travel represented by normalized gripper positions from `0` to `1`; it must encode to `1` through `2047` FEETECH position counts |
 
-Here, the `mock` backend is used for local API checks and no-hardware debugging; the `default`
-backend directly accesses real FEETECH devices; the `ros2` backend is mainly used for robot interface
-wrapping inside ROS2 nodes.
+Use `mock` for local API checks and no-hardware debugging; `physical` accesses real devices.
+Selecting `runtime = "ros2"` wraps the robot in a ROS2 node without implicitly changing the device
+backend. Arms and end effectors are paired in the same assembly table: use `arms.single` for a
+single-arm robot and `arms.left`/`arms.right` for a dual-arm robot.
+
+TOML does not contain mock-only initial positions, limits, or velocities. A mock arm starts from
+`home_poses`; it reads joint limits from the URDF when one exists and otherwise uses internal device
+defaults. Mock gripper and dexterous-hand constraints also come from their device implementations.
+The same robot configuration can therefore switch between `mock` and `physical` without carrying
+simulator-only parameters.
+
+`joint_ids` are servo bus addresses only. Every arm must explicitly define `joint_names`, and every
+FEETECH gripper must explicitly define `joint_name`. These names identify joints in URDF, Pinocchio,
+and ROS2 interfaces, so servo IDs can be reassigned without changing kinematic names. Calibration
+accepts only configurations with `backend = "physical"` and should be given an explicit configuration
+file:
+
+```bash
+python -m acetele.core.calibrate --config acetele/config/ace_follower.toml
+```
+
+Using a `mock` configuration for calibration fails before any serial port is opened.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 

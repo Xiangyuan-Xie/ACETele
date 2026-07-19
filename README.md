@@ -163,16 +163,18 @@ colcon build --symlink-install
 source install/setup.bash
 ```
 
-### 快速自检
+### 硬件自检
 
-默认配置 `acetele/config/default.toml` 指向 `ace_leader.toml`，而 `ace_leader` 默认使用 `mock` 后端。
-安装后可以先在无硬件环境中确认入口可用：
+默认配置 `acetele/config/default.toml` 指向 `ace_leader.toml`。Leader 默认使用
+`physical` 设备后端和 `standalone` 运行方式，会访问配置中的 `/dev/ttyUSB0`。
+连接机械臂并确认串口名称和访问权限后运行：
 
 ```bash
 python -m acetele.core.make_robot
 ```
 
-看到 mock 状态持续输出后，按 `Ctrl+C` 退出。
+看到真实关节状态持续输出后，按 `Ctrl+C` 退出。无硬件环境下请运行测试，或显式通过
+`ConfigLoader(..., backend_override="mock")` 创建 Mock 后端，不要依赖项目默认值。
 
 <p align="right">(<a href="#readme-top">返回顶部</a>)</p>
 
@@ -180,7 +182,8 @@ python -m acetele.core.make_robot
 
 ### Python API
 
-`make_robot()` 是统一的 Python 创建入口，负责读取 `ConfigLoader` 配置，并根据 `(robot_type, backend)` 选择并实例化对应的机器人类。
+`make_robot()` 是统一的 Python 创建入口，负责读取 `ConfigLoader` 配置，并根据
+`(robot_type, runtime)` 选择机器人入口。`backend` 只决定使用真实设备还是 mock 设备。
 
 ```python
 from acetele.core.make_robot import make_robot
@@ -205,6 +208,9 @@ config = ConfigLoader(Path("acetele/config/ace_follower.toml"))
 robot = make_robot(config)
 ```
 
+`robot.name` 同时包含拓扑、设备后端和运行方式，例如
+`ace_follower_physical_ros2` 或 `ace_leader_physical_standalone`。
+
 <p align="right">(<a href="#readme-top">返回顶部</a>)</p>
 
 ### 配置系统
@@ -226,16 +232,37 @@ config_file = "ace_leader.toml"
 
 | 字段 | 作用 |
 | --- | --- |
-| `basic.robot_type` | 机器人配置，目前支持 `ace_leader` 和 `ace_follower` |
-| `basic.backend` | 运行后端配置，目前包括 `mock`、`default`、`ros2` |
-| `linker.single.port` | 机械臂舵机串口 |
-| `linker.single.joint_ids` | 机械臂各关节对应的舵机ID |
-| `linker.single.joint_signs` | 机械臂关节方向约定 |
-| `linker.single.home_poses` | 标定后的机械臂关节Home位 |
-| `linker.single.servo_types` | 舵机型号配置，例如 `HL3960`、`HL3950`、`HL3930`、`HL3915` |
-| `gripper.single` | 夹爪相关配置，包括舵机ID、串口、方向、Home位和夹爪类型 |
+| `basic.robot_type` | 机器人拓扑，支持 `ace_leader`、`ace_follower` 和 `ace_follower_dual` |
+| `basic.backend` | 设备后端：`mock` 或 `physical` |
+| `basic.runtime` | 运行入口：`standalone` 或 `ros2` |
+| `arms.<name>.port` | 该机械臂的舵机串口 |
+| `arms.<name>.joint_ids` | 机械臂各关节对应的舵机 ID |
+| `arms.<name>.joint_names` | 必填；按顺序对应 URDF、Pinocchio 和 ROS2 的机械臂关节名 |
+| `arms.<name>.joint_signs` | 机械臂关节方向约定 |
+| `arms.<name>.home_poses` | 标定后的机械臂关节 Home 位 |
+| `arms.<name>.servo_models` | 舵机型号，例如 `HL3960`、`HL3950`、`HL3930` 和 `HL3915` |
+| `arms.<name>.end_effector` | 与该机械臂绑定的可选夹爪或灵巧手配置 |
+| `arms.<name>.end_effector.joint_name` | FEETECH 夹爪必填；夹爪在运动学和 ROS2 接口中的关节名 |
+| `travel_range_rad` | 归一化夹爪从 `0` 到 `1` 对应的实际舵机角行程；换算后须为 `1` 至 `2047` 个 FEETECH 位置计数 |
 
-其中，`mock` 后端用于本地 API 自检与无硬件调试；`default` 后端会直接访问真实 FEETECH 设备；`ros2` 后端主要用于 ROS2 节点内部的机器人接口封装。
+`mock` 用于本地 API 自检与无硬件调试，`physical` 会访问真实设备；`runtime = "ros2"`
+选择 ROS2 节点封装，但不会隐式改变设备后端。机械臂和末端执行器在同一个装配表中绑定，
+单臂使用 `arms.single`，双臂可使用 `arms.left` 和 `arms.right`。
+
+TOML 不配置 Mock 专用的初始位置、限位或速度。Mock 机械臂使用 `home_poses` 作为初始状态；
+存在 URDF 时从中读取关节限位，否则使用设备内部默认值。Mock 夹爪和灵巧手的模拟约束也由
+对应设备实现提供。这样同一份机器人配置可以在 `mock` 与 `physical` 后端之间切换，而不会
+混入仅对模拟器有效的参数。
+
+`joint_ids` 仅表示舵机总线地址；每条机械臂都必须显式配置 `joint_names`，FEETECH 夹爪必须
+显式配置 `joint_name`。这些名称用于 URDF、Pinocchio 和 ROS2 接口，重新分配舵机 ID 时无需
+修改运动学关节名称。标定只接受 `backend = "physical"` 的配置，并应显式指定配置文件：
+
+```bash
+python -m acetele.core.calibrate --config acetele/config/ace_follower.toml
+```
+
+使用 `mock` 配置执行标定会在打开串口前直接失败。
 
 <p align="right">(<a href="#readme-top">返回顶部</a>)</p>
 
