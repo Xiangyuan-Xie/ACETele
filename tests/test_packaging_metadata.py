@@ -113,6 +113,7 @@ def test_isolated_wheel_contains_runtime_files_without_excluded_sources(tmp_path
         "acetele/config/robot_config.py",
         "acetele/equipment/dexterous_hands/o6.py",
         "acetele/equipment/feetech/arm.py",
+        "acetele/equipment/feetech/state_estimator.py",
         "acetele/equipment/joint_device.py",
         "acetele/robot/ace_follower/description/ace_follower.urdf",
         "acetele/robot/ace_follower/description/meshes/link_1.STL",

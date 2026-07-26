@@ -2,7 +2,11 @@ import numpy as np
 import pytest
 
 from acetele.config.robot_config import FeeTechGripperConfig
-from acetele.equipment.feetech.feetech_driver import FeeTechCommandDispatchError, TorqueEnable
+from acetele.equipment.feetech.feetech_driver import (
+    FeeTechCommandDispatchError,
+    FeeTechStateSample,
+    TorqueEnable,
+)
 from acetele.equipment.feetech.gripper import FeeTechGripper
 from acetele.equipment.feetech.servo_specs import HLS_PROFILE_DEFAULTS_BY_SERVO
 from acetele.equipment.joint_device import JointDevice
@@ -85,6 +89,38 @@ def test_gripper_returns_common_array_state():
     assert state.velocities.shape == (1,)
     assert state.motor_torque_magnitude.shape == (1,)
     assert state.motor_torque_signed.shape == (1,)
+
+
+def test_gripper_state_estimator_rejects_velocity_register_spike():
+    class VersionedDriver:
+        def __init__(self):
+            self.sample = FeeTechStateSample(
+                position={4: 0},
+                velocity={4: 0},
+                current={4: 0},
+                timestamp=0.0,
+                sequence=1,
+            )
+
+        def get_state_sample(self):
+            return self.sample
+
+    driver = VersionedDriver()
+    gripper = make_gripper(driver=driver)
+    gripper.get_state()
+    driver.sample = FeeTechStateSample(
+        position={4: 0},
+        velocity={4: 32767},
+        current={4: 0},
+        timestamp=0.01,
+        sequence=2,
+    )
+
+    state = gripper.get_state()
+    diagnostics = gripper.get_state_estimator_diagnostics()
+
+    assert abs(state.velocities[0]) < 1.0
+    assert diagnostics["velocity_accepted"].tolist() == [False]
 
 
 def test_set_position_uses_follower_gripper_travel():

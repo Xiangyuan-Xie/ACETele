@@ -17,6 +17,7 @@ from acetele.equipment.feetech.feetech_driver import (
     FeeTechCommandDispatchError,
     FeeTechCommandTimeoutError,
     FeeTechDriver,
+    FeeTechStateSample,
     FeeTechStateTimeoutError,
     Mode,
     TorqueEnable,
@@ -30,6 +31,7 @@ from acetele.equipment.feetech.servo_specs import (
     PROFILE_ACCELERATION_UNIT_RAD_PER_SEC2,
     PROFILE_VELOCITY_UNIT_RAD_PER_SEC,
 )
+from acetele.equipment.feetech.state_estimator import FeeTechStateEstimator
 from acetele.utils.angle import wrap_to_pi
 
 
@@ -681,6 +683,8 @@ class BaseMethodDriver(FeeTechDriver):
         self._position = {1: 5000}
         self._velocity = {1: 0}
         self._current = {1: 0}
+        self._state_timestamp = 1.25
+        self._state_sequence = 4
         self.read_calls = 0
         self.executed_tasks = []
 
@@ -1859,6 +1863,62 @@ def test_get_state_returns_one_atomic_copy_when_worker_updates_after_snapshot():
     assert driver._current == {1: 2}
 
 
+def test_get_state_sample_returns_atomic_metadata_and_independent_dicts():
+    driver = BaseMethodDriver()
+
+    sample = FeeTechDriver.get_state_sample(driver)
+
+    assert sample.timestamp == pytest.approx(1.25)
+    assert sample.sequence == 4
+    assert sample.position == {1: 5000}
+    sample.position[1] = -1
+    assert driver._position == {1: 5000}
+
+
+def test_read_state_stamps_and_sequences_complete_samples(monkeypatch):
+    from acetele.equipment.feetech.feetech_sdk.protocol_packet_handler import (
+        protocol_packet_handler,
+    )
+
+    driver = BaseMethodDriver()
+
+    class ReadHandler:
+        def addParam(self, _ft_id):
+            return True
+
+        def txRxPacket(self):
+            return COMM_SUCCESS
+
+        def isAvailable(self, _ft_id, _address, _length):
+            return True, 0
+
+        def getData(self, _ft_id, address, _length):
+            values = {
+                56: 0x8002,
+                58: 0x8001,
+                69: 45,
+            }
+            return values[address]
+
+        def clearParam(self):
+            pass
+
+    driver._groupSyncReadHandler = ReadHandler()
+    driver._packetHandler = protocol_packet_handler(None, 0)
+    monkeypatch.setattr(
+        "acetele.equipment.feetech.feetech_driver.time.monotonic",
+        lambda: 9.5,
+    )
+
+    FeeTechDriver._read_state(driver)
+
+    assert driver._position == {1: -2}
+    assert driver._velocity == {1: -1}
+    assert driver._current == {1: 45}
+    assert driver._state_timestamp == pytest.approx(9.5)
+    assert driver._state_sequence == 5
+
+
 def test_hls_state_read_length_covers_position_to_current():
     import acetele.equipment.feetech.feetech_driver as driver_module
 
@@ -1892,6 +1952,8 @@ def make_arm_for_encoding(ids=(0, 1, 2, 3)):
     arm._pin_data = None
     arm._enable_gravity_compensation = False
     arm._adaptive_compensation_enabled = False
+    arm._state_estimator = FeeTechStateEstimator(len(ids))
+    arm._fallback_state_sequence = 0
     return arm
 
 
@@ -2336,8 +2398,17 @@ def test_adaptive_compensation_does_not_learn_above_velocity_threshold(monkeypat
     arm = FeeTechArm(config, driver=driver, position_limits=SINGLE_JOINT_POSITION_LIMITS)
     clock = ManualClock()
     monkeypatch.setattr("acetele.equipment.feetech.arm.time.monotonic", clock)
+    monkeypatch.setattr(
+        "acetele.equipment.feetech.state_estimator.time.monotonic",
+        clock,
+    )
 
-    for _ in range(8):
+    for sample_index in range(8):
+        driver.state = (
+            {0: sample_index * 3},
+            {0: 1},
+            {0: 0},
+        )
         arm.set_position([0.1])
         clock.advance(0.05)
 
@@ -2388,10 +2459,18 @@ def test_adaptive_compensation_holds_estimate_inside_deadband(monkeypatch):
 
     arm.set_position([0.1])
 
-    state = arm.get_adaptive_compensation_state()
-    assert state["estimate_rad"][0] == pytest.approx(before["estimate_rad"][0])
-    assert state["offset_rad"][0] >= before["offset_rad"][0]
-    assert abs(state["last_error_rad"][0]) <= 0.02
+    transitioning = arm.get_adaptive_compensation_state()
+    assert transitioning["estimate_rad"][0] == pytest.approx(before["estimate_rad"][0])
+    assert np.isnan(transitioning["last_error_rad"][0])
+
+    for _ in range(2):
+        clock.advance(0.01)
+        arm.set_position([0.1])
+
+    settled = arm.get_adaptive_compensation_state()
+    assert settled["estimate_rad"][0] == pytest.approx(before["estimate_rad"][0])
+    assert settled["offset_rad"][0] >= before["offset_rad"][0]
+    assert abs(settled["last_error_rad"][0]) <= 0.02
 
 
 def test_adaptive_compensation_filters_offset_when_estimate_saturates(monkeypatch):
@@ -2815,6 +2894,72 @@ def test_arm_state_wraps_public_joint_angles_to_half_open_pi_range():
 
     np.testing.assert_allclose(state.raw_positions, np.array([1.5 * np.pi, -1.5 * np.pi]))
     np.testing.assert_allclose(state.public_positions, np.array([-0.5 * np.pi, 0.5 * np.pi]))
+
+
+def test_arm_state_estimator_rejects_velocity_register_spike():
+    class VersionedDriver:
+        def __init__(self):
+            self.sample = FeeTechStateSample(
+                position={0: 0},
+                velocity={0: 0},
+                current={0: 0},
+                timestamp=0.0,
+                sequence=1,
+            )
+
+        def get_state_sample(self):
+            return self.sample
+
+    driver = VersionedDriver()
+    arm = FeeTechArm(single_joint_arm_config(), driver=driver)
+    arm.get_state()
+    driver.sample = FeeTechStateSample(
+        position={0: 0},
+        velocity={0: 32767},
+        current={0: 0},
+        timestamp=0.01,
+        sequence=2,
+    )
+
+    state = arm.get_state()
+    diagnostics = arm.get_state_estimator_diagnostics()
+
+    assert abs(state.velocities[0]) < 1.0
+    assert diagnostics["velocity_accepted"].tolist() == [False]
+    assert diagnostics["velocity_rejection_count"].tolist() == [1]
+
+
+def test_arm_state_estimator_protects_public_position_and_preserves_raw_spike():
+    class VersionedDriver:
+        def __init__(self):
+            self.sample = FeeTechStateSample(
+                position={0: 0},
+                velocity={0: 0},
+                current={0: 0},
+                timestamp=0.0,
+                sequence=1,
+            )
+
+        def get_state_sample(self):
+            return self.sample
+
+    driver = VersionedDriver()
+    arm = FeeTechArm(single_joint_arm_config(), driver=driver)
+    arm.get_state()
+    driver.sample = FeeTechStateSample(
+        position={0: 1304},
+        velocity={0: 0},
+        current={0: 0},
+        timestamp=0.01,
+        sequence=2,
+    )
+
+    state = arm.get_state()
+    diagnostics = arm.get_state_estimator_diagnostics()
+
+    assert state.raw_positions[0] == pytest.approx(1304 * np.pi / 2048.0)
+    assert abs(state.public_positions[0]) < 0.1
+    assert diagnostics["position_accepted"].tolist() == [False]
 
 
 def test_arm_exposes_only_plain_arm_control_api():

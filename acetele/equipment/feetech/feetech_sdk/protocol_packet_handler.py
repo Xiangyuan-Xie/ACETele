@@ -35,17 +35,9 @@ class protocol_packet_handler(object):
         self.scs_end = e
 
     def scs_tohost(self, a, b):
-        if a & (1 << b):
-            val = -(a & ~(1 << b))
-        else:
-            val = a
-        if val & 0x8000:
-            val = 32768 - val
-        return val
-        # if a & (1 << b):
-        #     return -(a & ~(1 << b))
-        # else:
-        #     return a
+        sign_mask = 1 << b
+        magnitude = int(a) & (sign_mask - 1)
+        return -magnitude if int(a) & sign_mask else magnitude
 
     def scs_toscs(self, a, b):
         if a < 0:

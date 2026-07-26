@@ -14,6 +14,10 @@ from acetele.equipment.feetech.servo_specs import (
     PROFILE_VELOCITY_UNIT_RAD_PER_SEC,
     validate_feetech_servo_models,
 )
+from acetele.equipment.feetech.state_estimator import (
+    FeeTechStateEstimator,
+    read_feetech_state_sample,
+)
 from acetele.equipment.joint_device import JointDeviceState, _normalize_profile_value
 from acetele.utils.angle import wrap_to_pi
 from acetele.utils.joint import normalize_joint_ids
@@ -35,6 +39,8 @@ class FeeTechGripper:
         self._id = config.joint_id
         self._ids = np.asarray(config.joint_ids, dtype=int)
         self._joint_names = config.joint_names
+        self._state_estimator = FeeTechStateEstimator(1)
+        self._fallback_state_sequence = 0
         self._sign = float(config.joint_sign)
         self._travel_range_counts = config.travel_range_counts
         self._servo_model = config.servo_model
@@ -62,10 +68,25 @@ class FeeTechGripper:
         return self.get_state().act()
 
     def get_state(self) -> JointDeviceState:
-        encoded_pos, encoded_vel, encoded_current = self._driver.get_state()
-        signed_position_counts = float(encoded_pos[self._id]) * self._sign
-        raw_position = signed_position_counts * np.pi / 2048.0
-        wrapped_position = float(wrap_to_pi(raw_position))
+        sample, self._fallback_state_sequence = read_feetech_state_sample(
+            self._driver,
+            self._fallback_state_sequence,
+        )
+        signed_position_counts = float(sample.position[self._id]) * self._sign
+        measured_position = signed_position_counts * np.pi / 2048.0
+        measured_velocity = (
+            float(sample.velocity[self._id])
+            * self._sign
+            * PROFILE_VELOCITY_UNIT_RAD_PER_SEC
+        )
+        estimate = self._state_estimator.update(
+            np.asarray([measured_position]),
+            np.asarray([measured_velocity]),
+            timestamp=sample.timestamp,
+            sample_id=sample.sequence,
+        )
+        raw_position = measured_position
+        wrapped_position = float(wrap_to_pi(estimate.positions[0]))
         public_position = float(
             np.clip(
                 wrapped_position
@@ -74,8 +95,8 @@ class FeeTechGripper:
                 1.0,
             )
         )
-        velocity = float(encoded_vel[self._id]) * self._sign * PROFILE_VELOCITY_UNIT_RAD_PER_SEC
-        raw_current = float(encoded_current[self._id])
+        velocity = float(estimate.velocities[0])
+        raw_current = float(sample.current[self._id])
         torque_kgcmf = max(abs(raw_current * 6.5) - self._no_load_current, 0.0) / self._torque_current_mapping
         torque_magnitude = torque_kgcmf * 0.0981
         return JointDeviceState(
@@ -87,6 +108,9 @@ class FeeTechGripper:
                 [torque_magnitude * float(np.sign(-raw_current * self._sign))]
             ),
         )
+
+    def get_state_estimator_diagnostics(self) -> dict[str, np.ndarray]:
+        return self._state_estimator.get_diagnostics()
 
     def set_position(
         self,

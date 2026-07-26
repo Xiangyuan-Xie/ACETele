@@ -211,6 +211,11 @@ robot = make_robot(config)
 `robot.name` 同时包含拓扑、设备后端和运行方式，例如
 `ace_follower_physical_ros2` 或 `ace_leader_physical_standalone`。
 
+物理 FEETECH 设备会保留驱动层的原始寄存器快照，并在设备层使用带异常观测门控的
+低延迟常速度卡尔曼估计器。`robot.act()`、ROS2 和 FMU 接口使用滤波后的位置与速度；
+`JointDeviceState.raw_positions` 仍保留未经滤波的编码器角度。机械臂和夹爪的
+`get_state_estimator_diagnostics()` 可用于查看创新、NIS、观测门限、限速状态和累计拒绝次数。
+
 <p align="right">(<a href="#readme-top">返回顶部</a>)</p>
 
 ### 配置系统

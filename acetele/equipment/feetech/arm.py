@@ -21,6 +21,10 @@ from acetele.equipment.feetech.servo_specs import (
     PROFILE_VELOCITY_UNIT_RAD_PER_SEC,
     validate_feetech_servo_models,
 )
+from acetele.equipment.feetech.state_estimator import (
+    FeeTechStateEstimator,
+    read_feetech_state_sample,
+)
 from acetele.equipment.joint_device import JointDeviceState, _normalize_profile_value
 from acetele.utils.angle import unwrap_near, wrap_to_pi
 from acetele.utils.joint import normalize_joint_ids
@@ -52,6 +56,8 @@ class FeeTechArm:
         self._ids = np.asarray(config.joint_ids, dtype=int)
         self._joint_names = config.joint_names
         self._dof = len(self._ids)
+        self._state_estimator = FeeTechStateEstimator(self._dof)
+        self._fallback_state_sequence = 0
 
         self._signs = np.asarray(config.joint_signs, dtype=float)
         self._enable_gravity_compensation = config.enable_gravity_compensation
@@ -203,14 +209,37 @@ class FeeTechArm:
         return self.get_state().act()
 
     def get_state(self) -> JointDeviceState:
-        encoded_pos, encoded_vel, encoded_current = self._driver.get_state()
+        sample, self._fallback_state_sequence = read_feetech_state_sample(
+            self._driver,
+            self._fallback_state_sequence,
+        )
 
-        raw_positions = np.array([encoded_pos[int(ft_id)] for ft_id in self._ids]) * self._signs * np.pi / 2048.0
-        public_positions = wrap_to_pi(raw_positions)
+        measured_positions = (
+            np.array([sample.position[int(ft_id)] for ft_id in self._ids])
+            * self._signs
+            * np.pi
+            / 2048.0
+        )
+        measured_velocities = (
+            np.array([sample.velocity[int(ft_id)] for ft_id in self._ids])
+            * self._signs
+            * PROFILE_VELOCITY_UNIT_RAD_PER_SEC
+        )
+        estimate = self._state_estimator.update(
+            measured_positions,
+            measured_velocities,
+            timestamp=sample.timestamp,
+            sample_id=sample.sequence,
+        )
+        raw_positions = measured_positions
+        public_positions = wrap_to_pi(estimate.positions)
 
-        velocities = np.array([encoded_vel[int(ft_id)] for ft_id in self._ids]) * self._signs * 0.732 * np.pi / 30
+        velocities = estimate.velocities
 
-        raw_currents = np.array([encoded_current[int(ft_id)] for ft_id in self._ids], dtype=float)
+        raw_currents = np.array(
+            [sample.current[int(ft_id)] for ft_id in self._ids],
+            dtype=float,
+        )
         currents = raw_currents * 6.5
         torques_kgcmf_mag = np.maximum(np.abs(currents) - self._no_load_current, 0.0) / self._torque_current_mapping
         torques_Nm_mag = torques_kgcmf_mag * 0.0981
@@ -224,6 +253,9 @@ class FeeTechArm:
             motor_torque_magnitude=torques_Nm_mag,
             motor_torque_signed=torques_Nm_signed,
         )
+
+    def get_state_estimator_diagnostics(self) -> Dict[str, np.ndarray]:
+        return self._state_estimator.get_diagnostics()
 
     def set_torque(self, torques: Sequence[float], ids: Optional[Sequence[int]] = None):
         torques_Nm = np.asarray(torques, dtype=float)
@@ -430,6 +462,7 @@ class FeeTechArm:
 
         now = time.monotonic()
         state = self.get_state()
+        estimator_diagnostics = self._state_estimator.get_diagnostics()
         compensated = bounded_positions.copy()
 
         for local_index, global_index in enumerate(indices):
@@ -437,6 +470,10 @@ class FeeTechArm:
             raw_measured = float(state.raw_positions[global_index])
             public_measured = float(state.public_positions[global_index])
             measured_velocity = float(state.velocities[global_index])
+            estimator_feedback_valid = bool(
+                estimator_diagnostics["position_accepted"][global_index]
+                and not estimator_diagnostics["velocity_limited"][global_index]
+            )
             previous_target = self._adaptive_compensation_target[global_index]
             previous_update = self._adaptive_compensation_last_update[global_index]
             self._adaptive_compensation_last_reset[global_index] = False
@@ -509,6 +546,7 @@ class FeeTechArm:
             stable_since = self._adaptive_compensation_stable_since[global_index]
             active = (
                 not reset
+                and estimator_feedback_valid
                 and velocity_is_stable
                 and np.isfinite(stable_since)
                 and now - stable_since >= ADAPTIVE_COMPENSATION_STABLE_TIME
@@ -524,12 +562,15 @@ class FeeTechArm:
                 compensated[local_index] = bounded_target
                 continue
 
-            bounded_public_target = float(wrap_to_pi(bounded_target))
-            error = float(wrap_to_pi(bounded_public_target - public_measured))
+            if estimator_feedback_valid:
+                bounded_public_target = float(wrap_to_pi(bounded_target))
+                error = float(wrap_to_pi(bounded_public_target - public_measured))
+            else:
+                error = np.nan
             self._adaptive_compensation_last_error[global_index] = error
 
             estimate_candidate = self._adaptive_compensation_estimate[global_index]
-            if active and abs(error) > ADAPTIVE_COMPENSATION_DEADBAND:
+            if active and np.isfinite(error) and abs(error) > ADAPTIVE_COMPENSATION_DEADBAND:
                 estimate_candidate += ADAPTIVE_COMPENSATION_ADAPTATION_RATE * dt * error
 
             available_offset_lower = max(

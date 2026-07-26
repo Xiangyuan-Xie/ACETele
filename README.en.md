@@ -217,6 +217,12 @@ robot = make_robot(config)
 `robot.name` includes the topology, device backend, and runtime, for example
 `ace_follower_physical_ros2` or `ace_leader_physical_standalone`.
 
+Physical FEETECH devices retain raw register snapshots in the driver and use a constant-velocity
+Kalman estimator with low-latency outlier gating at the device layer. `robot.act()`, ROS2, and FMU
+interfaces use filtered positions and velocities, while `JointDeviceState.raw_positions` preserves
+the unfiltered encoder angles. Arm and gripper `get_state_estimator_diagnostics()` methods expose
+innovations, NIS values, observation gates, velocity limits, and cumulative rejection counts.
+
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 ### Configuration System

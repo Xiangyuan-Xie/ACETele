@@ -3,6 +3,7 @@ from __future__ import annotations
 import operator
 import time
 from collections import deque
+from dataclasses import dataclass
 from enum import Enum
 from queue import Empty, Full, Queue
 from threading import Event, Lock, RLock, Thread
@@ -62,6 +63,20 @@ FEETECH_COMM_QUEUE_SIZE = 32
 FEETECH_MAX_SERVO_ID = MAX_ID
 FEETECH_SIGNED_15_BIT_MAX = 32767
 EnumT = TypeVar("EnumT", bound=Enum)
+
+
+@dataclass(frozen=True)
+class FeeTechStateSample:
+    position: Dict[int, int]
+    velocity: Dict[int, int]
+    current: Dict[int, int]
+    timestamp: float
+    sequence: int
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "position", dict(self.position))
+        object.__setattr__(self, "velocity", dict(self.velocity))
+        object.__setattr__(self, "current", dict(self.current))
 
 
 def normalize_feetech_servo_ids(
@@ -148,6 +163,8 @@ class FeeTechDriver:
             self._position: Dict[int, int] = {}
             self._velocity: Dict[int, int] = {}
             self._current: Dict[int, int] = {}
+            self._state_timestamp: Optional[float] = None
+            self._state_sequence = 0
 
             self._time_windows: Deque[float] = deque(maxlen=100)
 
@@ -342,8 +359,13 @@ class FeeTechDriver:
                     logger.error(self._packetHandler.getRxPacketError(error))
                     continue
 
-                position[ft_id] = self._groupSyncReadHandler.getData(
-                    ft_id, HLS_PRESENT_POSITION_L, 2
+                position[ft_id] = self._packetHandler.scs_tohost(
+                    self._groupSyncReadHandler.getData(
+                        ft_id,
+                        HLS_PRESENT_POSITION_L,
+                        2,
+                    ),
+                    15,
                 )
                 velocity[ft_id] = self._packetHandler.scs_tohost(
                     self._groupSyncReadHandler.getData(
@@ -359,6 +381,9 @@ class FeeTechDriver:
                 self._position = position
                 self._velocity = velocity
                 self._current = current
+                if len(position) == len(self._ids):
+                    self._state_timestamp = time.monotonic()
+                    self._state_sequence += 1
         finally:
             self._groupSyncReadHandler.clearParam()
 
@@ -1031,7 +1056,7 @@ class FeeTechDriver:
             label="goal-position transaction",
         )
 
-    def get_state(self, timeout: float = 1.0) -> Tuple[Dict[int, int], Dict[int, int], Dict[int, int]]:
+    def get_state_sample(self, timeout: float = 1.0) -> FeeTechStateSample:
         deadline = None if timeout is None else time.monotonic() + timeout
         while True:
             with self._lock:
@@ -1043,10 +1068,21 @@ class FeeTechDriver:
                 ]
                 state_snapshot = None
                 if not missing_ids:
-                    state_snapshot = (
-                        dict(self._position),
-                        dict(self._velocity),
-                        dict(self._current),
+                    state_timestamp = getattr(
+                        self,
+                        "_state_timestamp",
+                        None,
+                    )
+                    state_snapshot = FeeTechStateSample(
+                        position=self._position,
+                        velocity=self._velocity,
+                        current=self._current,
+                        timestamp=(
+                            time.monotonic()
+                            if state_timestamp is None
+                            else state_timestamp
+                        ),
+                        sequence=getattr(self, "_state_sequence", 0),
                     )
             if comm_fault is not None:
                 raise FeeTechCommandDispatchError(
@@ -1063,6 +1099,17 @@ class FeeTechDriver:
                     f"Timed out waiting for complete FeeTech state; missing IDs: {missing_ids}"
                 )
             time.sleep(0.001)
+
+    def get_state(
+        self,
+        timeout: float = 1.0,
+    ) -> Tuple[Dict[int, int], Dict[int, int], Dict[int, int]]:
+        sample = self.get_state_sample(timeout=timeout)
+        return (
+            dict(sample.position),
+            dict(sample.velocity),
+            dict(sample.current),
+        )
 
     def get_frequency(self) -> float:
         if len(self._time_windows) == 0:
@@ -1114,6 +1161,7 @@ class FeeTechDriver:
             self._position = {}
             self._velocity = {}
             self._current = {}
+            self._state_timestamp = None
         self._invalidate_control_caches()
         self._comm_task_queue = Queue(maxsize=FEETECH_COMM_QUEUE_SIZE)
         self._comm_thread = Thread(target=self._comm_worker, daemon=True)

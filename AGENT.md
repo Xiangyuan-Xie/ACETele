@@ -74,9 +74,14 @@ ROS 2 topics intentionally split arm and gripper traffic:
 /ace_follower/arm/sync_status
 ```
 
-The PX4 bridge still publishes `/fmu/in/arm_joint_state` as the 5D `[arm..., gripper]` vector expected by the adapter.
+The PX4 bridge publishes `/fmu/in/arm_joint_state` as a fixed-capacity 14-joint arm-only state.
+`joint_count` marks the densely packed valid prefix; grippers and dexterous hands are excluded.
 
 `FeeTechArm` positions are radians. `FeeTechGripper` public positions are normalized to `[0.0, 1.0]`.
+Physical FEETECH devices use low-latency, NIS-gated constant-velocity Kalman estimation for public
+positions and velocities. Keep `FeeTechDriver.get_state()` as the raw register API and
+`JointDeviceState.raw_positions` as unfiltered encoder angles; use the device estimator diagnostics
+for rejected-observation analysis.
 `set_position()` APIs accept `velocities`, `accelerations`, and `torque`; do not reintroduce older
 singular/profile/current keyword arguments unless the tests and callers are intentionally changed.
 
