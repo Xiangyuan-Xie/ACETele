@@ -13,6 +13,11 @@ from acetele.config.config_loader import ConfigLoader
 from acetele.config.robot_config import FeeTechGripperConfig, RobotConfig
 from acetele.equipment.joint_device import JointDevice, JointDeviceState
 from acetele.robot.ace_follower.ace_follower import AceFollowerRobot
+from acetele.robot.ace_follower.px4_arm_state import (
+    PX4_ARM_JOINT_CAPACITY,
+    PX4_POLICY_ARM_JOINT_COUNT,
+    encode_px4_arm_joint_states,
+)
 from acetele.utils.teleop_sync import (
     FollowerSyncController,
     FollowerSyncStatus,
@@ -120,7 +125,7 @@ class AceFollowerROS2Robot(Node, AceFollowerRobot):
         self._latest_gripper_command: Optional[list[float]] = None
         self._latest_arm_state: Optional[JointDeviceState] = None
         self._latest_gripper_state: Optional[JointDeviceState] = None
-        self._warned_invalid_px4_arm_state_length = False
+        self._warned_invalid_px4_arm_state = False
 
         self.get_logger().info("Follower arm controller node started.")
 
@@ -202,17 +207,22 @@ class AceFollowerROS2Robot(Node, AceFollowerRobot):
     @staticmethod
     def _validate_px4_arm_joint_state_schema():
         fields = ArmJointState.get_fields_and_field_types()
-        required_fields = {
-            "timestamp",
-            "timestamp_sample",
-            "sequence",
-            "arm_position",
-            "arm_velocity",
+        expected_fields = {
+            "timestamp": "uint64",
+            "timestamp_sample": "uint64",
+            "sequence": "uint32",
+            "joint_count": "uint8",
+            "arm_velocity_valid": "boolean",
+            "arm_position": "float[14]",
+            "arm_velocity": "float[14]",
         }
-        if not required_fields.issubset(fields):
+        if any(fields.get(name) != field_type for name, field_type in expected_fields.items()) or (
+            getattr(ArmJointState, "MAX_JOINTS", None) != PX4_ARM_JOINT_CAPACITY
+        ):
             raise RuntimeError(
                 "px4_msgs.msg.ArmJointState schema mismatch: expected fields "
-                "timestamp, timestamp_sample, sequence, arm_position, arm_velocity. "
+                "timestamp, timestamp_sample, sequence, joint_count, arm_velocity_valid, "
+                "float[14] arm_position, and float[14] arm_velocity. "
                 f"Got {fields}. Rebuild/source the workspace px4_msgs package."
             )
 
@@ -283,24 +293,17 @@ class AceFollowerROS2Robot(Node, AceFollowerRobot):
             gripper_msg.effort = gripper_state.motor_torque_magnitude.tolist()
             self._gripper_state_pub.publish(gripper_msg)
 
-        px4_positions = list(msg.position)
-        if gripper_state is not None:
-            px4_positions += gripper_state.public_positions.tolist()
-
-        if len(px4_positions) != 5:
-            if not self._warned_invalid_px4_arm_state_length:
-                self.get_logger().warn(
-                    "Skipping PX4 arm joint state publish: ArmJointState expects 5 joints."
+        try:
+            encoded_arm_state = encode_px4_arm_joint_states((arm_state,))
+            if encoded_arm_state.joint_count < PX4_POLICY_ARM_JOINT_COUNT:
+                raise ValueError(
+                    f"current PX4 policy requires at least {PX4_POLICY_ARM_JOINT_COUNT} arm joints"
                 )
-                self._warned_invalid_px4_arm_state_length = True
+        except ValueError as exc:
+            if not self._warned_invalid_px4_arm_state:
+                self.get_logger().warn(f"Skipping invalid PX4 arm joint state: {exc}")
+                self._warned_invalid_px4_arm_state = True
             return
-
-        px4_velocities = list(msg.velocity)
-        if gripper_state is not None:
-            px4_velocities += gripper_state.velocities.tolist()
-
-        if len(px4_velocities) != 5:
-            px4_velocities = [0.0] * 5
 
         px4_msg = ArmJointState()
         timestamp_us = now.nanoseconds // 1000
@@ -308,8 +311,10 @@ class AceFollowerROS2Robot(Node, AceFollowerRobot):
         px4_msg.timestamp_sample = timestamp_us
         sequence = getattr(self, "_px4_arm_state_sequence", 0)
         px4_msg.sequence = sequence
-        px4_msg.arm_position = px4_positions
-        px4_msg.arm_velocity = px4_velocities
+        px4_msg.joint_count = encoded_arm_state.joint_count
+        px4_msg.arm_velocity_valid = True
+        px4_msg.arm_position = list(encoded_arm_state.positions)
+        px4_msg.arm_velocity = list(encoded_arm_state.velocities)
         self._px4_arm_state_sequence = (sequence + 1) & 0xFFFFFFFF
         self._px4_arm_state_pub.publish(px4_msg)
 

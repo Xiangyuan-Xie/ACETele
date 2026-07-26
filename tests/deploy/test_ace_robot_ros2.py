@@ -269,20 +269,26 @@ def install_fake_ros_modules(monkeypatch):
     px4_msgs_msg_module = types.ModuleType("px4_msgs.msg")
 
     class FakeArmJointState:
+        MAX_JOINTS = 14
+
         @classmethod
         def get_fields_and_field_types(cls):
             return {
                 "timestamp": "uint64",
                 "timestamp_sample": "uint64",
                 "sequence": "uint32",
-                "arm_position": "float[5]",
-                "arm_velocity": "float[5]",
+                "joint_count": "uint8",
+                "arm_velocity_valid": "boolean",
+                "arm_position": "float[14]",
+                "arm_velocity": "float[14]",
             }
 
         def __init__(self):
             self.timestamp = 0
             self.timestamp_sample = 0
             self.sequence = 0
+            self.joint_count = 0
+            self.arm_velocity_valid = False
             self.arm_position = []
             self.arm_velocity = []
 
@@ -306,10 +312,15 @@ def test_follower_ros2_rejects_stale_px4_arm_joint_state_schema(monkeypatch):
     module = importlib.reload(importlib.import_module("acetele.robot.ace_follower.ace_follower_ros2"))
 
     class OldArmJointState:
+        MAX_JOINTS = 5
+
         @classmethod
         def get_fields_and_field_types(cls):
             return {
                 "timestamp": "uint64",
+                "timestamp_sample": "uint64",
+                "sequence": "uint32",
+                "joint_count": "uint8",
                 "arm_position": "float[5]",
                 "arm_velocity": "float[5]",
             }
@@ -679,7 +690,7 @@ def test_follower_holds_pose_during_sync_request(monkeypatch):
     robot._arm_state_pub = types.SimpleNamespace(publish=lambda msg: published["state"].append(msg))
     robot._px4_arm_state_pub = types.SimpleNamespace(publish=lambda msg: published["px4"].append(msg))
     robot._sync_status_pub = types.SimpleNamespace(publish=lambda msg: published["status"].append(msg))
-    robot._warned_invalid_px4_arm_state_length = False
+    robot._warned_invalid_px4_arm_state = False
 
     msg = types.SimpleNamespace(position=[1.0, 2.0], velocity=[99.0, 99.0])
 
@@ -2087,7 +2098,7 @@ def test_sync_mode_and_status_are_published_from_publish_loops(monkeypatch):
     follower.get_logger = lambda: types.SimpleNamespace(warn=lambda _message: None)
     leader.ids = np.array([0, 1])
     follower.ids = np.array([0, 1])
-    follower._warned_invalid_px4_arm_state_length = False
+    follower._warned_invalid_px4_arm_state = False
     leader._sync_mode_pub = types.SimpleNamespace(publish=lambda msg: published_modes.append(msg.data))
     leader._arm_command_pub = types.SimpleNamespace(publish=lambda msg: published_commands.append(msg))
     follower._arm_state_pub = types.SimpleNamespace(publish=lambda msg: published_states.append(msg))
@@ -2113,7 +2124,7 @@ def test_teleop_sync_exports_only_state_enums():
     assert not hasattr(sync, "is_valid_follower_sync_status")
 
 
-def test_follower_publish_state_loop_dual_publishes_joint_state_and_px4_arm_state(monkeypatch):
+def test_follower_publish_state_loop_publishes_padded_arm_only_px4_state(monkeypatch):
     install_fake_ros_modules(monkeypatch)
     module = importlib.reload(importlib.import_module("acetele.robot.ace_follower.ace_follower_ros2"))
     robot = module.AceFollowerROS2Robot.__new__(module.AceFollowerROS2Robot)
@@ -2140,7 +2151,7 @@ def test_follower_publish_state_loop_dual_publishes_joint_state_and_px4_arm_stat
         sync.FollowerSyncStatus.TRACKING,
         last_command_ns=1_000_000_000,
     )
-    robot._warned_invalid_px4_arm_state_length = False
+    robot._warned_invalid_px4_arm_state = False
 
     joint_pos = np.array([0.1, 0.2, 0.3, 0.4, 0.5])
     joint_vel = np.array([1.1, 1.2, 1.3, 1.4, 1.5])
@@ -2167,8 +2178,10 @@ def test_follower_publish_state_loop_dual_publishes_joint_state_and_px4_arm_stat
     assert px4_msg.timestamp == 1_234_567
     assert px4_msg.timestamp_sample == 1_234_567
     assert px4_msg.sequence == 0
-    assert px4_msg.arm_position == joint_pos.tolist()
-    assert px4_msg.arm_velocity == joint_vel.tolist()
+    assert px4_msg.joint_count == 5
+    assert px4_msg.arm_velocity_valid
+    assert px4_msg.arm_position == joint_pos.tolist() + [0.0] * 9
+    assert px4_msg.arm_velocity == joint_vel.tolist() + [0.0] * 9
     assert published["status"][0].data == "tracking"
     assert logged == []
     assert not hasattr(robot, "_publish_state")
@@ -2204,7 +2217,7 @@ def test_follower_publish_state_loop_publishes_gripper_state_and_px4_adapter(mon
     robot._sync = sync.FollowerSyncController(int(1e9))
     robot._sync.mode = sync.LeaderSyncMode.TRACKING
     robot._sync.status = sync.FollowerSyncStatus.TRACKING
-    robot._warned_invalid_px4_arm_state_length = False
+    robot._warned_invalid_px4_arm_state = False
 
     module.AceFollowerROS2Robot._publish_state_loop(robot)
 
@@ -2215,11 +2228,13 @@ def test_follower_publish_state_loop_publishes_gripper_state_and_px4_adapter(mon
     assert px4_msg.timestamp == 1_234_567
     assert px4_msg.timestamp_sample == 1_234_567
     assert px4_msg.sequence == 0
-    assert px4_msg.arm_position == [0.1, 0.2, 0.3, 0.4, 0.9]
-    assert px4_msg.arm_velocity == [0.0, 0.0, 0.0, 0.0, 0.5]
+    assert px4_msg.joint_count == 4
+    assert px4_msg.arm_velocity_valid
+    assert px4_msg.arm_position == [0.1, 0.2, 0.3, 0.4] + [0.0] * 10
+    assert px4_msg.arm_velocity == [0.0] * 14
 
 
-def test_follower_publish_state_loop_carries_joint_state_velocity_to_px4_arm_state(monkeypatch):
+def test_follower_publish_state_loop_rejects_nonfinite_px4_arm_state(monkeypatch):
     install_fake_ros_modules(monkeypatch)
     module = importlib.reload(importlib.import_module("acetele.robot.ace_follower.ace_follower_ros2"))
     robot = module.AceFollowerROS2Robot.__new__(module.AceFollowerROS2Robot)
@@ -2247,7 +2262,7 @@ def test_follower_publish_state_loop_carries_joint_state_velocity_to_px4_arm_sta
     robot._sync.mode = sync.LeaderSyncMode.TRACKING
     robot._sync.status = sync.FollowerSyncStatus.TRACKING
     robot._latest_gripper_state = None
-    robot._warned_invalid_px4_arm_state_length = False
+    robot._warned_invalid_px4_arm_state = False
 
     joint_pos = np.zeros(5)
     joint_effort = np.zeros(5)
@@ -2276,22 +2291,18 @@ def test_follower_publish_state_loop_carries_joint_state_velocity_to_px4_arm_sta
         [0.8, 1.0, 2.0, 0.4, -2.0],
     )
     assert [msg.arm_position for msg in published["px4"]] == [
-        joint_pos.tolist(),
-        joint_pos.tolist(),
+        joint_pos.tolist() + [0.0] * 9,
     ]
-    assert [msg.timestamp for msg in published["px4"]] == [1_000_000, 1_100_000]
-    assert [msg.timestamp_sample for msg in published["px4"]] == [1_000_000, 1_100_000]
-    assert [msg.sequence for msg in published["px4"]] == [0, 1]
+    assert [msg.timestamp for msg in published["px4"]] == [1_100_000]
+    assert [msg.timestamp_sample for msg in published["px4"]] == [1_100_000]
+    assert [msg.sequence for msg in published["px4"]] == [0]
+    assert [msg.joint_count for msg in published["px4"]] == [5]
     np.testing.assert_allclose(
         published["px4"][0].arm_velocity,
-        [0.2, 0.4, 2.0, np.nan, -2.0],
-        equal_nan=True,
+        [0.8, 1.0, 2.0, 0.4, -2.0] + [0.0] * 9,
     )
-    np.testing.assert_allclose(
-        published["px4"][1].arm_velocity,
-        [0.8, 1.0, 2.0, 0.4, -2.0],
-    )
-    assert logged == []
+    assert len(logged) == 1
+    assert "must be finite" in logged[0]
 
 
 def test_follower_publish_state_loop_does_not_publish_removed_external_topics(monkeypatch):
@@ -2317,7 +2328,7 @@ def test_follower_publish_state_loop_does_not_publish_removed_external_topics(mo
     robot._sync.mode = sync.LeaderSyncMode.TRACKING
     robot._sync.status = sync.FollowerSyncStatus.TRACKING
     robot._latest_gripper_state = None
-    robot._warned_invalid_px4_arm_state_length = False
+    robot._warned_invalid_px4_arm_state = False
     robot._latest_arm_state = make_joint_device_state(
         np.zeros(5),
         np.zeros(5),
@@ -2333,7 +2344,7 @@ def test_follower_publish_state_loop_does_not_publish_removed_external_topics(mo
     assert not hasattr(robot, "_gripper_" + "force_" + "state_pub")
 
 
-def test_follower_publish_state_loop_skips_px4_arm_state_when_not_five_axis(monkeypatch):
+def test_follower_publish_state_loop_skips_px4_arm_state_below_policy_joint_count(monkeypatch):
     install_fake_ros_modules(monkeypatch)
     module = importlib.reload(importlib.import_module("acetele.robot.ace_follower.ace_follower_ros2"))
     robot = module.AceFollowerROS2Robot.__new__(module.AceFollowerROS2Robot)
@@ -2357,7 +2368,7 @@ def test_follower_publish_state_loop_skips_px4_arm_state_when_not_five_axis(monk
     robot._sync.mode = sync.LeaderSyncMode.TRACKING
     robot._sync.status = sync.FollowerSyncStatus.TRACKING
     robot._latest_gripper_state = None
-    robot._warned_invalid_px4_arm_state_length = False
+    robot._warned_invalid_px4_arm_state = False
     install_arm_assembly(robot, FakeRosArm([0.1, 0.2]))
 
     robot._latest_arm_state = make_joint_device_state(
@@ -2376,4 +2387,4 @@ def test_follower_publish_state_loop_skips_px4_arm_state_when_not_five_axis(monk
     assert len(published["state"]) == 2
     assert published["px4"] == []
     assert len(logged) == 1
-    assert "expects 5 joints" in logged[0]
+    assert "requires at least 4 arm joints" in logged[0]
