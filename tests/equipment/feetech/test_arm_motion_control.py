@@ -311,8 +311,15 @@ class FakePacketHandler:
         return f"communication result {result}"
 
     @staticmethod
-    def scs_toscs(value, _bits):
-        return int(value)
+    def scs_toscs(value, bits):
+        value = int(value)
+        return -value | (1 << bits) if value < 0 else value
+
+    @staticmethod
+    def scs_tohost(value, bits):
+        sign_mask = 1 << bits
+        magnitude = int(value) & (sign_mask - 1)
+        return -magnitude if int(value) & sign_mask else magnitude
 
     @staticmethod
     def scs_lobyte(value):
@@ -712,6 +719,190 @@ def test_set_position_sends_multiturn_adjusted_position():
     driver.set_position([1], [100], velocities_raw=[250], accelerations_raw=[0], currents_raw=[500])
 
     assert driver._groupSyncWriteGoalPositionProfileHandler.params == [(1, profile_payload(100, 16))]
+
+
+def test_set_position_writes_negative_hls_position_as_signed_magnitude():
+    driver = PositionOnlyDriver()
+    driver.get_state = lambda: ({1: -70}, {}, {})
+
+    driver.set_position(
+        [1],
+        [-1022],
+        velocities_raw=[250],
+        accelerations_raw=[0],
+        currents_raw=[500],
+    )
+
+    assert driver._groupSyncWriteGoalPositionProfileHandler.params == [
+        (1, profile_payload(0xFE, 0x83))
+    ]
+
+
+@pytest.mark.parametrize(
+    ("current_count", "public_target", "expected_count"),
+    [
+        (2037, 2037 * np.pi / 2048.0, 2059),
+        (-2037, -2037 * np.pi / 2048.0, -2059),
+    ],
+)
+def test_joint_with_negative_sign_crosses_pi_boundary_by_short_path(
+    current_count,
+    public_target,
+    expected_count,
+):
+    driver = PositionOnlyDriver()
+    driver._ids = [1]
+    driver._mode = {1: Mode.Position}
+    driver._torque_enable = {1: TorqueEnable.Enable}
+    driver.get_state = lambda: ({1: current_count}, {1: 0}, {1: 0})
+    config = single_joint_arm_config(
+        joint_ids=(1,),
+        joint_names=("joint_4",),
+        joint_signs=(-1,),
+    )
+    arm = FeeTechArm(
+        config,
+        driver=driver,
+        position_limits=([-np.pi], [np.pi]),
+    )
+
+    arm.set_position([public_target])
+
+    payload = driver._groupSyncWriteGoalPositionProfileHandler.params[-1][1]
+    encoded_target = payload[1] | (payload[2] << 8)
+    commanded_count = driver._packetHandler.scs_tohost(
+        encoded_target,
+        15,
+    )
+    assert commanded_count == expected_count
+    assert abs(commanded_count - current_count) == 22
+
+
+@pytest.mark.parametrize(
+    ("decoded_current", "goal_position", "expected_position"),
+    [
+        (-70, -1022, -1022),
+        (-7, -6, -6),
+        (2047, -2048, 2048),
+        (-2048, 2047, -2049),
+    ],
+)
+def test_set_position_keeps_sync_target_on_nearest_physical_turn(
+    decoded_current,
+    goal_position,
+    expected_position,
+):
+    driver = PositionOnlyDriver()
+    driver.get_state = lambda: ({1: decoded_current}, {}, {})
+
+    driver.set_position(
+        [1],
+        [goal_position],
+        velocities_raw=[250],
+        accelerations_raw=[0],
+        currents_raw=[500],
+    )
+
+    encoded = driver._packetHandler.scs_toscs(expected_position, 15)
+    assert driver._groupSyncWriteGoalPositionProfileHandler.params == [
+        (1, profile_payload(encoded & 0xFF, encoded >> 8))
+    ]
+
+
+def test_multiturn_position_adjustment_selects_nearest_target():
+    adjusted = FeeTechDriver._nearest_multiturn_position_targets(
+        [5000],
+        [100],
+    )
+
+    np.testing.assert_array_equal(adjusted, [4196])
+
+
+@pytest.mark.parametrize(
+    ("current_position", "goal_position", "expected_position"),
+    [
+        (2041, -2041, 2055),
+        (-2041, 2041, -2055),
+        (2048, -2048, 2048),
+        (-2048, 2048, -2048),
+    ],
+)
+def test_multiturn_position_adjustment_uses_shortest_path_across_pi(
+    current_position,
+    goal_position,
+    expected_position,
+):
+    adjusted = FeeTechDriver._nearest_multiturn_position_targets(
+        [current_position],
+        [goal_position],
+    )
+
+    np.testing.assert_array_equal(adjusted, [expected_position])
+    assert abs(int(adjusted[0]) - current_position) <= 2048
+
+
+def test_set_position_does_not_turn_negative_sign_joint_at_pi_boundary():
+    driver = PositionOnlyDriver()
+    driver.get_state = lambda: ({1: 2041}, {}, {})
+
+    driver.set_position(
+        [1],
+        [-2041],
+        velocities_raw=[250],
+        accelerations_raw=[0],
+        currents_raw=[500],
+    )
+
+    assert driver._groupSyncWriteGoalPositionProfileHandler.params == [
+        (1, profile_payload(0x07, 0x08))
+    ]
+
+
+def test_set_position_rejects_unrepresentable_negative_multiturn_boundary():
+    driver = PositionOnlyDriver()
+    driver.get_state = lambda: ({1: -32768}, {}, {})
+
+    with pytest.raises(ValueError, match="current positions"):
+        driver.set_position(
+            [1],
+            [0],
+            velocities_raw=[250],
+            accelerations_raw=[0],
+            currents_raw=[500],
+        )
+
+
+@pytest.mark.parametrize(
+    ("current_position", "goal_position", "nearest_position"),
+    [
+        (32760, 100, 32868),
+        (-32760, -100, -32868),
+    ],
+)
+def test_set_position_rejects_exhausted_multiturn_range_without_full_turn_fallback(
+    current_position,
+    goal_position,
+    nearest_position,
+):
+    driver = PositionOnlyDriver()
+    driver.get_state = lambda: ({1: current_position}, {}, {})
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            rf"multi-turn position range is exhausted.*ID 1: current={current_position}, "
+            rf"goal={goal_position}, nearest={nearest_position}"
+        ),
+    ):
+        driver.set_position(
+            [1],
+            [goal_position],
+            velocities_raw=[250],
+            accelerations_raw=[0],
+            currents_raw=[500],
+        )
+
+    assert driver._groupSyncWriteGoalPositionProfileHandler.params == []
 
 
 def test_hls_profile_defaults_match_official_initial_values():
@@ -1804,12 +1995,21 @@ def test_set_current_rejects_unencodable_values_before_dispatch(invalid_currents
         np.int32(1),
     ),
 )
-def test_set_current_accepts_signed_15_bit_boundaries(current):
+def test_set_current_accepts_signed_magnitude_boundaries(current):
     driver = BaseMethodDriver()
 
     driver.set_current([1], [current])
 
     assert driver._comm_task_queue.qsize() == 1
+
+
+def test_set_current_writes_negative_hls_current_as_signed_magnitude():
+    driver = BaseMethodDriver()
+
+    driver.set_current([1], [-1])
+    driver._comm_task_queue.get_nowait()()
+
+    assert driver._groupSyncWriteGoalCurrentHandler.tx_calls == [[(1, [0x01, 0x80])]]
 
 
 def test_set_current_switches_to_torque_mode():
@@ -1894,9 +2094,9 @@ def test_read_state_stamps_and_sequences_complete_samples(monkeypatch):
 
         def getData(self, _ft_id, address, _length):
             values = {
-                56: 0x8002,
+                56: 0x8046,
                 58: 0x8001,
-                69: 45,
+                69: 0x8002,
             }
             return values[address]
 
@@ -1912,9 +2112,9 @@ def test_read_state_stamps_and_sequences_complete_samples(monkeypatch):
 
     FeeTechDriver._read_state(driver)
 
-    assert driver._position == {1: -2}
+    assert driver._position == {1: -70}
     assert driver._velocity == {1: -1}
-    assert driver._current == {1: 45}
+    assert driver._current == {1: -2}
     assert driver._state_timestamp == pytest.approx(9.5)
     assert driver._state_sequence == 5
 

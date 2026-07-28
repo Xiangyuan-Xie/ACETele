@@ -373,8 +373,11 @@ class FeeTechDriver:
                     ),
                     15,
                 )
-                current[ft_id] = self._groupSyncReadHandler.getData(
-                    ft_id, HLS_PRESENT_CURRENT_L, 2
+                current[ft_id] = self._packetHandler.scs_tohost(
+                    self._groupSyncReadHandler.getData(
+                        ft_id, HLS_PRESENT_CURRENT_L, 2
+                    ),
+                    15,
                 )
 
             with self._lock:
@@ -530,6 +533,28 @@ class FeeTechDriver:
         if unknown:
             raise ValueError(f"{field_name} contains unregistered servo IDs: {unknown}")
         return normalized
+
+    @staticmethod
+    def _nearest_multiturn_position_targets(
+        current_positions: Sequence[int],
+        goal_positions: Sequence[int],
+    ) -> np.ndarray:
+        current = np.asarray(current_positions, dtype=np.int64)
+        goals = np.asarray(goal_positions, dtype=np.int64)
+        position_period = 4096
+        half_period = position_period // 2
+
+        # HLS position mode accepts multi-turn counts. Express each periodic goal as
+        # an integer delta from the measured count so a wrap at +/-pi cannot command
+        # an otherwise equivalent full revolution.
+        shortest_delta = (goals - current + half_period) % position_period - half_period
+        half_turn_near_negative_limit = (shortest_delta == -half_period) & (current < 0)
+        shortest_delta = np.where(
+            half_turn_near_negative_limit,
+            half_period,
+            shortest_delta,
+        )
+        return current + shortest_delta
 
     @staticmethod
     def _normalize_enum_sequence(
@@ -998,12 +1023,35 @@ class FeeTechDriver:
         if len(target_ids) != len(currents):
             raise ValueError("ids and currents must have the same length")
         current_positions_dict, _, _ = self.get_state()
-        current_positions_array = np.array(
+        current_positions = self._normalize_integer_sequence(
             [current_positions_dict[ft_id] for ft_id in target_ids],
-            dtype=int,
+            field_name="current positions",
+            minimum=-FEETECH_SIGNED_15_BIT_MAX,
+            maximum=FEETECH_SIGNED_15_BIT_MAX,
         )
-        goal_positions_array = np.asarray(goal_positions, dtype=int)
-        goal_positions_array += np.round((current_positions_array - goal_positions_array) / 4096).astype(int) * 4096
+        goal_positions_array = self._nearest_multiturn_position_targets(
+            current_positions,
+            goal_positions,
+        )
+        exhausted = (goal_positions_array < -FEETECH_SIGNED_15_BIT_MAX) | (
+            goal_positions_array > FEETECH_SIGNED_15_BIT_MAX
+        )
+        if np.any(exhausted):
+            details = "; ".join(
+                f"ID {ft_id}: current={current}, goal={goal}, nearest={adjusted}"
+                for ft_id, current, goal, adjusted, is_exhausted in zip(
+                    target_ids,
+                    current_positions,
+                    goal_positions,
+                    goal_positions_array,
+                    exhausted,
+                )
+                if is_exhausted
+            )
+            raise ValueError(
+                "FeeTech multi-turn position range is exhausted; move the affected joint "
+                f"to its configured home pose and recalibrate before commanding it ({details})"
+            )
         adjusted_positions = self._normalize_integer_sequence(
             goal_positions_array,
             field_name="adjusted goal positions",
@@ -1020,7 +1068,6 @@ class FeeTechDriver:
             currents,
         ):
             position = self._packetHandler.scs_toscs(position, 15)
-            velocity = self._packetHandler.scs_toscs(int(velocity), 15)
             profile_params.append(
                 (
                     ft_id,
@@ -1030,8 +1077,8 @@ class FeeTechDriver:
                         self._packetHandler.scs_hibyte(position),
                         self._packetHandler.scs_lobyte(int(current)),
                         self._packetHandler.scs_hibyte(int(current)),
-                        self._packetHandler.scs_lobyte(velocity),
-                        self._packetHandler.scs_hibyte(velocity),
+                        self._packetHandler.scs_lobyte(int(velocity)),
+                        self._packetHandler.scs_hibyte(int(velocity)),
                     ],
                 )
             )

@@ -47,16 +47,9 @@ class protocol_packet_handler(object):
 
     def scs_makeword(self, a, b):
         if self.scs_end == 0:
-            val = (a & 0xFF) | ((b & 0xFF) << 8)
+            return (a & 0xFF) | ((b & 0xFF) << 8)
         else:
-            val = (b & 0xFF) | ((a & 0xFF) << 8)
-        if val & 0x8000:
-            val = 32768 - val
-        return val
-        # if self.scs_end == 0:
-        #     return (a & 0xFF) | ((b & 0xFF) << 8)
-        # else:
-        #     return (b & 0xFF) | ((a & 0xFF) << 8)
+            return (b & 0xFF) | ((a & 0xFF) << 8)
 
     def scs_makedword(self, a, b):
         return (a & 0xFFFF) | (b & 0xFFFF) << 16

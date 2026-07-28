@@ -64,7 +64,7 @@ class hls(protocol_packet_handler):
         self.groupSyncWrite = GroupSyncWrite(self, HLS_ACC, 7)
 
     def WritePosEx(self, scs_id, position, speed, acc, torque):
-        position = self.scs_tohost(position, 15)
+        position = self.scs_toscs(position, 15)
         txpacket = [
             acc,
             self.scs_lobyte(position),
@@ -100,7 +100,7 @@ class hls(protocol_packet_handler):
         return moving, scs_comm_result, scs_error
 
     def SyncWritePosEx(self, scs_id, position, speed, acc, torque):
-        position = self.scs_tohost(position, 15)
+        position = self.scs_toscs(position, 15)
         txpacket = [
             acc,
             self.scs_lobyte(position),
@@ -113,7 +113,7 @@ class hls(protocol_packet_handler):
         return self.groupSyncWrite.addParam(scs_id, txpacket)
 
     def RegWritePosEx(self, scs_id, position, speed, acc, torque):
-        position = self.scs_tohost(position, 15)
+        position = self.scs_toscs(position, 15)
         txpacket = [
             acc,
             self.scs_lobyte(position),
