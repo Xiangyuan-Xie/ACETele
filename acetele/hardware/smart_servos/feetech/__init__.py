@@ -18,12 +18,12 @@ from acetele.hardware.smart_servos.feetech.packet_protocol import (
     nearest_multiturn_position_target,
 )
 from acetele.hardware.smart_servos.feetech.profiles import (
-    feetech_modbus_profiles,
-    feetech_packet_profiles,
     FeetechModbusServoProfile,
     FeetechPacketFamily,
     FeetechPacketServoProfile,
     FeetechPhysicalLayer,
+    feetech_modbus_profiles,
+    feetech_packet_profiles,
 )
 
 __all__ = [

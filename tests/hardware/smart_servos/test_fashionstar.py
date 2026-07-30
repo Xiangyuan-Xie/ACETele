@@ -9,13 +9,13 @@ import pytest
 
 from acetele.hardware.serial import MotionEnvelope, RecoverableBusError
 from acetele.hardware.smart_servos.fashionstar import (
-    fashionstar_rs485_profiles,
     FashionStarBusProtocol,
     FashionStarCommand,
     FashionStarMotion,
     FashionStarPacketCodec,
     FashionStarProtocolError,
     FashionStarStopMode,
+    fashionstar_rs485_profiles,
 )
 
 

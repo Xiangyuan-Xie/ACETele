@@ -37,9 +37,9 @@ from acetele.core import (
     SensorState,
 )
 from acetele.hardware.dexterous_hands.linker_hand import (
-    linker_hand_profiles,
     LinkerHandModbusProtocol,
     LinkerHandMotion,
+    linker_hand_profiles,
 )
 from acetele.hardware.mock import MockBusProtocol, MockDeviceDefinition, MockDeviceState, MockMotion
 from acetele.hardware.serial import (
@@ -53,14 +53,12 @@ from acetele.hardware.serial import (
     calculate_bus_budget,
 )
 from acetele.hardware.smart_servos.fashionstar import (
-    fashionstar_rs485_profiles,
     FashionStarBusProtocol,
     FashionStarMonitorState,
     FashionStarMotion,
+    fashionstar_rs485_profiles,
 )
 from acetele.hardware.smart_servos.feetech import (
-    feetech_modbus_profiles,
-    feetech_packet_profiles,
     FeetechModbusBusProtocol,
     FeetechModbusFastState,
     FeetechModbusMotion,
@@ -68,6 +66,8 @@ from acetele.hardware.smart_servos.feetech import (
     FeetechPacketFamily,
     FeetechPacketFastState,
     FeetechPacketMotion,
+    feetech_modbus_profiles,
+    feetech_packet_profiles,
     nearest_multiturn_position_target,
 )
 from acetele.hardware.state_estimator import (

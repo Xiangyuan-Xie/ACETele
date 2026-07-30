@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from threading import Event, Thread
-import time
 from types import SimpleNamespace
 
 import pytest
@@ -616,8 +616,8 @@ def test_motion_submission_failure_faults_all_buses_without_committing_control_h
 
         def __init__(self, *, fail_motion: bool = False) -> None:
             self.fail_motion = fail_motion
-            self.motion = []
-            self.safety = []
+            self.motion: list[object] = []
+            self.safety: list[tuple[object, object, object, object]] = []
 
         def diagnostics(self):
             return SimpleNamespace(last_state_ns=time.monotonic_ns())
@@ -800,7 +800,7 @@ def test_actor_fault_latches_runtime_fault_and_stops_healthy_buses():
     class RecordingActor:
         def __init__(self, *, connected: bool) -> None:
             self.connected = connected
-            self.calls = []
+            self.calls: list[tuple[object, object, object, object]] = []
             self.discard_count = 0
 
         def submit_safety(self, label, payload, *, wait, clear_motion=True):

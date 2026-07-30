@@ -7,8 +7,8 @@ from acetele.hardware.smart_servos.fashionstar.codec import (
     FashionStarStopMode,
 )
 from acetele.hardware.smart_servos.fashionstar.profiles import (
-    fashionstar_rs485_profiles,
     FashionStarServoProfile,
+    fashionstar_rs485_profiles,
 )
 from acetele.hardware.smart_servos.fashionstar.protocol import (
     FashionStarBusProtocol,

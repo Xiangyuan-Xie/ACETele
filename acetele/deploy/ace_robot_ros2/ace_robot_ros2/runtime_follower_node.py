@@ -19,7 +19,7 @@ from std_msgs.msg import String
 
 from acetele.config.specs import DexterousHandSpec, RobotSpec
 from acetele.runtime import FollowerTeleopSession, RobotRuntime
-from acetele.utils.teleop_sync import FollowerSyncStatus, LeaderSyncMode
+from acetele.utils.teleop_sync import LeaderSyncMode
 
 from .spec_validation import validate_ros2_robot_spec
 

@@ -83,8 +83,6 @@ class MockBusProtocol:
     def cancel(self) -> None:
         """No-op because mock reads never block."""
 
-        pass
-
     def execute_safety(self, label: str, payload) -> object:
         """Model only software enable and stop behavior needed by runtime tests."""
 

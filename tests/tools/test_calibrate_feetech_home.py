@@ -4,12 +4,11 @@ import pytest
 
 from acetele.tools.calibrate_feetech_home import calibrate_feetech_home
 
-
 project_root = Path(__file__).resolve().parents[2]
 
 
 class RecordingRuntime:
-    instances = []
+    instances: list["RecordingRuntime"] = []
 
     def __init__(self, spec):
         self.spec = spec

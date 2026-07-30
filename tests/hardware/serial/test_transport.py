@@ -10,7 +10,7 @@ class _SerialHandle:
 
     def __init__(self) -> None:
         self.write_timeout = None
-        self.payloads = []
+        self.payloads: list[bytes] = []
 
     def write(self, payload):
         self.payloads.append(payload)

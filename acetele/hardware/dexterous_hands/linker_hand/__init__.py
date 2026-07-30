@@ -1,6 +1,6 @@
 from acetele.hardware.dexterous_hands.linker_hand.profiles import (
-    linker_hand_profiles,
     LinkerHandProfile,
+    linker_hand_profiles,
 )
 from acetele.hardware.dexterous_hands.linker_hand.protocol import (
     LinkerHandFastState,

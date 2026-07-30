@@ -7,9 +7,9 @@ from dataclasses import replace
 import pytest
 
 from acetele.hardware.dexterous_hands.linker_hand import (
-    linker_hand_profiles,
     LinkerHandModbusProtocol,
     LinkerHandMotion,
+    linker_hand_profiles,
 )
 from acetele.hardware.serial import MotionEnvelope, append_crc, calculate_bus_budget
 from acetele.hardware.serial.modbus import ModbusProtocolError

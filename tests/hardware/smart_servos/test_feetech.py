@@ -8,8 +8,6 @@ import pytest
 
 from acetele.hardware.serial import MotionEnvelope, RecoverableBusError, append_crc
 from acetele.hardware.smart_servos.feetech import (
-    feetech_modbus_profiles,
-    feetech_packet_profiles,
     FeetechInstruction,
     FeetechModbusBusProtocol,
     FeetechModbusMotion,
@@ -17,6 +15,8 @@ from acetele.hardware.smart_servos.feetech import (
     FeetechPacketCodec,
     FeetechPacketMotion,
     FeetechPhysicalLayer,
+    feetech_modbus_profiles,
+    feetech_packet_profiles,
 )
 
 

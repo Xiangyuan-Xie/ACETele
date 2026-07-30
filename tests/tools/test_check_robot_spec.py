@@ -4,7 +4,6 @@ from pathlib import Path
 
 from acetele.tools.check_robot_spec import check_robot_spec
 
-
 project_root = Path(__file__).resolve().parents[2]
 
 

@@ -10,7 +10,6 @@ from acetele.config.spec_loader import load_robot_spec
 from acetele.core import Backend
 from acetele.runtime import RobotRuntime
 
-
 RuntimeFactory = Callable[..., RobotRuntime]
 
 
