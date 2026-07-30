@@ -1,226 +1,248 @@
 # ACETele Agent Guide
 
-This file is for AI agents and maintainers working in this repository. It summarizes the project shape, safety constraints, and checks that matter most.
+This guide defines the architecture, safety boundaries, and verification expectations for work in
+this repository.
 
 ## Project Snapshot
 
-ACETele is a Python robotics teleoperation package with ROS 2 deployment packages. It controls real hardware through FEETECH HLS servos, joystick inputs, leader/follower robot abstractions, gripper control, PX4-facing messages, RealSense camera integration, and data conversion tools.
+ACETele is a Python robotics teleoperation package with ROS 2 deployment packages. It supports
+FEETECH packet and Modbus buses, FashionStar UART/RS485 servos, Linker Hand RS485 devices, joystick
+input, leader/follower synchronization, PX4-facing messages, RealSense integration, and data tools.
 
-The project is experimental. Treat hardware-facing code as safety-critical: serial ports, calibration, PID tuning, gravity compensation, and diagnostics can move actuators or write servo parameters.
+Hardware-facing code is safety-critical. Serial traffic, torque state, calibration, control
+compensation, and watchdog behavior can move actuators or alter nonvolatile device state.
 
 ## Repository Map
 
 ```text
-acetele/config/       TOML config loader and default robot configs.
-acetele/core/         make_robot factory and FEETECH calibration entry point.
-acetele/equipment/    Joint-device contract, FEETECH arm/gripper, dexterous hands, joystick driver.
-acetele/robot/        Shared joint-robot composition plus leader/follower topology and ROS 2 adapters.
+acetele/core/         Immutable vendor-neutral state, command, capability, and protocol contracts.
+acetele/config/       Strict TOML loader and immutable RobotSpec types.
+acetele/model/        Packaged URDF assets, metadata validation, and optional Pinocchio reduction.
+acetele/hardware/     Serial Actor, vendor protocols/profiles, state estimation, joystick, and mock.
+acetele/control/      Thread-free command conditioning and compensation pipeline.
+acetele/runtime/      Robot assembly, lifecycle, safety state machine, and teleop sessions.
 acetele/deploy/       ROS 2 packages plus PX4 and RealSense deployment dependencies.
-acetele/tools/        rosbag/HDF5 tooling and hardware diagnostics.
-acetele/utils/        Teleop sync enums plus angle and joint-ID helpers.
-tests/                Unit tests and ROS 2 behavior tests.
+acetele/tools/        Static preflight and hardware calibration tools.
+acetele/utils/        Teleop synchronization enums and small numeric helpers.
+tests/                Unit, architecture, packaging, runtime, and ROS adapter tests.
 ```
 
-Avoid editing third-party or vendored areas unless the user explicitly asks:
+Do not edit vendored areas unless the user explicitly asks:
 
 ```text
 acetele/deploy/realsense-ros/
 acetele/deploy/px4_msgs/
-acetele/equipment/feetech/feetech_sdk/
 ```
+
+## Architecture
+
+The dependency direction is fixed:
+
+```text
+core <- config/model/hardware/control <- runtime <- ROS 2 adapters
+```
+
+- `core` must not import configuration, hardware, runtime, or ROS packages.
+- `hardware` must not import ROS or deployment packages.
+- ROS nodes compose a `RobotRuntime`; they do not inherit from robot or hardware classes.
+- Every physical serial port has exactly one `SerialBusActor` owner.
+- Public control uses canonical joint names and SI units. Servo IDs, counts, registers, and packet
+  formats remain inside hardware profiles, protocols, and diagnostics.
+- Constructors perform static validation only. `RobotRuntime.connect()` is the hardware lifecycle
+  boundary that may open serial ports and start threads.
+
+The old `equipment`, `robot`, `ConfigLoader`, `RobotConfig`, `make_robot()`, and `act()` architecture
+has been removed. Do not restore compatibility wrappers or schema fallbacks. Migrate callers to
+`RobotSpec`, `RobotRuntime.read()`, and `RobotRuntime.write()`.
 
 ## Core Contracts
 
-`ConfigLoader` reads `acetele/config/default.toml`, optionally follows `basic.config_file`, and returns
-a typed `RobotConfig`. `make_robot()` owns the single `(robot_type, runtime)` entry-point map.
-
-Supported robot types:
+Use the immutable contracts in `acetele.core`:
 
 ```text
-ace_leader
-ace_follower
-ace_follower_dual
+JointState
+JointCommand
+SensorState
+RobotState
+RobotCommand
+DeviceCapabilities
 ```
 
-Device backends and runtimes are separate:
+Arrays owned by these contracts are copied and read-only. A command includes a monotonic submission
+time, deadline, generation, explicit unit, and optional per-joint limits. Validate a complete command
+before publishing any part of it to hardware.
 
-```text
-backend = physical | mock
-runtime = standalone | ros2
+Configuration uses one strict schema:
+
+```toml
+[basic]
+model = "ace_follower"
+backend = "physical"
+
+[buses.arm]
+type = "feetech_packet"
+port = "/dev/ttyUSB0"
+baudrate = 1000000
+cycle_hz = 100
+physical_layer = "rs485"
+family = "sms"
+external_estop = true
+
+[arms.single]
+bus = "arm"
+
+[[arms.single.joints]]
+name = "joint_1"
+servo_id = 1
+servo_model = "SM8512BL"
+direction = 1
+home_position_rad = 0.0
 ```
 
-Each `[arms.<name>]` table contains one arm and its optional nested
-`[arms.<name>.end_effector]`. Do not restore the removed `[linker.*]`, `[gripper.*]`, `variant`, or
-`gripper_type` schema. Gripper travel is an explicit physical value in `travel_range_rad`.
+Unknown fields are errors. Joint names are the URDF, Pinocchio, and ROS 2 identity; `servo_id` is
+only a bus address. Do not derive one from the other. A model must have an exact profile backed by
+official protocol information; never substitute the nearest model. Any physical bus whose protocol
+cannot verify torque disable per device must declare `external_estop = true` and have the independent
+hardware stop installed; the configuration flag alone is not a safety mechanism.
 
-`JointDevice` is the shared arm/end-effector protocol, and every device returns `JointDeviceState`.
-`CompositeJointDevice` implements command routing and state aggregation. `JointRobot` builds named
-`ArmAssembly` instances and owns shared serial drivers. Direct robot APIs use combined joint order:
-all arm joints first, then configured end-effector joints in arm order.
+Public HLS documentation does not provide a trustworthy model-register mapping for every supported
+model. HLS profiles therefore record the observed register without comparing it to a guessed value.
+When `expected_model_number` is explicitly configured from a trustworthy source, connection must
+enforce it. SMS profiles with documented model numbers always enforce identity. A physical bus whose
+protocol cannot expose model identity must explicitly set `allow_unverified_identity = true`; static
+preflight must report that identity remains unverified. FashionStar firmware is readable and must be
+compared with `firmware_version` even though the generic protocol does not expose a product model ID.
 
-`BaseRobot.act()` returns `(positions, velocities, efforts)`.
-`BaseRobot.name` uses `<robot_type>_<backend>_<runtime>`. Hardware `joint_ids` are independent from
-URDF/Pinocchio/ROS 2 names. Every arm TOML table must explicitly define `joint_names`, and every
-FEETECH gripper must define `joint_name`; never derive kinematic names from servo bus IDs.
+## Bus And State Rules
 
-ROS 2 topics intentionally split arm and gripper traffic:
+Each Actor owns:
 
-```text
-/ace_leader/arm/command
-/ace_follower/arm/state
-/ace_leader/gripper/command
-/ace_follower/gripper/state
-/ace_leader/arm/sync_mode
-/ace_follower/arm/sync_status
-```
+- a strict FIFO for safety and lifecycle transactions;
+- a bounded latest-value mailbox for streaming motion commands;
+- periodic fast-state reads and budgeted slow telemetry;
+- generation and deadline checks;
+- an atomic immutable state snapshot.
 
-The PX4 bridge publishes `/fmu/in/arm_joint_state` as a fixed-capacity 14-joint arm-only state.
-`joint_count` marks the densely packed valid prefix; grippers and dexterous hands are excluded.
+Streaming commands may replace commands that have not started. Safety transactions may not be
+dropped or reordered. A motion write must not starve the following state read. Use blocking serial
+I/O with monotonic deadlines and condition waits; do not add busy polling, one thread per device, or
+an unbounded command queue.
 
-`FeeTechArm` positions are radians. `FeeTechGripper` public positions are normalized to `[0.0, 1.0]`.
-Physical FEETECH devices use low-latency, NIS-gated constant-velocity Kalman estimation for public
-positions and velocities. Keep `FeeTechDriver.get_state()` as the raw register API and
-`JointDeviceState.raw_positions` as unfiltered encoder angles; use the device estimator diagnostics
-for rejected-observation analysis.
-`set_position()` APIs accept `velocities`, `accelerations`, and `torque`; do not reintroduce older
-singular/profile/current keyword arguments unless the tests and callers are intentionally changed.
+Physical joint positions and velocities pass through `RobustJointStateEstimator`. Keep filtering
+low-latency and preserve NIS/physical innovation gates, covariance checks, acceleration limits, and
+diagnostics. Policies and ROS adapters consume the same estimated state.
+
+Known HLS profiles may estimate torque only from their documented model-specific KT and no-load
+current. Do not apply those constants to RS485 models without official parameters.
 
 ## Hardware Safety
 
-Ask before running commands that may touch hardware, serial ports, ROS 2 live nodes, or servo nonvolatile state. This includes:
+Ask before running anything that may open hardware, launch live ROS nodes, enable torque, move a
+joint, or write nonvolatile state. Confirm the intended config, robot side, serial port, power state,
+mechanical clearance, and emergency-stop plan.
+
+Safe static preflight does not open hardware:
 
 ```bash
-python -m acetele.core.calibrate --config /path/to/physical_robot.toml
-python -m acetele.tools.backlash_diagnostics ...
-python -m acetele.tools.gravity_compensation_diagnostics ...
-python -m acetele.tools.feetech_pid_autotune ...
-ros2 launch ace_robot_ros2 ace_robot.launch.py ...
-ros2 launch acetele_bringup follower_system.launch.py
+python -m acetele.tools.check_robot_spec /path/to/robot.toml
 ```
 
-Before hardware runs, confirm the intended config file, serial port, robot side, power state, mechanical clearance, and emergency stop plan.
+Preflight must validate URDF order and limits, exact profiles, firmware capabilities, unique port
+ownership, and worst-case bus utilization. Utilization above 70% is a configuration error.
 
-Calibration rejects `backend="mock"` before creating a driver. Do not add an implicit backend
-override or bypass this check.
+The safety state machine is:
 
-Prefer `backend="mock"` or test doubles for local validation. Never change calibration offsets, PID values, torque enable behavior, current limits, or gravity compensation constants as a casual refactor.
+```text
+DISCONNECTED -> SAFE_DISABLED -> READY -> ACTIVE -> HOLD/FAULT
+```
+
+- Commands older than their deadline or from an old generation are discarded.
+- Lost follower heartbeats enter `HOLD`, clear pending motion, and require synchronization again.
+- Emergency stop clears motion, increments generation, executes the strongest supported hardware
+  action, and remains latched until explicit reset.
+- Stale state, repeated protocol failures, device reset, or a missing arm joint enters `FAULT`.
+- Devices without verifiable torque disable require an independent physical emergency stop. Every
+  affected physical bus spec must declare that external stop.
+
+FEETECH packet home calibration is exposed through
+`python -m acetele.tools.calibrate_feetech_home <config> --yes`. Keep calibration profile-specific,
+require `SAFE_DISABLED`, validate the complete plan before connecting hardware, and preserve queue
+barriers and bounded cleanup. Other protocols must not reuse the FEETECH procedure without their own
+documented safety transaction.
+
+## ROS 2
+
+`ace_robot_ros2` accepts only new-schema specs and dispatches only to composed `RuntimeLeaderNode`
+or `RuntimeFollowerNode` adapters. The generic launch defaults to the packaged physical HLS TTL
+Leader spec; system-level launches default to their matching Leader/Follower specs. Production runs
+should pass `config_path` explicitly after preflight:
+
+```bash
+ros2 launch ace_robot_ros2 ace_robot.launch.py config_path:=/path/to/robot.toml
+```
+
+High-rate arm/end-effector commands and state use `BEST_EFFORT + KEEP_LAST(1) + VOLATILE`.
+Synchronization mode/status use `RELIABLE + KEEP_LAST(1)`. Keep callbacks non-blocking and use
+monotonic time for deadlines and heartbeat logic; use the ROS clock only for message headers.
+
+The PX4 bridge publishes `/fmu/in/arm_joint_state` as an arm-only fixed-capacity 14-joint message.
+`joint_count` marks the dense valid prefix. Grippers and dexterous hands are excluded. Parallel
+grippers use the existing gripper topics; dexterous hands use the separate end-effector topics.
 
 ## Development Workflow
 
-Install the Python package in editable mode:
+Install and run focused tests:
 
 ```bash
 python -m pip install -e .
-```
-
-Install local development tools:
-
-```bash
 python -m pip install pytest pre-commit
-pre-commit install
+python -m pytest tests/config tests/hardware tests/runtime tests/control -q
 ```
 
-Run focused tests while iterating:
-
-```bash
-python -m pytest tests/config/test_config_loader.py -q
-python -m pytest tests/equipment/feetech -q
-python -m pytest tests/robot -q
-```
-
-Run the full Python test suite before broad changes:
+Before handing off broad changes, run:
 
 ```bash
 python -m pytest
-```
-
-Run pre-commit before handing off larger code changes:
-
-```bash
+python -m compileall acetele
+git diff --check
 pre-commit run --all-files
 ```
 
-The pytest config excludes `acetele/deploy/realsense-ros` because it is a large third-party submodule.
+The pytest configuration excludes `acetele/deploy/realsense-ros` because it is a large third-party
+submodule.
 
-## Packaging Notes
+## Packaging
 
-Package metadata is duplicated in `pyproject.toml` and `setup.py`; keep them aligned. The declared Python requirement is `>=3.9`.
-
-Package data includes TOML configs and robot description assets:
+Keep metadata in `pyproject.toml` and `setup.py` aligned. Python support is `>=3.10`. Package data
+includes:
 
 ```text
 acetele.config/*.toml
-acetele.robot.ace_follower/description/*.urdf
-acetele.robot.ace_follower/description/meshes/*.STL
-acetele.robot.ace_leader/description/*.urdf
-acetele.robot.ace_leader/description/*.xml
-acetele.robot.ace_leader/description/meshes/*.STL
+acetele.model.robots.ace_follower/description/*.urdf
+acetele.model.robots.ace_follower/description/meshes/*.STL
+acetele.model.robots.ace_leader/description/*.urdf
+acetele.model.robots.ace_leader/description/*.xml
+acetele.model.robots.ace_leader/description/meshes/*.STL
 ```
 
-If a change affects installed resources, update both packaging files and `tests/test_packaging_metadata.py` when appropriate.
+When installed resources change, update both packaging files and
+`tests/test_packaging_metadata.py`. Never package `acetele/equipment` or `acetele/robot`; those
+names belong to the removed architecture.
 
-## ROS 2 Notes
+## Change Checklist
 
-`ace_robot_ros2/ace_robot_node.py` creates a `ConfigLoader` with `runtime_override="ros2"`; the
-configured `physical` or `mock` device backend remains unchanged. Passing `config_path` selects the
-robot TOML file at launch time.
+When adding a servo or hand profile:
 
-Useful commands:
+1. Record the official source URL, document version, and checksum.
+2. Add codec golden-frame tests before integrating the protocol.
+3. Keep serial ownership, deadlines, retries, and scheduling in the Actor path.
+4. Add bandwidth and capability preflight checks.
+5. Complete protocol-level tests before requesting hardware validation.
 
-```bash
-ros2 launch ace_robot_ros2 ace_robot.launch.py config_path:=/path/to/ace_follower.toml
-ros2 launch data_collector_ros2 data_collector.launch.py
-ros2 launch visualization_ros2 visualization.launch.py
-ros2 run joystick_ros2 manual_control
-```
+When changing command, safety, or ROS behavior, update both leader and follower paths, preserve
+joint ordering, and add focused regression tests. Always inspect `git status --short`; do not revert
+or overwrite unrelated user changes.
 
-`acetele_bringup/follower_system.launch.py` expects external packages such as `realsense2_camera` and `ros2_px4_odometry`. If those dependencies are absent, test lower-level packages directly.
-
-## Common Change Patterns
-
-When adding a robot topology or runtime:
-
-1. Add the implementation under `acetele/robot/...`.
-2. Update `_ROBOT_ENTRYPOINTS` in `acetele/core/make_robot.py`.
-3. Add or update TOML config files under `acetele/config/`.
-4. Add tests for config loading and factory behavior.
-5. Update README usage/configuration notes.
-
-When adding an end effector:
-
-1. Add a descriptive typed config and a `JointDevice` implementation.
-2. Put dexterous-hand models under `acetele/equipment/dexterous_hands/`.
-3. Register creation in `end_effector_factory.py`.
-4. Keep model codes such as O6 contextualized by the directory and class/config names.
-
-When changing arm or gripper command semantics:
-
-1. Update both `ace_leader` and `ace_follower` paths.
-2. Preserve direct API ordering: arm joints, then gripper.
-3. Preserve ROS 2 arm/gripper topic separation unless the caller contract is intentionally changed.
-4. Update tests under `tests/equipment/feetech/` and `tests/robot/`.
-
-When changing ROS 2 topics or sync behavior:
-
-1. Update leader and follower node classes together.
-2. Update launch/config YAML if parameters change.
-3. Update data collector topic regexes or bag conversion mappings if recorded data changes.
-4. Add tests under `tests/deploy/` when possible.
-
-## Current Workspace Caution
-
-This repository may contain user-created or generated untracked files. Always check:
-
-```bash
-git status --short
-```
-
-Do not delete, overwrite, or reformat unrelated untracked files. Work with user changes if they touch the files you need; otherwise leave them alone.
-
-## Documentation Style
-
-The root `README.md` is the Simplified Chinese default. It follows the ACESim-style presentation: top anchor, centered badges/title/slogan/language switch, Chinese table of contents, project overview, status, tech stack, quick start, usage, project layout, roadmap, contributing, license, contact, and acknowledgments. Keep every section heading and back-to-top link in Chinese.
-
-Keep `README.en.md` as the English counterpart when changing public documentation.
-
-The root project is licensed under Apache-2.0. Keep `LICENSE`, README license sections, `pyproject.toml`, `setup.py`, and ROS 2 `package.xml` license metadata aligned when changing licensing-related files.
+`README.md` is the Simplified Chinese default and `README.en.md` is its English counterpart. Keep
+their public behavior and command examples aligned. The project is Apache-2.0 licensed; keep
+`LICENSE`, package metadata, and ROS package metadata consistent.

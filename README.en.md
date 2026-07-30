@@ -3,7 +3,7 @@
 <div align="center">
 
 <p align="center">
-  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-%3E%3D3.9-3776AB.svg" alt="Python >= 3.9" /></a>
+  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-%3E%3D3.10-3776AB.svg" alt="Python >= 3.10" /></a>
   <a href="https://docs.ros.org/en/humble/"><img src="https://img.shields.io/badge/ROS%202-Humble-22314E.svg" alt="ROS 2 Humble" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache--2.0-blue.svg" alt="Apache-2.0" /></a>
   <a href="https://pre-commit.com/"><img src="https://img.shields.io/badge/pre--commit-enabled-brightgreen.svg" alt="pre-commit enabled" /></a>
@@ -60,10 +60,12 @@ to provide a unified development workflow from local validation to real-hardware
 ACETele/
 ├── acetele/
 │   ├── config/       Robot configurations
-│   ├── core/         Local Python entry points
-│   ├── deploy/       ROS2 deployment packages for users
-│   ├── equipment/    Hardware drivers
-│   ├── robot/        Robot classes
+│   ├── control/      Thread-free control and compensation pipelines
+│   ├── core/         Vendor-neutral state and command contracts
+│   ├── deploy/       ROS2 deployment packages
+│   ├── hardware/     Serial Actors, protocols, profiles, and mocks
+│   ├── model/        URDF assets and Pinocchio models
+│   ├── runtime/      Robot assembly, lifecycle, and safety state machine
 │   ├── tools/        Common tools
 │   └── utils/
 ├── tests/
@@ -87,7 +89,7 @@ ACETele/
 
 ### Prerequisites
 
-- [Python 3.9 or newer](https://www.python.org/downloads/)
+- [Python 3.10 or newer](https://www.python.org/downloads/)
 - [ROS2 Humble](https://docs.ros.org/en/humble/Installation.html) (optional)
 
 ### Installation
@@ -104,7 +106,7 @@ sudo apt install -y git python3 python3-venv python3-pip
 python3 --version
 ```
 
-Confirm that Python is 3.9 or newer.
+Confirm that Python is 3.10 or newer.
 
 2. Clone the repository and initialize submodules:
 
@@ -169,17 +171,19 @@ source install/setup.bash
 
 ### Hardware Check
 
-The default configuration `acetele/config/default.toml` points to `ace_leader.toml`. The leader uses
-the `physical` device backend with the `standalone` runtime and accesses `/dev/ttyUSB0` by default.
-Connect the arm, verify the serial-port name and permissions, then run:
+The project ships physical HLS TTL configurations for both Leader and Follower, and the generic ROS 2
+launch defaults to the Leader spec. Before first use, verify ports, servo IDs, models, and mechanical
+state, then run the static preflight, which does not open the serial port:
 
 ```bash
-python -m acetele.core.make_robot
+python -m acetele.tools.check_robot_spec acetele/config/ace_leader/feetech_hls_ttl.toml
+python -m acetele.tools.check_robot_spec acetele/config/ace_follower/feetech_hls_ttl.toml
+python -m acetele.tools.check_robot_spec acetele/config/ace_follower/feetech_sms_rs485.toml
 ```
 
-Press `Ctrl+C` once it starts printing physical joint states. In a no-hardware environment, run the
-test suite or explicitly construct `ConfigLoader(..., backend_override="mock")`; do not rely on the
-project default.
+Passing preflight confirms configuration, URDF, capability, and bus-budget consistency only; it is
+not a physical safety qualification. Without hardware, set `basic.backend` to `mock` in your own
+configuration or run the test suite.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -187,98 +191,158 @@ project default.
 
 ### Python API
 
-`make_robot()` is the unified Python creation entry point. It reads `ConfigLoader` configuration and
-selects the robot entry point from `(robot_type, runtime)`. The `backend` field only selects physical
-or mock devices.
+`RobotRuntime` is the only Python robot entry point. Construction performs static preflight only;
+`connect()` creates serial ports and Actor threads, and `disconnect()` performs bounded cleanup.
 
 ```python
-from acetele.core.make_robot import make_robot
+from acetele.config.spec_loader import load_robot_spec
+from acetele.runtime import RobotRuntime
 
-robot = make_robot()
+spec = load_robot_spec("acetele/config/ace_follower/feetech_sms_rs485.toml")
+runtime = RobotRuntime(spec)
+runtime.connect()
 try:
-    joint_pos, joint_vel, joint_tau = robot.act()
-    print(joint_pos, joint_vel, joint_tau)
+    state = runtime.read()
+    print(state.joints["single"].positions)
 finally:
-    robot.close()
+    runtime.disconnect()
 ```
 
-To load a configuration explicitly:
+`RobotState` stores immutable `JointState` values by assembly name. Physical servo positions and
+velocities pass through the low-latency estimator with NIS and physical innovation gates.
+`runtime.diagnostics()` exposes bus cycles, state age, command replacement, and estimator data
+without exposing vendor registers or bus IDs to control code.
 
-```python
-from pathlib import Path
+#### Multi-vendor RS485 Runtime
 
-from acetele.config.config_loader import ConfigLoader
-from acetele.core.make_robot import make_robot
+The new hardware runtime uses one Actor per physical port. It keeps the strict safety FIFO, latest
+motion mailbox, periodic state reads, and slow telemetry under one serial owner. Protocol-level
+adapters currently cover:
 
-config = ConfigLoader(Path("acetele/config/ace_follower.toml"))
-robot = make_robot(config)
+- FEETECH HLS packet TTL;
+- FEETECH SMS/SM packet RS485;
+- FEETECH Modbus-RTU RS485;
+- FashionStar UART/RS485 packet;
+- Generic Linker Hand RS485, with current profiles for O6, L6, L7, and L10 rather than one model-specific adapter.
+
+New configurations explicitly declare buses, joints, and model profiles. Validate URDF mappings,
+profiles, firmware capabilities, and bus utilization without opening a serial port:
+
+```bash
+python -m acetele.tools.check_robot_spec acetele/config/ace_follower/feetech_sms_rs485.toml
+python -m acetele.tools.check_robot_spec acetele/config/ace_follower/fashionstar_rs485.toml
 ```
 
-`robot.name` includes the topology, device backend, and runtime, for example
-`ace_follower_physical_ros2` or `ace_leader_physical_standalone`.
+Each `port` may define only one bus. Arms and end effectors on the same serial port must share that
+bus so the port always has exactly one Actor owner. Unknown TOML fields fail validation instead of
+silently falling back to defaults.
 
-Physical FEETECH devices retain raw register snapshots in the driver and use a constant-velocity
-Kalman estimator with low-latency outlier gating at the device layer. `robot.act()`, ROS2, and FMU
-interfaces use filtered positions and velocities, while `JointDeviceState.raw_positions` preserves
-the unfiltered encoder angles. Arm and gripper `get_state_estimator_diagnostics()` methods expose
-innovations, NIS values, observation gates, velocity limits, and cumulative rejection counts.
+The ROS 2 entry point accepts only the `buses + joints` schema and uses composed Leader/Follower
+nodes that own a `RobotRuntime`. Without `config_path`, it starts the HLS TTL Leader spec:
+
+```bash
+ros2 launch ace_robot_ros2 ace_robot.launch.py \
+  config_path:="$PWD/acetele/config/ace_follower/feetech_sms_rs485.toml"
+```
+
+The HLS TTL configurations are `ace_leader/feetech_hls_ttl.toml` and
+`ace_follower/feetech_hls_ttl.toml`. The generic launch defaults to the Leader configuration;
+Follower and other hardware assemblies must be selected explicitly through `config_path`.
+
+High-rate arm/gripper command and state topics use `BEST_EFFORT + KEEP_LAST(1)`, while sync topics
+use `RELIABLE + KEEP_LAST(1)`. Valid follower commands enter the latest-value mailbox directly in
+the subscription callback without waiting for another control timer. Parallel grippers retain
+`/ace_leader/gripper/command` and `/ace_follower/gripper/state`; dexterous hands use the separate
+`/ace_leader/end_effector/command` and `/ace_follower/end_effector/state` topics and are not treated
+as the gripper synchronization trigger.
+
+FashionStar and Linker Hand currently have official-frame and test-double verification. Production
+use still requires model-specific hardware identity, disconnect HOLD, emergency-stop, and sustained
+load tests. FEETECH packet, FashionStar, and Linker Hand paths cannot verify torque disable per
+device, so their physical configurations must set `external_estop = true` and actually provide an
+independent hardware emergency stop. This field declares a safety prerequisite; it does not replace
+the hardware circuit.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 ### Configuration System
 
-Configuration entry file:
+The multi-vendor RS485 runtime uses the `buses + joints` schema. `joint.name` is the URDF/ROS 2
+kinematic name, while `servo_id` is only a bus address; neither is derived from the other. Example:
 
 ```toml
-# acetele/config/default.toml
 [basic]
-config_file = "ace_leader.toml"
+model = "ace_follower"
+backend = "physical"
+urdf_path = "../model/robots/ace_follower/description/ace_follower.urdf"
+
+[buses.arm]
+type = "feetech_packet"
+port = "/dev/ttyUSB0"
+baudrate = 1000000
+cycle_hz = 100
+physical_layer = "rs485"
+family = "sms"
+external_estop = true
+
+[arms.single]
+bus = "arm"
+
+[[arms.single.joints]]
+name = "joint_1"
+servo_id = 1
+servo_model = "SM8512BL"
+direction = 1
+home_position_rad = 0.0
 ```
 
-Robot configuration files:
-
-- `acetele/config/ace_leader.toml`
-- `acetele/config/ace_follower.toml`
+Before startup, the runtime estimates line speed, frame length, responses, and turnaround intervals
+for the worst case. It refuses utilization above 70%. HLS profiles do not have trustworthy public
+model-register mappings, so configurations must select an exact model profile. The reported register
+is read and recorded at connection time, but it is not compared with a guessed value. Add the
+optional `expected_model_number` when a trustworthy value is available to enable strict identity
+verification. A physical bus whose protocol cannot expose model identity must also set
+`allow_unverified_identity = true`; preflight continues to report `verified_identity=false`. This is
+an explicit acknowledgement of the protocol limitation, not software verification of the model.
+FashionStar firmware is read separately and strictly compared with `firmware_version`.
+Known HLS profiles estimate output torque using model-specific KT and no-load current values.
+RS485 models without official parameters do not inherit constants from a similar model.
 
 Key fields:
 
 | Field | Purpose |
 | --- | --- |
-| `basic.robot_type` | Robot topology: `ace_leader`, `ace_follower`, or `ace_follower_dual` |
-| `basic.backend` | Device backend: `mock` or `physical` |
-| `basic.runtime` | Runtime entry point: `standalone` or `ros2` |
-| `arms.<name>.port` | Servo serial port for that arm |
-| `arms.<name>.joint_ids` | Servo IDs for the arm joints |
-| `arms.<name>.joint_names` | Required ordered arm joint names for URDF, Pinocchio, and ROS2 |
-| `arms.<name>.joint_signs` | Arm joint direction convention |
-| `arms.<name>.home_poses` | Calibrated arm joint home positions |
-| `arms.<name>.servo_models` | Servo models such as `HL3960`, `HL3950`, `HL3930`, and `HL3915` |
-| `arms.<name>.end_effector` | Optional gripper or dexterous-hand configuration bound to the arm |
-| `arms.<name>.end_effector.joint_name` | Required kinematic and ROS2 joint name for a FEETECH gripper |
-| `travel_range_rad` | Physical servo travel represented by normalized gripper positions from `0` to `1`; it must encode to `1` through `2047` FEETECH position counts |
+| `basic.model` | Robot model and packaged URDF name |
+| `basic.backend` | `physical` or `mock` |
+| `basic.urdf_path` | Optional explicit URDF path; packaged model fallback when omitted |
+| `buses.<name>.type` | Vendor protocol and physical bus type |
+| `buses.<name>.port` | Serial port owned by one Actor |
+| `buses.<name>.cycle_hz` | Target bus cycle rate |
+| `buses.<name>.external_estop` | Declares a real independent hardware stop; required for physical buses without verified disable |
+| `buses.<name>.allow_unverified_identity` | Explicitly accepts a protocol without readable product identity after manual hardware verification |
+| `arms.<name>.bus` | Bus used by the arm |
+| `arms.<name>.joints` | Joints declared in URDF order |
+| `joint.name` | URDF/ROS 2 kinematic name |
+| `joint.servo_id` | Vendor bus address |
+| `joint.servo_model` | Model requiring an official profile |
+| `joint.direction` | Joint direction, restricted to `-1` or `1` |
+| `joint.home_position_rad` | Joint angle written when the servo is at its mechanical home pose |
+| `joint.expected_model_number` | Optional uint16 model register value for strict connection-time verification |
+| `joint.firmware_version` | Expected FashionStar firmware version, read and checked at connection time |
 
-Use `mock` for local API checks and no-hardware debugging; `physical` accesses real devices.
-Selecting `runtime = "ros2"` wraps the robot in a ROS2 node without implicitly changing the device
-backend. Arms and end effectors are paired in the same assembly table: use `arms.single` for a
-single-arm robot and `arms.left`/`arms.right` for a dual-arm robot.
-
-TOML does not contain mock-only initial positions, limits, or velocities. A mock arm starts from
-`home_poses`; it reads joint limits from the URDF when one exists and otherwise uses internal device
-defaults. Mock gripper and dexterous-hand constraints also come from their device implementations.
-The same robot configuration can therefore switch between `mock` and `physical` without carrying
-simulator-only parameters.
-
-`joint_ids` are servo bus addresses only. Every arm must explicitly define `joint_names`, and every
-FEETECH gripper must explicitly define `joint_name`. These names identify joints in URDF, Pinocchio,
-and ROS2 interfaces, so servo IDs can be reassigned without changing kinematic names. Calibration
-accepts only configurations with `backend = "physical"` and should be given an explicit configuration
-file:
+`mock` and `physical` use the same typed schema. Unknown fields, duplicate ports, unsupported models,
+incorrect joint order, invalid limits, or bus utilization above 70% fail before hardware is opened.
+After placing every FEETECH packet joint at its mechanical home pose and confirming that the robot
+can remain still safely, run:
 
 ```bash
-python -m acetele.core.calibrate --config acetele/config/ace_follower.toml
+python -m acetele.tools.calibrate_feetech_home \
+  acetele/config/ace_follower/feetech_hls_ttl.toml --yes
 ```
 
-Using a `mock` configuration for calibration fails before any serial port is opened.
+The command completes all static checks before connecting and writes nonvolatile offsets only while
+the runtime is `SAFE_DISABLED`. It does not apply this procedure to FashionStar, FEETECH Modbus, or
+Linker Hand devices.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -289,9 +353,7 @@ ROS 2 packages are located in `acetele/deploy`:
 | Package | Purpose |
 | --- | --- |
 | `ace_robot_ros2` | Starts a leader or follower robot node according to `config_path` |
-| `acetele_bringup` | Provides leader/follower system-level startup and combined launch files |
 | `data_collector_ros2` | Triggers rosbag data recording according to remote-control channel status |
-| `joystick_ros2` | Converts joystick input to PX4 manual control input |
 | `visualization_ros2` | Displays RGB-D images, joint states, and topic runtime status |
 | `px4_msgs` | PX4 message definition submodule |
 | `realsense-ros` | RealSense camera ROS 2 driver submodule |
@@ -311,16 +373,10 @@ source install/setup.bash
 Common launch commands:
 
 ```bash
-ros2 launch ace_robot_ros2 ace_robot.launch.py
+ros2 launch ace_robot_ros2 ace_robot.launch.py \
+  config_path:="$PWD/acetele/config/ace_follower/feetech_hls_ttl.toml"
 ros2 launch data_collector_ros2 data_collector.launch.py
 ros2 launch visualization_ros2 visualization.launch.py
-```
-
-System-level startup:
-
-```bash
-ros2 launch acetele_bringup leader_system.launch.py
-ros2 launch acetele_bringup follower_system.launch.py
 ```
 
 Common topics:

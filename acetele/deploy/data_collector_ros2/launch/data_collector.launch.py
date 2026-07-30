@@ -6,6 +6,8 @@ from launch_ros.actions import Node
 
 
 def generate_launch_description():
+    """Launch the bag recorder with its package-shared parameter file."""
+
     config = os.path.join(
         get_package_share_directory("data_collector_ros2"),
         "config",

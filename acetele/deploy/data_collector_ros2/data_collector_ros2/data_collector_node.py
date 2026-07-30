@@ -1,3 +1,5 @@
+"""Record configured ROS topics while a manual-control switch is held."""
+
 import os
 import re
 import signal
@@ -11,6 +13,8 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy
 
 
 class DataCollectorNode(Node):
+    """Own one rosbag process and translate switch edges into process actions."""
+
     def __init__(self):
         super().__init__("data_collector_node")
         self.declare_parameter("save_path", "~/data/")
@@ -43,6 +47,8 @@ class DataCollectorNode(Node):
         self.get_logger().info(f"Combined Regex: {self._combined_regex}")
 
     def _generate_combined_regex(self, topics_list):
+        """Combine literal topic names and explicit regular expressions safely."""
+
         if not topics_list:
             return ""
 
@@ -56,12 +62,16 @@ class DataCollectorNode(Node):
         return "|".join(patterns)
 
     def _manual_control_callback(self, msg: ManualControlSetpoint):
+        """Treat the two switch extremes as idempotent start and stop requests."""
+
         if msg.aux1 >= 0.9 and not self._is_recording:
             self._start_recording()
         if msg.aux1 <= -0.9 and self._is_recording:
             self._stop_recording()
 
     def _start_recording(self):
+        """Start rosbag in its own process group for bounded group shutdown."""
+
         self.get_logger().info("Triggered: Starting recording...")
 
         cmd = [
@@ -86,6 +96,8 @@ class DataCollectorNode(Node):
         self.get_logger().info(f"Recording started. PID: {self._recording_process.pid}")
 
     def _stop_recording(self):
+        """Request graceful rosbag finalization, then terminate on timeout."""
+
         self.get_logger().info("Triggered: Stopping recording...")
         if self._recording_process:
             try:
@@ -100,11 +112,15 @@ class DataCollectorNode(Node):
             self.get_logger().info("Recording stopped.")
 
     def close(self):
+        """Finalize an active bag before node shutdown."""
+
         if self._is_recording:
             self._stop_recording()
 
 
 def main(args=None):
+    """Run the collector and always finalize its child process."""
+
     rclpy.init(args=args)
     node = DataCollectorNode()
     try:

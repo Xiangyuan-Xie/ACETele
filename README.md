@@ -3,7 +3,7 @@
 <div align="center">
 
 <p align="center">
-  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-%3E%3D3.9-3776AB.svg" alt="Python >= 3.9" /></a>
+  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-%3E%3D3.10-3776AB.svg" alt="Python >= 3.10" /></a>
   <a href="https://docs.ros.org/en/humble/"><img src="https://img.shields.io/badge/ROS%202-Humble-22314E.svg" alt="ROS 2 Humble" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache--2.0-blue.svg" alt="Apache-2.0" /></a>
   <a href="https://pre-commit.com/"><img src="https://img.shields.io/badge/pre--commit-enabled-brightgreen.svg" alt="pre-commit enabled" /></a>
@@ -59,10 +59,12 @@ ACETele 是一套面向机器人遥操作与数据采集的 Python/ROS2 工程�
 ACETele/
 ├── acetele/
 │   ├── config/       机器人配置
-│   ├── core/         本地调用接口
-│   ├── deploy/       用户ROS2部署的功能包
-│   ├── equipment/    硬件驱动
-│   ├── robot/        机器人类
+│   ├── control/      无线程控制与补偿流水线
+│   ├── core/         厂商无关的状态与命令契约
+│   ├── deploy/       ROS2 部署功能包
+│   ├── hardware/     串口 Actor、协议、型号 Profile 与 Mock
+│   ├── model/        URDF 资源与 Pinocchio 模型
+│   ├── runtime/      机器人装配、生命周期与安全状态机
 │   ├── tools/        常用工具
 │   └── utils/
 ├── tests/
@@ -86,7 +88,7 @@ ACETele/
 
 ### 环境要求
 
-- [Python 3.9 及以上](https://www.python.org/downloads/)
+- [Python 3.10 及以上](https://www.python.org/downloads/)
 - [ROS2 Humble](https://docs.ros.org/en/humble/Installation.html)（可选）
 
 ### 安装
@@ -102,7 +104,7 @@ sudo apt install -y git python3 python3-venv python3-pip
 python3 --version
 ```
 
-确认 Python 版本为 3.9 或更高。
+确认 Python 版本为 3.10 或更高。
 
 2. 克隆仓库并初始化子模块：
 
@@ -165,16 +167,17 @@ source install/setup.bash
 
 ### 硬件自检
 
-默认配置 `acetele/config/default.toml` 指向 `ace_leader.toml`。Leader 默认使用
-`physical` 设备后端和 `standalone` 运行方式，会访问配置中的 `/dev/ttyUSB0`。
-连接机械臂并确认串口名称和访问权限后运行：
+项目提供 HLS TTL 的 Leader/Follower 真实硬件配置；ROS 2 通用 launch 默认使用 Leader
+配置。首次运行前请核对端口、舵机 ID、型号和机械状态，再执行不会打开串口的静态预检：
 
 ```bash
-python -m acetele.core.make_robot
+python -m acetele.tools.check_robot_spec acetele/config/ace_leader/feetech_hls_ttl.toml
+python -m acetele.tools.check_robot_spec acetele/config/ace_follower/feetech_hls_ttl.toml
+python -m acetele.tools.check_robot_spec acetele/config/ace_follower/feetech_sms_rs485.toml
 ```
 
-看到真实关节状态持续输出后，按 `Ctrl+C` 退出。无硬件环境下请运行测试，或显式通过
-`ConfigLoader(..., backend_override="mock")` 创建 Mock 后端，不要依赖项目默认值。
+预检通过只表示配置、URDF、型号能力和总线预算一致，不代表已经完成真机安全验证。
+无硬件环境请将自有配置的 `basic.backend` 设为 `mock`，或直接运行测试套件。
 
 <p align="right">(<a href="#readme-top">返回顶部</a>)</p>
 
@@ -182,92 +185,147 @@ python -m acetele.core.make_robot
 
 ### Python API
 
-`make_robot()` 是统一的 Python 创建入口，负责读取 `ConfigLoader` 配置，并根据
-`(robot_type, runtime)` 选择机器人入口。`backend` 只决定使用真实设备还是 mock 设备。
+`RobotRuntime` 是唯一的 Python 机器人入口。构造函数只执行静态预检；`connect()` 才会
+创建串口与 Actor 线程，`disconnect()` 负责有界清理资源。
 
 ```python
-from acetele.core.make_robot import make_robot
+from acetele.config.spec_loader import load_robot_spec
+from acetele.runtime import RobotRuntime
 
-robot = make_robot()
+spec = load_robot_spec("acetele/config/ace_follower/feetech_sms_rs485.toml")
+runtime = RobotRuntime(spec)
+runtime.connect()
 try:
-    joint_pos, joint_vel, joint_tau = robot.act()
-    print(joint_pos, joint_vel, joint_tau)
+    state = runtime.read()
+    print(state.joints["single"].positions)
 finally:
-    robot.close()
+    runtime.disconnect()
 ```
 
-如果需要显式加载配置：
+`RobotState` 按装配名保存只读 `JointState`。物理舵机位置与速度经过带 NIS 门控和物理
+创新约束的低延迟状态估计器；`runtime.diagnostics()` 提供总线周期、状态年龄、命令覆盖和
+滤波诊断，不需要访问厂商寄存器或总线 ID。
 
-```python
-from pathlib import Path
+#### 多厂商 RS485 Runtime
 
-from acetele.config.config_loader import ConfigLoader
-from acetele.core.make_robot import make_robot
+新的硬件运行层使用“每个物理端口一个 Actor”，将安全事务 FIFO、最新运动命令邮箱、
+周期状态读取和慢速遥测统一到单一串口所有者中。当前提供以下协议级适配：
 
-config = ConfigLoader(Path("acetele/config/ace_follower.toml"))
-robot = make_robot(config)
+- FEETECH HLS packet TTL；
+- FEETECH SMS/SM packet RS485；
+- FEETECH Modbus-RTU RS485；
+- FashionStar UART/RS485 packet；
+- Linker Hand 通用 RS485 协议，当前 profile 覆盖 O6、L6、L7 和 L10，不绑定单一型号。
+
+新配置必须显式声明总线、每个关节及型号 profile。可以在不打开串口的情况下完成
+URDF、型号、固件能力和总线占用率预检：
+
+```bash
+python -m acetele.tools.check_robot_spec acetele/config/ace_follower/feetech_sms_rs485.toml
+python -m acetele.tools.check_robot_spec acetele/config/ace_follower/fashionstar_rs485.toml
 ```
 
-`robot.name` 同时包含拓扑、设备后端和运行方式，例如
-`ace_follower_physical_ros2` 或 `ace_leader_physical_standalone`。
+每个 `port` 只能声明一个 bus；同一串口上的机械臂和末端执行器必须归入同一个 bus，
+确保该端口始终只有一个 Actor 所有者。未知 TOML 字段会直接报错，不会静默回退到默认值。
 
-物理 FEETECH 设备会保留驱动层的原始寄存器快照，并在设备层使用带异常观测门控的
-低延迟常速度卡尔曼估计器。`robot.act()`、ROS2 和 FMU 接口使用滤波后的位置与速度；
-`JointDeviceState.raw_positions` 仍保留未经滤波的编码器角度。机械臂和夹爪的
-`get_state_estimator_diagnostics()` 可用于查看创新、NIS、观测门限、限速状态和累计拒绝次数。
+ROS 2 启动入口只接受 `buses + joints` schema，并使用组合持有 `RobotRuntime` 的
+Leader/Follower 节点。不传 `config_path` 时默认启动 HLS TTL Leader：
+
+```bash
+ros2 launch ace_robot_ros2 ace_robot.launch.py \
+  config_path:="$PWD/acetele/config/ace_follower/feetech_sms_rs485.toml"
+```
+
+HLS TTL 配置位于 `ace_leader/feetech_hls_ttl.toml` 和
+`ace_follower/feetech_hls_ttl.toml`。通用 launch 默认使用 Leader 配置；启动 Follower
+或其他硬件组合时必须通过 `config_path` 显式选择。
+
+高频 arm/gripper command 与 state 话题使用 `BEST_EFFORT + KEEP_LAST(1)`，同步状态话题
+使用 `RELIABLE + KEEP_LAST(1)`。Follower 的合法命令在订阅回调中直接进入最新值邮箱，
+不会等待额外控制定时器。平行夹爪保留 `/ace_leader/gripper/command` 和
+`/ace_follower/gripper/state`；灵巧手使用独立的 `/ace_leader/end_effector/command` 和
+`/ace_follower/end_effector/state`，不会被当作夹爪同步扳机。
+
+FashionStar 与 Linker Hand 当前完成了官方协议帧和测试替身验证，接入生产系统前仍必须完成
+对应型号的真机身份、断线 HOLD、急停和持续负载测试。FEETECH packet、FashionStar 和
+Linker Hand 路径均无法逐设备验证扭矩禁用结果，因此其物理配置必须设置
+`external_estop = true`，并实际配备独立硬件急停。该字段只是安全前提声明，不会代替硬件回路。
 
 <p align="right">(<a href="#readme-top">返回顶部</a>)</p>
 
 ### 配置系统
 
-配置入口文件：
+多厂商 RS485 运行层使用 `buses + joints` schema。`joint.name` 是 URDF/ROS 2 运动学名称，
+`servo_id` 仅是总线地址，二者不得互相推导。示例：
 
 ```toml
-# acetele/config/default.toml
 [basic]
-config_file = "ace_leader.toml"
+model = "ace_follower"
+backend = "physical"
+urdf_path = "../model/robots/ace_follower/description/ace_follower.urdf"
+
+[buses.arm]
+type = "feetech_packet"
+port = "/dev/ttyUSB0"
+baudrate = 1000000
+cycle_hz = 100
+physical_layer = "rs485"
+family = "sms"
+external_estop = true
+
+[arms.single]
+bus = "arm"
+
+[[arms.single.joints]]
+name = "joint_1"
+servo_id = 1
+servo_model = "SM8512BL"
+direction = 1
+home_position_rad = 0.0
 ```
 
-机器人配置文件：
-
-- `acetele/config/ace_leader.toml`
-- `acetele/config/ace_follower.toml`
+运行时启动前会按最坏情况估算线速、帧长、响应和换向间隔；占用率超过 70% 时拒绝启动。
+HLS 型号尚无可信的公开型号寄存器对照值，因此配置必须显式选择精确型号 Profile，连接时
+读取并记录舵机报告值，但不会拿猜测值做匹配。获得可信值后可为关节增加可选的
+`expected_model_number`，启用严格身份校验。对于协议无法读取型号的物理总线，还必须显式设置
+`allow_unverified_identity = true`，预检会持续显示 `verified_identity=false`；这只是对协议限制的
+明确确认，不代表型号已经由软件验证。FashionStar 会另外读取并严格比对 `firmware_version`。
+已知 HLS profile 会使用型号对应的 KT 和空载电流估计关节输出力矩；缺少官方参数的
+RS485 型号不会套用近似型号常数。
 
 关键字段：
 
 | 字段 | 作用 |
 | --- | --- |
-| `basic.robot_type` | 机器人拓扑，支持 `ace_leader`、`ace_follower` 和 `ace_follower_dual` |
-| `basic.backend` | 设备后端：`mock` 或 `physical` |
-| `basic.runtime` | 运行入口：`standalone` 或 `ros2` |
-| `arms.<name>.port` | 该机械臂的舵机串口 |
-| `arms.<name>.joint_ids` | 机械臂各关节对应的舵机 ID |
-| `arms.<name>.joint_names` | 必填；按顺序对应 URDF、Pinocchio 和 ROS2 的机械臂关节名 |
-| `arms.<name>.joint_signs` | 机械臂关节方向约定 |
-| `arms.<name>.home_poses` | 标定后的机械臂关节 Home 位 |
-| `arms.<name>.servo_models` | 舵机型号，例如 `HL3960`、`HL3950`、`HL3930` 和 `HL3915` |
-| `arms.<name>.end_effector` | 与该机械臂绑定的可选夹爪或灵巧手配置 |
-| `arms.<name>.end_effector.joint_name` | FEETECH 夹爪必填；夹爪在运动学和 ROS2 接口中的关节名 |
-| `travel_range_rad` | 归一化夹爪从 `0` 到 `1` 对应的实际舵机角行程；换算后须为 `1` 至 `2047` 个 FEETECH 位置计数 |
+| `basic.model` | 机器人模型与打包 URDF 名称 |
+| `basic.backend` | `physical` 或 `mock` |
+| `basic.urdf_path` | 可选的显式 URDF 路径；省略时查找打包模型 |
+| `buses.<name>.type` | 厂商协议与物理总线类型 |
+| `buses.<name>.port` | 由单个 Actor 独占的串口 |
+| `buses.<name>.cycle_hz` | 目标总线周期频率 |
+| `buses.<name>.external_estop` | 已实际配备独立硬件急停；无法验证关断的物理总线必须为 `true` |
+| `buses.<name>.allow_unverified_identity` | 明确接受协议无法读取产品型号；仅在人工核对硬件后设置 |
+| `arms.<name>.bus` | 机械臂所属总线 |
+| `arms.<name>.joints` | 按 URDF 顺序声明的关节列表 |
+| `joint.name` | URDF/ROS 2 运动学名称 |
+| `joint.servo_id` | 厂商总线地址 |
+| `joint.servo_model` | 必须存在对应官方 Profile 的型号 |
+| `joint.direction` | 关节方向，只允许 `-1` 或 `1` |
+| `joint.home_position_rad` | 舵机位于机械 Home 姿态时应写入的关节角，用于非易失标定 |
+| `joint.expected_model_number` | 可选的 uint16 型号寄存器期望值；提供后连接时严格校验 |
+| `joint.firmware_version` | FashionStar 物理舵机的预期固件版本；连接时读取并严格校验 |
 
-`mock` 用于本地 API 自检与无硬件调试，`physical` 会访问真实设备；`runtime = "ros2"`
-选择 ROS2 节点封装，但不会隐式改变设备后端。机械臂和末端执行器在同一个装配表中绑定，
-单臂使用 `arms.single`，双臂可使用 `arms.left` 和 `arms.right`。
-
-TOML 不配置 Mock 专用的初始位置、限位或速度。Mock 机械臂使用 `home_poses` 作为初始状态；
-存在 URDF 时从中读取关节限位，否则使用设备内部默认值。Mock 夹爪和灵巧手的模拟约束也由
-对应设备实现提供。这样同一份机器人配置可以在 `mock` 与 `physical` 后端之间切换，而不会
-混入仅对模拟器有效的参数。
-
-`joint_ids` 仅表示舵机总线地址；每条机械臂都必须显式配置 `joint_names`，FEETECH 夹爪必须
-显式配置 `joint_name`。这些名称用于 URDF、Pinocchio 和 ROS2 接口，重新分配舵机 ID 时无需
-修改运动学关节名称。标定只接受 `backend = "physical"` 的配置，并应显式指定配置文件：
+`mock` 和 `physical` 使用同一份 typed schema。未知字段、重复端口、未知型号、错误关节顺序、
+无效限位或超过 70% 的总线预算都会在打开硬件前失败。FEETECH packet 舵机完成机械 Home
+对齐并确认所有关节可安全静止后，可执行：
 
 ```bash
-python -m acetele.core.calibrate --config acetele/config/ace_follower.toml
+python -m acetele.tools.calibrate_feetech_home \
+  acetele/config/ace_follower/feetech_hls_ttl.toml --yes
 ```
 
-使用 `mock` 配置执行标定会在打开串口前直接失败。
+该命令会先完成全量静态预检，再连接总线，并且只允许在 `SAFE_DISABLED` 状态写入非易失
+偏置。FashionStar、FEETECH Modbus 和 Linker Hand 不会套用该标定流程。
 
 <p align="right">(<a href="#readme-top">返回顶部</a>)</p>
 
@@ -278,9 +336,7 @@ ROS 2 包位于 `acetele/deploy`：
 | 包 | 作用 |
 | --- | --- |
 | `ace_robot_ros2` | 根据 `config_path` 启动 leader 或 follower 机器人节点 |
-| `acetele_bringup` | 提供 leader/follower 系统级启动与组合 launch 文件 |
 | `data_collector_ros2` | data_collector_ros2	根据遥控通道状态触发 rosbag 数据录制 |
-| `joystick_ros2` | 将手柄输入转换为 PX4 manual control 输入 |
 | `visualization_ros2` | 用于显示 RGB-D 图像、关节状态和 topic 运行状态 |
 | `px4_msgs` | PX4 消息定义子模块 |
 | `realsense-ros` | RealSense 相机 ROS 2 驱动子模块 |
@@ -300,16 +356,10 @@ source install/setup.bash
 常用启动命令：
 
 ```bash
-ros2 launch ace_robot_ros2 ace_robot.launch.py
+ros2 launch ace_robot_ros2 ace_robot.launch.py \
+  config_path:="$PWD/acetele/config/ace_follower/feetech_hls_ttl.toml"
 ros2 launch data_collector_ros2 data_collector.launch.py
 ros2 launch visualization_ros2 visualization.launch.py
-```
-
-系统级启动：
-
-```bash
-ros2 launch acetele_bringup leader_system.launch.py
-ros2 launch acetele_bringup follower_system.launch.py
 ```
 
 常见 topic：
