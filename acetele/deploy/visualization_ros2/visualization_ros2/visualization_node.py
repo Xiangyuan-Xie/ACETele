@@ -1,5 +1,8 @@
+"""ROS 2 subscriber node that exposes thread-safe snapshots to the Qt monitor."""
+
 from __future__ import annotations
 
+import copy
 import threading
 from typing import Dict, Optional, Tuple
 
@@ -14,6 +17,8 @@ from sensor_msgs.msg import CompressedImage, Image, JointState
 
 
 class VisualizationNode(Node):
+    """Decode camera, metadata, and arm topics without coupling ROS to Qt widgets."""
+
     def __init__(self) -> None:
         super().__init__("visualization")
         self.declare_parameter("front_color_topic", "/camera/front/color/image_raw")
@@ -54,7 +59,15 @@ class VisualizationNode(Node):
         self._latest_arm_state = JointState()
         self._last_front_metadata_json = ""
         self._last_wrist_metadata_json = ""
-        self._topic_status: Dict[str, Time] = {}
+        self._topic_status: Dict[str, Optional[Time]] = {
+            "front_color": None,
+            "front_depth": None,
+            "wrist_color": None,
+            "wrist_depth": None,
+            "front_metadata": None,
+            "wrist_metadata": None,
+            "arm_state": None,
+        }
         self._topic_smoothed_latency: Dict[str, float] = {}
 
         self.get_logger().info(f"Using SensorDataQoS (Best Effort) for color transport: {effective_color_transport}")
@@ -113,6 +126,13 @@ class VisualizationNode(Node):
         self.get_logger().info(f"Transport - Color: {effective_color_transport}, Depth: {effective_depth_transport}")
 
     def _create_image_subscription(self, topic: str, transport: str, callback, is_depth: bool):
+        """Select the ROS image type and transport suffix as one operation.
+
+        ``image_transport`` exposes compressed streams as sibling topics rather than
+        changing the base topic's message type, so the suffix and message class must
+        always be selected together.
+        """
+
         if transport == "raw":
             return self.create_subscription(
                 Image,
@@ -146,6 +166,8 @@ class VisualizationNode(Node):
     def get_latest_images(
         self,
     ) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray]]:
+        """Return independent copies of the four latest image streams."""
+
         with self._data_lock:
             front_color = None if self._latest_color is None else self._latest_color.copy()
             front_depth = None if self._latest_depth is None else self._latest_depth.copy()
@@ -154,25 +176,29 @@ class VisualizationNode(Node):
         return front_color, front_depth, wrist_color, wrist_depth
 
     def get_latest_arm_state(self) -> JointState:
+        """Return a deep copy so Qt cannot mutate callback-owned ROS state."""
+
         with self._data_lock:
-            arm_state = JointState()
-            arm_state.header = self._latest_arm_state.header
-            arm_state.name = list(self._latest_arm_state.name)
-            arm_state.position = list(self._latest_arm_state.position)
-            arm_state.velocity = list(self._latest_arm_state.velocity)
-            arm_state.effort = list(self._latest_arm_state.effort)
-            return arm_state
+            return copy.deepcopy(self._latest_arm_state)
 
     def get_latest_metadata(self) -> Tuple[str, str]:
+        """Return immutable metadata JSON snapshots for both cameras."""
+
         with self._data_lock:
             return self._last_front_metadata_json, self._last_wrist_metadata_json
 
     def get_status_info(self) -> Dict[str, str]:
+        """Return stream liveness and smoothed source-to-monitor latency."""
+
         now = self.get_clock().now()
         with self._data_lock:
             info: Dict[str, str] = {}
             for key in sorted(self._topic_status.keys()):
-                diff = (now - self._topic_status[key]).nanoseconds / 1e9
+                last_update = self._topic_status[key]
+                if last_update is None:
+                    info[key] = "OFFLINE"
+                    continue
+                diff = (now - last_update).nanoseconds / 1e9
                 if diff < 2.0:
                     status = "ONLINE"
                     if key in self._topic_smoothed_latency:
@@ -183,12 +209,16 @@ class VisualizationNode(Node):
             return info
 
     def _latency_ms(self, stamp) -> float:
+        """Measure source-to-monitor latency while tolerating small clock skew."""
+
         latency = (self.get_clock().now() - Time.from_msg(stamp)).nanoseconds / 1e6
         if latency < 0.0:
             return 0.0
         return float(latency)
 
     def _update_status(self, key: str, latency_ms: float = 0.0) -> None:
+        """Atomically refresh liveness and a low-noise latency indicator."""
+
         with self._data_lock:
             self._topic_status[key] = self.get_clock().now()
             if key not in self._topic_smoothed_latency:
@@ -200,6 +230,8 @@ class VisualizationNode(Node):
                 )
 
     def _decode_color(self, msg) -> np.ndarray:
+        """Decode raw or compressed color into the BGR layout expected by Qt."""
+
         if isinstance(msg, Image):
             return self._bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
         img = self._bridge.compressed_imgmsg_to_cv2(msg, desired_encoding="passthrough")
@@ -208,6 +240,13 @@ class VisualizationNode(Node):
         return img
 
     def _decode_depth(self, msg) -> np.ndarray:
+        """Decode raw and compressed-depth variants into one scalar image.
+
+        cv_bridge handles standard compressed images. Some compressed-depth
+        publishers expose a payload that only OpenCV can decode, so that path is a
+        compatibility fallback rather than the normal decoder.
+        """
+
         if isinstance(msg, Image):
             return self._bridge.imgmsg_to_cv2(msg, desired_encoding="16UC1")
         try:
@@ -217,6 +256,8 @@ class VisualizationNode(Node):
                     return cv2.cvtColor(depth_img, cv2.COLOR_BGR2GRAY)
                 return depth_img
         except Exception:
+            # Continue to the raw OpenCV decoder; callback logging reports a failure
+            # only if both transport representations are unusable.
             pass
         data = np.frombuffer(msg.data, dtype=np.uint8)
         depth_img = cv2.imdecode(data, cv2.IMREAD_UNCHANGED)

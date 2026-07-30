@@ -1,4 +1,4 @@
-visualization_ros2:
+visualization:
   ros__parameters:
     front_color_topic: "/camera/front/color/image_raw"
     front_depth_topic: "/camera/front/aligned_depth_to_color/image_raw"
