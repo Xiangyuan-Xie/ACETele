@@ -2,12 +2,11 @@ ace_robot_node:
   ros__parameters:
     control_rate: 100.0
     publish_rate: 100.0
-    heartbeat_timeout: 1.0
-    sync_status_timeout: 0.5
+    heartbeat_timeout: 0.1
     follower_state_timeout: 0.5
     sync_position_tolerance: 0.03
     sync_stable_duration: 0.2
     sync_profile_velocity: 2.0
     sync_profile_acceleration: 3.0
-    ready_lock_rate: 20.0
-    ready_resync_threshold: 0.08
+    end_effector_publish_threshold: 0.001
+    end_effector_keepalive: 0.1

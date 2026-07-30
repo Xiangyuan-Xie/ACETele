@@ -1,0 +1,1 @@
+"""ACEFollower model assets."""

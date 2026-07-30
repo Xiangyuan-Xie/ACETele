@@ -1,0 +1,1 @@
+"""ACELeader model assets."""

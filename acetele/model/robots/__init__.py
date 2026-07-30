@@ -1,0 +1,1 @@
+"""Packaged robot model assets."""

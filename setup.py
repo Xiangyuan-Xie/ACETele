@@ -44,13 +44,19 @@ setup(
     ),
     include_package_data=False,
     package_data={
-        "acetele.config": ["*.toml"],
-        "acetele.robot.ace_follower": ["description/*.urdf", "description/meshes/*.STL"],
-        "acetele.robot.ace_leader": ["description/*.urdf", "description/*.xml", "description/meshes/*.STL"],
+        "acetele.config": ["ace_leader/*.toml", "ace_follower/*.toml"],
+        "acetele.model.robots.ace_follower": [
+            "description/*.urdf",
+            "description/meshes/*.STL",
+        ],
+        "acetele.model.robots.ace_leader": [
+            "description/*.urdf",
+            "description/*.xml",
+            "description/meshes/*.STL",
+        ],
     },
-    python_requires=">=3.9",
+    python_requires=">=3.10",
     install_requires=[
-        "h5py",
         "loguru",
         "numpy",
         "pin",

@@ -4,13 +4,13 @@ import sys
 import zipfile
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+project_root = Path(__file__).resolve().parents[1]
 
 
 def setup_py_value(option: str) -> str:
     result = subprocess.run(
         [sys.executable, "setup.py", option],
-        cwd=ROOT,
+        cwd=project_root,
         check=True,
         capture_output=True,
         text=True,
@@ -27,9 +27,9 @@ def test_legacy_setup_py_exposes_project_metadata():
 def _copy_isolated_wheel_source(destination: Path) -> None:
     destination.mkdir()
     for filename in ("LICENSE", "README.md", "pyproject.toml", "setup.py"):
-        shutil.copy2(ROOT / filename, destination / filename)
+        shutil.copy2(project_root / filename, destination / filename)
 
-    source_package = ROOT / "acetele"
+    source_package = project_root / "acetele"
     destination_package = destination / "acetele"
     copied_suffixes = {".py", ".toml", ".urdf", ".xml"}
     for source_file in source_package.rglob("*"):
@@ -48,7 +48,8 @@ def _copy_isolated_wheel_source(destination: Path) -> None:
     for robot_type in ("ace_leader", "ace_follower"):
         mesh = (
             destination_package
-            / "robot"
+            / "model"
+            / "robots"
             / robot_type
             / "description"
             / "meshes"
@@ -109,17 +110,35 @@ def test_isolated_wheel_contains_runtime_files_without_excluded_sources(tmp_path
         files = set(wheel.namelist())
 
     assert {
-        "acetele/config/ace_follower.toml",
-        "acetele/config/robot_config.py",
-        "acetele/equipment/dexterous_hands/o6.py",
-        "acetele/equipment/feetech/arm.py",
-        "acetele/equipment/feetech/state_estimator.py",
-        "acetele/equipment/joint_device.py",
-        "acetele/robot/ace_follower/description/ace_follower.urdf",
-        "acetele/robot/ace_follower/description/meshes/link_1.STL",
-        "acetele/robot/ace_leader/description/ace_leader.xml",
-        "acetele/robot/joint_robot.py",
+        "acetele/config/ace_follower/feetech_sms_rs485.toml",
+        "acetele/config/ace_follower/fashionstar_rs485.toml",
+        "acetele/config/ace_follower/feetech_hls_ttl.toml",
+        "acetele/config/ace_leader/feetech_hls_ttl.toml",
+        "acetele/config/spec_loader.py",
+        "acetele/config/specs.py",
+        "acetele/control/position_pipeline.py",
+        "acetele/core/contracts.py",
+        "acetele/hardware/dexterous_hands/linker_hand/protocol.py",
+        "acetele/hardware/joystick/driver.py",
+        "acetele/hardware/serial/actor.py",
+        "acetele/hardware/smart_servos/fashionstar/protocol.py",
+        "acetele/hardware/smart_servos/feetech/packet_protocol.py",
+        "acetele/hardware/state_estimator.py",
+        "acetele/model/urdf.py",
+        "acetele/model/robots/ace_follower/description/ace_follower.urdf",
+        "acetele/model/robots/ace_follower/description/meshes/link_1.STL",
+        "acetele/model/robots/ace_leader/description/ace_leader.xml",
+        "acetele/runtime/robot_runtime.py",
+        "acetele/runtime/follower_session.py",
+        "acetele/runtime/leader_session.py",
+        "acetele/deploy/ace_robot_ros2/ace_robot_ros2/runtime_follower_node.py",
+        "acetele/deploy/ace_robot_ros2/ace_robot_ros2/runtime_leader_node.py",
+        "acetele/deploy/ace_robot_ros2/ace_robot_ros2/spec_validation.py",
+        "acetele/tools/check_robot_spec.py",
+        "acetele/tools/calibrate_feetech_home.py",
     }.issubset(files)
     assert all(not path.startswith(("build/", "tests/")) for path in files)
     assert all("/px4_msgs/" not in path for path in files)
     assert all("/realsense-ros/" not in path for path in files)
+    assert all(not path.startswith("acetele/equipment/") for path in files)
+    assert all(not path.startswith("acetele/robot/") for path in files)

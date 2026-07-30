@@ -17,9 +17,8 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent"
 ]
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
-    "h5py",
     "loguru",
     "numpy",
     "pin",
@@ -43,9 +42,9 @@ exclude = [
 ]
 
 [tool.setuptools.package-data]
-"acetele.config" = ["*.toml"]
-"acetele.robot.ace_follower" = ["description/*.urdf", "description/meshes/*.STL"]
-"acetele.robot.ace_leader" = ["description/*.urdf", "description/*.xml", "description/meshes/*.STL"]
+"acetele.config" = ["ace_leader/*.toml", "ace_follower/*.toml"]
+"acetele.model.robots.ace_follower" = ["description/*.urdf", "description/meshes/*.STL"]
+"acetele.model.robots.ace_leader" = ["description/*.urdf", "description/*.xml", "description/meshes/*.STL"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
