@@ -275,6 +275,7 @@ external_estop = true
 
 [arms.single]
 bus = "arm"
+tool_frame = "link_5"
 
 [[arms.single.joints]]
 name = "joint_1"
@@ -306,6 +307,7 @@ RS485 型号不会套用近似型号常数。
 | `buses.<name>.external_estop` | 已实际配备独立硬件急停；无法验证关断的物理总线必须为 `true` |
 | `buses.<name>.allow_unverified_identity` | 明确接受协议无法读取产品型号；仅在人工核对硬件后设置 |
 | `arms.<name>.bus` | 机械臂所属总线 |
+| `arms.<name>.tool_frame` | 末端位姿控制使用的 URDF TCP link；`ee_pose` 模式必须配置 |
 | `arms.<name>.joints` | 按 URDF 顺序声明的关节列表 |
 | `joint.name` | URDF/ROS 2 运动学名称 |
 | `joint.servo_id` | 厂商总线地址 |
@@ -362,10 +364,32 @@ ros2 launch data_collector_ros2 data_collector.launch.py
 ros2 launch visualization_ros2 visualization.launch.py
 ```
 
+默认 `teleop_mode:=joint` 保持关节空间遥操作。末端位姿遥操作需要在 Leader 和 Follower
+两侧使用相同模式启动：
+
+```bash
+ros2 launch ace_robot_ros2 ace_robot.launch.py \
+  config_path:="$PWD/acetele/config/ace_follower/feetech_hls_ttl.toml" \
+  teleop_mode:=ee_pose translation_scale:=2.0 rotation_scale:=1.0
+```
+
+同步阶段仍使用关节位置；进入 `TRACKING` 后，第一帧 `PoseStamped` 建立 Leader/Follower
+末端相对锚点，不产生位置跳变。之后 Leader 平移按 `2.0` 倍映射，旋转按 `1.0` 倍映射。
+当前 4-DOF 机械臂无法精确跟踪任意六维 SE(3) 位姿，因此逆运动学优先跟踪可达平移，
+再在剩余零空间中减小姿态误差。该模式不会绕过 URDF 限位、命令 deadline、同步心跳或
+总线安全状态机。
+
+通用输入 `/ace_teleop/arm/ee_pose/command` 使用 `geometry_msgs/PoseStamped` 和
+`BEST_EFFORT + KEEP_LAST(1)`；Follower 实际 TCP 位姿发布到
+`/ace_follower/arm/ee_pose/state`。后续 VR 只需作为该输入话题的唯一有效发布者，并提供
+稳定、非空的参考坐标系；Follower 的映射和 IK 路径无需修改。
+
 常见 topic：
 
 - `/ace_leader/arm/command`
+- `/ace_teleop/arm/ee_pose/command`
 - `/ace_follower/arm/state`
+- `/ace_follower/arm/ee_pose/state`
 - `/ace_leader/gripper/command`
 - `/ace_follower/gripper/state`
 - `/ace_leader/arm/sync_mode`

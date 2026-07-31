@@ -287,6 +287,7 @@ external_estop = true
 
 [arms.single]
 bus = "arm"
+tool_frame = "link_5"
 
 [[arms.single.joints]]
 name = "joint_1"
@@ -321,6 +322,7 @@ Key fields:
 | `buses.<name>.external_estop` | Declares a real independent hardware stop; required for physical buses without verified disable |
 | `buses.<name>.allow_unverified_identity` | Explicitly accepts a protocol without readable product identity after manual hardware verification |
 | `arms.<name>.bus` | Bus used by the arm |
+| `arms.<name>.tool_frame` | URDF TCP link used by Cartesian control; required by `ee_pose` mode |
 | `arms.<name>.joints` | Joints declared in URDF order |
 | `joint.name` | URDF/ROS 2 kinematic name |
 | `joint.servo_id` | Vendor bus address |
@@ -379,10 +381,34 @@ ros2 launch data_collector_ros2 data_collector.launch.py
 ros2 launch visualization_ros2 visualization.launch.py
 ```
 
+The default `teleop_mode:=joint` preserves joint-space teleoperation. Start both Leader and Follower
+with the same mode to use end-effector pose teleoperation:
+
+```bash
+ros2 launch ace_robot_ros2 ace_robot.launch.py \
+  config_path:="$PWD/acetele/config/ace_follower/feetech_hls_ttl.toml" \
+  teleop_mode:=ee_pose translation_scale:=2.0 rotation_scale:=1.0
+```
+
+Synchronization remains joint-based. Once `TRACKING` begins, the first `PoseStamped` captures the
+Leader/Follower relative tool anchors without causing a command jump. Subsequent Leader translation
+is mapped by `2.0`, while rotation is mapped by `1.0`. A four-DOF arm cannot reproduce an arbitrary
+six-dimensional SE(3) pose, so inverse kinematics tracks reachable translation first and reduces
+orientation error in the remaining nullspace. URDF limits, command deadlines, synchronization
+heartbeats, and the bus safety state machine remain active.
+
+The generic `/ace_teleop/arm/ee_pose/command` input uses `geometry_msgs/PoseStamped` with
+`BEST_EFFORT + KEEP_LAST(1)`. The Follower publishes its measured TCP pose on
+`/ace_follower/arm/ee_pose/state`. A future VR source only needs to become the sole active publisher
+of the command topic and provide a stable, non-empty reference frame; Follower mapping and IK do not
+change.
+
 Common topics:
 
 - `/ace_leader/arm/command`
+- `/ace_teleop/arm/ee_pose/command`
 - `/ace_follower/arm/state`
+- `/ace_follower/arm/ee_pose/state`
 - `/ace_leader/gripper/command`
 - `/ace_follower/gripper/state`
 - `/ace_leader/arm/sync_mode`
