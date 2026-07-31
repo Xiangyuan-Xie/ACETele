@@ -3,9 +3,16 @@
 from __future__ import annotations
 
 from types import MappingProxyType
-from typing import Mapping, Sequence
+from typing import Mapping, Optional, Sequence
 
-from acetele.core import JointCommand, RobotCommand, RobotState
+from acetele.control import (
+    CartesianTeleopController,
+    CartesianTeleopDiagnostics,
+    CartesianTeleopTuning,
+    TeleopMode,
+)
+from acetele.core import EndEffectorPose, JointCommand, RobotCommand, RobotState
+from acetele.model import ArmKinematics
 from acetele.runtime.robot_runtime import RobotRuntime
 from acetele.runtime.safety import RuntimeSafetyState
 from acetele.utils.teleop_sync import (
@@ -24,6 +31,11 @@ class FollowerTeleopSession:
         *,
         heartbeat_timeout_ns: int = 100_000_000,
         command_deadline_ns: int = 50_000_000,
+        teleop_mode: TeleopMode = TeleopMode.JOINT,
+        translation_scale: float = 2.0,
+        rotation_scale: float = 1.0,
+        cartesian_tuning: CartesianTeleopTuning = CartesianTeleopTuning(),
+        cartesian_controller: Optional[CartesianTeleopController] = None,
     ) -> None:
         if not isinstance(runtime, RobotRuntime):
             raise ValueError("follower session requires a RobotRuntime")
@@ -38,6 +50,10 @@ class FollowerTeleopSession:
                 "follower heartbeat timeout must match the runtime command timeout"
             )
         self.runtime = runtime
+        try:
+            self.teleop_mode = TeleopMode(teleop_mode)
+        except ValueError as exc:
+            raise ValueError("teleop_mode must be 'joint' or 'ee_pose'") from exc
         self._sync = FollowerSyncController(heartbeat_timeout_ns)
         # Freeze routing metadata at construction. Runtime commands can then be
         # validated and partitioned without consulting mutable ROS messages.
@@ -67,6 +83,13 @@ class FollowerTeleopSession:
                 for group_name in runtime.joint_groups
             }
         )
+        self._cartesian_controller = self._resolve_cartesian_controller(
+            cartesian_controller,
+            translation_scale=translation_scale,
+            rotation_scale=rotation_scale,
+            tuning=cartesian_tuning,
+        )
+        self._latest_state: Optional[RobotState] = None
 
     @property
     def mode(self) -> LeaderSyncMode:
@@ -107,6 +130,7 @@ class FollowerTeleopSession:
         """Read state and enforce synchronization heartbeat timeout."""
 
         state = self.runtime.read()
+        self._latest_state = state
         self.update(now_ns=now_ns)
         return state
 
@@ -117,6 +141,7 @@ class FollowerTeleopSession:
             raise ValueError("follower mode must be a LeaderSyncMode")
         if mode == self._sync.mode:
             return
+        self._reset_cartesian_cycle()
         safety_state = self.runtime.diagnostics().safety.state
         # Translate network-level synchronization into the stricter runtime lifecycle.
         # The sync controller is updated only after the hardware action succeeds.
@@ -160,7 +185,7 @@ class FollowerTeleopSession:
     ) -> bool:
         """Submit the arm heartbeat command for the current synchronization cycle."""
 
-        if not self._sync.command_allowed:
+        if self.teleop_mode != TeleopMode.JOINT or not self._sync.command_allowed:
             return False
         commands = self._commands_for_groups(
             self._arm_names,
@@ -172,6 +197,62 @@ class FollowerTeleopSession:
         # Heartbeat is refreshed only after runtime validation and actor staging succeed.
         self._sync.accept_command(now_ns)
         return True
+
+    def write_arm_pose(
+        self,
+        pose: EndEffectorPose,
+        *,
+        now_ns: int,
+    ) -> bool:
+        """Map one source TCP pose into a bounded arm command and refresh heartbeat."""
+
+        if self.teleop_mode != TeleopMode.EE_POSE or not self._sync.command_allowed:
+            return False
+        if self._cartesian_controller is None:
+            raise RuntimeError("Cartesian controller is unavailable")
+        if self._latest_state is None:
+            return False
+        group_name = self._arm_groups[0]
+        current = self._latest_state.joints[group_name].positions
+        result = self._cartesian_controller.solve(
+            pose,
+            current,
+            timestamp_ns=now_ns,
+        )
+        commands = self._commands_for_groups(
+            {group_name: self._arm_names[group_name]},
+            self._arm_names[group_name],
+            result.positions,
+            now_ns=now_ns,
+        )
+        self.runtime.write(RobotCommand(commands))
+        self._sync.accept_command(now_ns)
+        return True
+
+    def end_effector_pose(
+        self,
+        state: RobotState,
+        *,
+        timestamp_ns: int,
+    ) -> EndEffectorPose:
+        """Return the measured follower TCP pose for feedback and diagnostics."""
+
+        if self.teleop_mode != TeleopMode.EE_POSE or self._cartesian_controller is None:
+            raise RuntimeError("follower end-effector pose is available only in ee_pose mode")
+        if not isinstance(state, RobotState):
+            raise ValueError("follower pose requires a RobotState")
+        group_name = self._arm_groups[0]
+        return self._cartesian_controller.kinematics.forward(
+            state.joints[group_name].positions,
+            timestamp_ns=timestamp_ns,
+        )
+
+    def cartesian_diagnostics(self) -> Optional[CartesianTeleopDiagnostics]:
+        """Return the immutable most recent Cartesian solve diagnostics."""
+
+        if self._cartesian_controller is None:
+            return None
+        return self._cartesian_controller.diagnostics()
 
     def write_end_effector(
         self,
@@ -207,6 +288,7 @@ class FollowerTeleopSession:
         previous = self._sync.status
         current = self._sync.update(now_ns)
         if previous == FollowerSyncStatus.TRACKING and current == FollowerSyncStatus.LOST:
+            self._reset_cartesian_cycle()
             if self.runtime.diagnostics().safety.state != RuntimeSafetyState.HOLD:
                 self.runtime.hold()
         return current
@@ -256,6 +338,50 @@ class FollowerTeleopSession:
             )
             offset += count
         return result
+
+    def _resolve_cartesian_controller(
+        self,
+        supplied: Optional[CartesianTeleopController],
+        *,
+        translation_scale: float,
+        rotation_scale: float,
+        tuning: CartesianTeleopTuning,
+    ) -> Optional[CartesianTeleopController]:
+        """Create the one-arm Cartesian controller before any hardware is connected."""
+
+        if self.teleop_mode == TeleopMode.JOINT:
+            if supplied is not None:
+                raise ValueError("joint teleop mode does not accept a Cartesian controller")
+            return None
+        if len(self.runtime.spec.arms) != 1:
+            raise ValueError("ee_pose teleoperation currently requires exactly one arm")
+        arm = self.runtime.spec.arms[0]
+        if arm.tool_frame is None:
+            raise ValueError(
+                f"arm '{arm.name}' requires tool_frame for ee_pose teleoperation"
+            )
+        controller = supplied
+        if controller is None:
+            kinematics = ArmKinematics(
+                self.runtime.preflight.urdf_path,
+                self._arm_names[arm.name],
+                arm.tool_frame,
+            )
+            controller = CartesianTeleopController(
+                kinematics,
+                translation_scale=translation_scale,
+                rotation_scale=rotation_scale,
+                tuning=tuning,
+            )
+        if controller.kinematics.joint_names != self._arm_names[arm.name]:
+            raise ValueError("follower kinematics joint order does not match RobotSpec")
+        return controller
+
+    def _reset_cartesian_cycle(self) -> None:
+        """Invalidate relative-pose anchors whenever synchronization changes."""
+
+        if self._cartesian_controller is not None:
+            self._cartesian_controller.reset()
 
 
 __all__ = ["FollowerTeleopSession"]

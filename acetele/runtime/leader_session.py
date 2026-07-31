@@ -8,7 +8,9 @@ from typing import Optional, Sequence
 import numpy as np
 
 from acetele.config.specs import BusType
-from acetele.core import Backend, JointCommand, RobotCommand, RobotState
+from acetele.control import TeleopMode
+from acetele.core import Backend, EndEffectorPose, JointCommand, RobotCommand, RobotState
+from acetele.model import ArmKinematics
 from acetele.runtime.robot_runtime import RobotRuntime
 from acetele.runtime.safety import RuntimeSafetyState
 from acetele.utils.teleop_sync import FollowerSyncStatus, LeaderSyncMode
@@ -27,6 +29,8 @@ class LeaderTeleopSession:
         sync_velocity_limit_rad_s: float = 2.0,
         sync_acceleration_limit_rad_s2: float = 3.0,
         command_deadline_ns: int = 50_000_000,
+        teleop_mode: TeleopMode = TeleopMode.JOINT,
+        kinematics: Optional[ArmKinematics] = None,
     ) -> None:
         if not isinstance(runtime, RobotRuntime):
             raise ValueError("leader session requires a RobotRuntime")
@@ -46,6 +50,10 @@ class LeaderTeleopSession:
             if not math.isfinite(limit) or limit <= 0.0:
                 raise ValueError(f"{name} must be finite and positive")
         self.runtime = runtime
+        try:
+            self.teleop_mode = TeleopMode(teleop_mode)
+        except ValueError as exc:
+            raise ValueError("teleop_mode must be 'joint' or 'ee_pose'") from exc
         self.mode = LeaderSyncMode.IDLE
         self._follower_timeout_ns = follower_timeout_ns
         self._sync_tolerance_rad = sync_tolerance_rad
@@ -72,6 +80,7 @@ class LeaderTeleopSession:
             for group_name in self._arm_groups
             for name in self._arm_names[group_name]
         )
+        self._kinematics = self._resolve_kinematics(kinematics)
         # A slow bus may need a command lifetime longer than the network default;
         # derive it once from the runtime's validated bus schedule.
         self._command_lifetimes_ns = {
@@ -100,6 +109,24 @@ class LeaderTeleopSession:
         """Return the last status received from the follower."""
 
         return self._follower_status
+
+    def end_effector_pose(
+        self,
+        state: RobotState,
+        *,
+        timestamp_ns: int,
+    ) -> EndEffectorPose:
+        """Return the current leader TCP pose while Cartesian teleoperation is selected."""
+
+        if self.teleop_mode != TeleopMode.EE_POSE or self._kinematics is None:
+            raise RuntimeError("leader end-effector pose is available only in ee_pose mode")
+        if not isinstance(state, RobotState):
+            raise ValueError("leader pose requires a RobotState")
+        group_name = self._arm_groups[0]
+        return self._kinematics.forward(
+            state.joints[group_name].positions,
+            timestamp_ns=self._time(timestamp_ns),
+        )
 
     def connect(self) -> None:
         """Connect the owned leader runtime."""
@@ -282,6 +309,32 @@ class LeaderTeleopSession:
             self._last_follower_status_ns is not None
             and now_ns - self._last_follower_status_ns <= self._follower_timeout_ns
         )
+
+    def _resolve_kinematics(
+        self,
+        supplied: Optional[ArmKinematics],
+    ) -> Optional[ArmKinematics]:
+        """Build and validate the single-arm model required only by ee_pose mode."""
+
+        if self.teleop_mode == TeleopMode.JOINT:
+            if supplied is not None:
+                raise ValueError("joint teleop mode does not accept Cartesian kinematics")
+            return None
+        if len(self.runtime.spec.arms) != 1:
+            raise ValueError("ee_pose teleoperation currently requires exactly one arm")
+        arm = self.runtime.spec.arms[0]
+        if arm.tool_frame is None:
+            raise ValueError(
+                f"arm '{arm.name}' requires tool_frame for ee_pose teleoperation"
+            )
+        model = supplied or ArmKinematics(
+            self.runtime.preflight.urdf_path,
+            self._arm_names[arm.name],
+            arm.tool_frame,
+        )
+        if model.joint_names != self._arm_names[arm.name]:
+            raise ValueError("leader kinematics joint order does not match RobotSpec")
+        return model
 
     @staticmethod
     def _time(value: int) -> int:

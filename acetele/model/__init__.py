@@ -1,3 +1,4 @@
+from acetele.model.kinematics import ArmKinematics
 from acetele.model.urdf import (
     ArmModelMetadata,
     UrdfJoint,
@@ -7,6 +8,7 @@ from acetele.model.urdf import (
 )
 
 __all__ = [
+    "ArmKinematics",
     "ArmModelMetadata",
     "UrdfJoint",
     "UrdfModel",

@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from acetele.core import JointCommand, JointState, JointUnit, SensorState
+from acetele.core import EndEffectorPose, JointCommand, JointState, JointUnit, SensorState
 
 
 def test_joint_state_owns_read_only_vectors():
@@ -75,3 +75,28 @@ def test_sensor_state_recursively_owns_and_freezes_mapping_values():
         state.values["servo"]["firmware_version"] = 999
     with pytest.raises(ValueError):
         state.values["servo"]["temperatures"][0] = 100.0
+
+
+def test_end_effector_pose_normalizes_and_owns_vectors():
+    position = np.array([1.0, 2.0, 3.0])
+    pose = EndEffectorPose(1, "base", position, [0.0, 0.0, 0.0, -2.0])
+    position[0] = 9.0
+
+    assert pose.position_m.tolist() == [1.0, 2.0, 3.0]
+    assert pose.quaternion_xyzw.tolist() == [0.0, 0.0, 0.0, 1.0]
+    with pytest.raises(ValueError):
+        pose.position_m[0] = 0.0
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    (
+        (-1, "base", [0.0] * 3, [0.0, 0.0, 0.0, 1.0]),
+        (0, "", [0.0] * 3, [0.0, 0.0, 0.0, 1.0]),
+        (0, "base", [0.0, 0.0], [0.0, 0.0, 0.0, 1.0]),
+        (0, "base", [0.0] * 3, [0.0, 0.0, 0.0, 0.0]),
+    ),
+)
+def test_end_effector_pose_rejects_invalid_contract(arguments):
+    with pytest.raises(ValueError):
+        EndEffectorPose(*arguments)

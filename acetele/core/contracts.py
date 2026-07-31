@@ -131,6 +131,46 @@ class JointState:
 
 
 @dataclass(frozen=True)
+class EndEffectorPose:
+    """Immutable Cartesian pose expressed in one named reference frame.
+
+    The quaternion uses ROS-compatible ``(x, y, z, w)`` order. It is normalized and
+    canonicalized so equivalent inputs with opposite signs have one stable
+    representation at transport and diagnostic boundaries.
+    """
+
+    timestamp_ns: int
+    frame_id: str
+    position_m: np.ndarray
+    quaternion_xyzw: np.ndarray
+
+    def __post_init__(self) -> None:
+        if type(self.timestamp_ns) is not int or self.timestamp_ns < 0:
+            raise ValueError("end-effector pose timestamp_ns must be a non-negative integer")
+        if not isinstance(self.frame_id, str) or not self.frame_id.strip():
+            raise ValueError("end-effector pose frame_id must be a non-empty string")
+        position = _readonly_vector(
+            self.position_m,
+            field_name="end-effector pose position_m",
+            length=3,
+        )
+        quaternion = np.asarray(self.quaternion_xyzw, dtype=float).copy()
+        if quaternion.shape != (4,) or not np.all(np.isfinite(quaternion)):
+            raise ValueError(
+                "end-effector pose quaternion_xyzw must contain four finite values"
+            )
+        norm = float(np.linalg.norm(quaternion))
+        if norm <= np.finfo(float).eps:
+            raise ValueError("end-effector pose quaternion_xyzw must have non-zero norm")
+        quaternion /= norm
+        if quaternion[3] < 0.0:
+            quaternion *= -1.0
+        quaternion.setflags(write=False)
+        object.__setattr__(self, "position_m", position)
+        object.__setattr__(self, "quaternion_xyzw", quaternion)
+
+
+@dataclass(frozen=True)
 class JointCommand:
     """A bounded-lifetime joint target tied to one runtime generation.
 

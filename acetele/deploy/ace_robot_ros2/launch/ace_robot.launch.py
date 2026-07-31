@@ -6,6 +6,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description():
@@ -30,12 +31,44 @@ def generate_launch_description():
                 default_value=default_robot_config,
                 description="Path to an ACETele RobotSpec TOML file.",
             ),
+            DeclareLaunchArgument(
+                "teleop_mode",
+                default_value="joint",
+                description="Arm command mode: joint or ee_pose.",
+            ),
+            DeclareLaunchArgument(
+                "translation_scale",
+                default_value="2.0",
+                description="Relative source-to-follower translation scale.",
+            ),
+            DeclareLaunchArgument(
+                "rotation_scale",
+                default_value="1.0",
+                description="Relative source-to-follower rotation scale.",
+            ),
             Node(
                 package="ace_robot_ros2",
                 executable="ace_robot_node",
                 name="ace_robot_node",
                 output="screen",
-                parameters=[config, {"config_path": LaunchConfiguration("config_path")}],
+                parameters=[
+                    config,
+                    {
+                        "config_path": LaunchConfiguration("config_path"),
+                        "teleop_mode": ParameterValue(
+                            LaunchConfiguration("teleop_mode"),
+                            value_type=str,
+                        ),
+                        "translation_scale": ParameterValue(
+                            LaunchConfiguration("translation_scale"),
+                            value_type=float,
+                        ),
+                        "rotation_scale": ParameterValue(
+                            LaunchConfiguration("rotation_scale"),
+                            value_type=float,
+                        ),
+                    },
+                ],
             ),
         ]
     )

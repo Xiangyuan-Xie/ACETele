@@ -6,6 +6,7 @@ import time
 from typing import Optional
 
 import numpy as np
+from geometry_msgs.msg import PoseStamped
 from px4_msgs.msg import ArmJointState
 from rclpy.node import Node
 from rclpy.qos import (
@@ -18,9 +19,11 @@ from sensor_msgs.msg import JointState as ROSJointState
 from std_msgs.msg import String
 
 from acetele.config.specs import DexterousHandSpec, RobotSpec
+from acetele.control import TeleopMode
 from acetele.runtime import FollowerTeleopSession, RobotRuntime
 from acetele.utils.teleop_sync import LeaderSyncMode
 
+from .pose_messages import pose_from_message, pose_message
 from .spec_validation import validate_ros2_robot_spec
 
 
@@ -44,10 +47,24 @@ class RuntimeFollowerNode(Node):
             super().__init__("ace_follower_robot_node")
             node_initialized = True
             self.declare_parameter("heartbeat_timeout", 0.1)
+            self.declare_parameter("teleop_mode", TeleopMode.JOINT.value)
+            self.declare_parameter("translation_scale", 2.0)
+            self.declare_parameter("rotation_scale", 1.0)
             heartbeat_timeout = float(self.get_parameter("heartbeat_timeout").value)
             if not np.isfinite(heartbeat_timeout) or heartbeat_timeout <= 0.0:
                 raise ValueError("heartbeat_timeout must be finite and positive")
             heartbeat_timeout_ns = round(heartbeat_timeout * 1e9)
+            try:
+                teleop_mode = TeleopMode(str(self.get_parameter("teleop_mode").value))
+            except ValueError as exc:
+                raise ValueError("teleop_mode must be 'joint' or 'ee_pose'") from exc
+            translation_scale = float(self.get_parameter("translation_scale").value)
+            rotation_scale = float(self.get_parameter("rotation_scale").value)
+            if any(
+                not np.isfinite(value) or value <= 0.0
+                for value in (translation_scale, rotation_scale)
+            ):
+                raise ValueError("Cartesian teleop scales must be finite and positive")
             runtime = RobotRuntime(
                 spec,
                 command_timeout_ns=heartbeat_timeout_ns,
@@ -55,6 +72,9 @@ class RuntimeFollowerNode(Node):
             self._session = FollowerTeleopSession(
                 runtime,
                 heartbeat_timeout_ns=heartbeat_timeout_ns,
+                teleop_mode=teleop_mode,
+                translation_scale=translation_scale,
+                rotation_scale=rotation_scale,
             )
             self._session.connect()
             session_connected = True
@@ -118,6 +138,13 @@ class RuntimeFollowerNode(Node):
             "/ace_follower/arm/state",
             stream_qos,
         )
+        self._ee_pose_state_pub = None
+        if self._session.teleop_mode == TeleopMode.EE_POSE:
+            self._ee_pose_state_pub = self.create_publisher(
+                PoseStamped,
+                "/ace_follower/arm/ee_pose/state",
+                stream_qos,
+            )
         self._end_effector_state_pub = self.create_publisher(
             ROSJointState,
             state_topic,
@@ -133,12 +160,22 @@ class RuntimeFollowerNode(Node):
             "/fmu/in/arm_joint_state",
             QoSProfile(depth=10),
         )
-        self._arm_command_sub = self.create_subscription(
-            ROSJointState,
-            "/ace_leader/arm/command",
-            self._arm_command_callback,
-            stream_qos,
-        )
+        self._arm_command_sub = None
+        self._ee_pose_command_sub = None
+        if self._session.teleop_mode == TeleopMode.JOINT:
+            self._arm_command_sub = self.create_subscription(
+                ROSJointState,
+                "/ace_leader/arm/command",
+                self._arm_command_callback,
+                stream_qos,
+            )
+        else:
+            self._ee_pose_command_sub = self.create_subscription(
+                PoseStamped,
+                "/ace_teleop/arm/ee_pose/command",
+                self._ee_pose_command_callback,
+                stream_qos,
+            )
         self._end_effector_command_sub = self.create_subscription(
             ROSJointState,
             command_topic,
@@ -172,6 +209,16 @@ class RuntimeFollowerNode(Node):
             )
         except (RuntimeError, ValueError) as exc:
             self.get_logger().warn(f"Ignoring invalid arm command: {exc}")
+
+    def _ee_pose_command_callback(self, message: PoseStamped) -> None:
+        """Convert and submit one generic Cartesian source sample without timer delay."""
+
+        now_ns = time.monotonic_ns()
+        try:
+            pose = pose_from_message(message, timestamp_ns=now_ns)
+            self._session.write_arm_pose(pose, now_ns=now_ns)
+        except (RuntimeError, ValueError) as exc:
+            self.get_logger().warn(f"Ignoring invalid end-effector pose command: {exc}")
 
     def _end_effector_command_callback(self, message: ROSJointState) -> None:
         """Submit end-effector motion only through the session's heartbeat gate."""
@@ -232,6 +279,14 @@ class RuntimeFollowerNode(Node):
             arm_velocities,
             arm_efforts,
         )
+        if self._session.teleop_mode == TeleopMode.EE_POSE:
+            pose = self._session.end_effector_pose(
+                state,
+                timestamp_ns=time.monotonic_ns(),
+            )
+            if self._ee_pose_state_pub is None:
+                raise RuntimeError("ee_pose state publisher was not initialized")
+            self._ee_pose_state_pub.publish(pose_message(pose, now.to_msg()))
 
         if self._end_effector_groups:
             end_state = state.joints[self._end_effector_groups[0]]

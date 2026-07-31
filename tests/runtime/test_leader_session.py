@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 
 from acetele.config.specs import ArmSpec, BusSpec, BusType, JointSpec, RobotSpec
+from acetele.control import TeleopMode
 from acetele.core import Backend
 from acetele.runtime import LeaderTeleopSession, RobotRuntime, RuntimeSafetyState
 from acetele.utils.teleop_sync import FollowerSyncStatus, LeaderSyncMode
@@ -182,3 +183,42 @@ def test_landing_edge_stops_leader_after_airborne_state(monkeypatch):
 def test_landed_state_requires_a_real_boolean(landed):
     with pytest.raises(ValueError, match="boolean"):
         _session().observe_landed(landed)
+
+
+def test_leader_cartesian_mode_exposes_tool_pose_from_current_state():
+    joints = tuple(
+        JointSpec(f"joint_{index}", index - 1, "HL3915", 1, 0.0)
+        for index in range(1, 5)
+    )
+    spec = RobotSpec(
+        "ace_leader",
+        (
+            BusSpec(
+                "arm",
+                BusType.FEETECH_PACKET,
+                "mock://cartesian-leader",
+                1_000_000,
+                100.0,
+                physical_layer="ttl",
+                family="hls",
+            ),
+        ),
+        (ArmSpec("single", "arm", joints, tool_frame="link_5"),),
+        backend=Backend.MOCK,
+        urdf_path=str(urdf_path),
+    )
+    session = LeaderTeleopSession(
+        RobotRuntime(spec),
+        teleop_mode=TeleopMode.EE_POSE,
+    )
+    session.connect()
+    try:
+        _wait_for_state(session)
+        state = session.runtime.read()
+        pose = session.end_effector_pose(state, timestamp_ns=7)
+
+        assert pose.timestamp_ns == 7
+        assert pose.frame_id == "base_link"
+        assert np.all(np.isfinite(pose.position_m))
+    finally:
+        session.close()

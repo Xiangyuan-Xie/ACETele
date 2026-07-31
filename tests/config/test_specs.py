@@ -141,3 +141,11 @@ def test_end_effector_specs_reject_noninvertible_or_reserved_addresses():
         ParallelGripperSpec("arm", _joint(), 3.141592653589793)
     with pytest.raises(ValueError, match=r"\[1, 247\]"):
         DexterousHandSpec("hand", "linker", "O6", "right", 0)
+
+
+def test_arm_tool_frame_is_explicit_and_strict_when_configured():
+    arm = ArmSpec("single", "arm", (_joint(),), tool_frame="link_5")
+    assert arm.tool_frame == "link_5"
+
+    with pytest.raises(ValueError, match="tool_frame"):
+        ArmSpec("single", "arm", (_joint(),), tool_frame="")

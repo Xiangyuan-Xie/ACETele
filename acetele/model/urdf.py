@@ -52,8 +52,18 @@ class UrdfModel:
 
     path: Path
     root_link: str
+    links: tuple[str, ...]
     joints: Mapping[str, UrdfJoint]
     movable_joint_order: tuple[str, ...]
+
+    def require_frame(self, frame_name: str) -> str:
+        """Require a link frame that can serve as a Cartesian control frame."""
+
+        if not isinstance(frame_name, str) or not frame_name.strip():
+            raise ValueError("URDF frame name must be a non-empty string")
+        if frame_name not in self.links:
+            raise ValueError(f"URDF is missing configured tool frame '{frame_name}'")
+        return frame_name
 
     def arm_metadata(
         self,
@@ -185,7 +195,7 @@ def load_urdf_model(path: str | Path) -> UrdfModel:
     visit(root_link)
     if len(visited_joints) != len(joints):
         raise ValueError("URDF contains joints disconnected from its root link")
-    return UrdfModel(path, root_link, MappingProxyType(joints), tuple(order))
+    return UrdfModel(path, root_link, links, MappingProxyType(joints), tuple(order))
 
 
 def build_reduced_pinocchio_model(

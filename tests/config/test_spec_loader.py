@@ -35,6 +35,7 @@ family = "hls"
 
 [arms.single]
 bus = "arm"
+tool_frame = "link_2"
 
 [[arms.single.joints]]
 name = "joint_1"
@@ -65,6 +66,7 @@ home_position_rad = 0.0
     assert spec.buses[0].type == BusType.FEETECH_PACKET
     assert spec.urdf_path == str((tmp_path / "robot.urdf").resolve())
     assert spec.arms[0].joints[0].expected_model_number == 123
+    assert spec.arms[0].tool_frame == "link_2"
     assert isinstance(spec.arms[0].end_effector, ParallelGripperSpec)
 
 
@@ -90,6 +92,7 @@ def test_packaged_hls_ttl_configs_preserve_physical_topology():
     )
     assert tuple(joint.direction for joint in leader.arms[0].joints) == (1, -1, -1, -1)
     assert leader.arms[0].control.adaptive_position
+    assert leader.arms[0].tool_frame == "link_5"
     assert not leader.arms[0].control.gravity_position
     assert isinstance(leader.arms[0].end_effector, ParallelGripperSpec)
     assert leader.arms[0].end_effector.travel_range_rad == pytest.approx(0.7853981633974483)
@@ -99,6 +102,7 @@ def test_packaged_hls_ttl_configs_preserve_physical_topology():
     assert follower.buses[0].physical_layer == "ttl"
     assert follower.buses[0].family == "hls"
     assert follower.buses[0].allow_unverified_identity
+    assert follower.arms[0].tool_frame == "link_5"
     assert tuple(joint.servo_id for joint in follower.arms[0].joints) == (0, 1, 2, 3)
     assert tuple(joint.servo_model for joint in follower.arms[0].joints) == (
         "HL3960",

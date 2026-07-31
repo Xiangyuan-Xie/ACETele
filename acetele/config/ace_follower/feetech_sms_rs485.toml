@@ -15,6 +15,7 @@ external_estop = true
 
 [arms.single]
 bus = "arm"
+tool_frame = "link_5"
 
 [[arms.single.joints]]
 name = "joint_1"

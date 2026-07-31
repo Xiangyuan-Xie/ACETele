@@ -6,6 +6,7 @@ import time
 from typing import Optional
 
 import numpy as np
+from geometry_msgs.msg import PoseStamped
 from px4_msgs.msg import VehicleLandDetected
 from rclpy.node import Node
 from rclpy.qos import (
@@ -19,9 +20,11 @@ from sensor_msgs.msg import JointState as ROSJointState
 from std_msgs.msg import String
 
 from acetele.config.specs import DexterousHandSpec, ParallelGripperSpec, RobotSpec
+from acetele.control import TeleopMode
 from acetele.runtime import LeaderTeleopSession, RobotRuntime
 from acetele.utils.teleop_sync import FollowerSyncStatus, LeaderSyncMode
 
+from .pose_messages import pose_message
 from .spec_validation import validate_ros2_robot_spec
 
 
@@ -67,6 +70,7 @@ class RuntimeLeaderNode(Node):
         self.declare_parameter("sync_profile_acceleration", 3.0)
         self.declare_parameter("end_effector_publish_threshold", 0.001)
         self.declare_parameter("end_effector_keepalive", 0.1)
+        self.declare_parameter("teleop_mode", TeleopMode.JOINT.value)
         control_rate = float(self.get_parameter("control_rate").value)
         follower_timeout = float(self.get_parameter("follower_state_timeout").value)
         sync_tolerance = float(self.get_parameter("sync_position_tolerance").value)
@@ -81,6 +85,10 @@ class RuntimeLeaderNode(Node):
         end_effector_keepalive = float(
             self.get_parameter("end_effector_keepalive").value
         )
+        try:
+            teleop_mode = TeleopMode(str(self.get_parameter("teleop_mode").value))
+        except ValueError as exc:
+            raise ValueError("teleop_mode must be 'joint' or 'ee_pose'") from exc
         values = (
             control_rate,
             follower_timeout,
@@ -102,6 +110,7 @@ class RuntimeLeaderNode(Node):
             sync_stable_ns=round(sync_stable * 1e9),
             sync_velocity_limit_rad_s=sync_velocity,
             sync_acceleration_limit_rad_s2=sync_acceleration,
+            teleop_mode=teleop_mode,
         )
         self._session.connect()
 
@@ -140,11 +149,20 @@ class RuntimeLeaderNode(Node):
             if uses_dexterous_hand
             else "/ace_leader/gripper/command"
         )
-        self._arm_command_pub = self.create_publisher(
-            ROSJointState,
-            "/ace_leader/arm/command",
-            stream_qos,
-        )
+        self._arm_command_pub = None
+        self._ee_pose_command_pub = None
+        if teleop_mode == TeleopMode.JOINT:
+            self._arm_command_pub = self.create_publisher(
+                ROSJointState,
+                "/ace_leader/arm/command",
+                stream_qos,
+            )
+        else:
+            self._ee_pose_command_pub = self.create_publisher(
+                PoseStamped,
+                "/ace_teleop/arm/ee_pose/command",
+                stream_qos,
+            )
         self._end_effector_command_pub = self.create_publisher(
             ROSJointState,
             command_topic,
@@ -238,15 +256,24 @@ class RuntimeLeaderNode(Node):
         self._publish_mode()
         if self._session.mode != LeaderSyncMode.TRACKING:
             return
-        arms = tuple(state.joints[arm.name] for arm in self._session.runtime.spec.arms)
-        self._publish_joint_state(
-            self._arm_command_pub,
-            now,
-            tuple(name for item in arms for name in item.names),
-            tuple(float(value) for item in arms for value in item.positions),
-            tuple(float(value) for item in arms for value in item.velocities),
-            tuple(float(value) for item in arms for value in item.efforts),
-        )
+        if self._session.teleop_mode == TeleopMode.EE_POSE:
+            pose = self._session.end_effector_pose(
+                state,
+                timestamp_ns=time.monotonic_ns(),
+            )
+            if self._ee_pose_command_pub is None:
+                raise RuntimeError("ee_pose publisher was not initialized")
+            self._ee_pose_command_pub.publish(pose_message(pose, now.to_msg()))
+        else:
+            arms = tuple(state.joints[arm.name] for arm in self._session.runtime.spec.arms)
+            self._publish_joint_state(
+                self._arm_command_pub,
+                now,
+                tuple(name for item in arms for name in item.names),
+                tuple(float(value) for item in arms for value in item.positions),
+                tuple(float(value) for item in arms for value in item.velocities),
+                tuple(float(value) for item in arms for value in item.efforts),
+            )
         self._publish_gripper(state, now)
 
     def _publish_mode(self) -> None:

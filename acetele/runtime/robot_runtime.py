@@ -619,6 +619,8 @@ class RobotRuntime:
         for arm in self.spec.arms:
             arm_names = tuple(joint.name for joint in arm.joints)
             metadata = urdf.arm_metadata(arm_names, require_limits=True)
+            if arm.tool_frame is not None:
+                urdf.require_frame(arm.tool_frame)
             arm_metadata[arm.name] = metadata
             combined_names = arm_names
             if isinstance(arm.end_effector, ParallelGripperSpec):

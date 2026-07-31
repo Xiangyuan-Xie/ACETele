@@ -248,6 +248,7 @@ class ArmSpec:
     joints: tuple[JointSpec, ...]
     control: ControlSpec = ControlSpec()
     end_effector: Optional[EndEffectorSpec] = None
+    tool_frame: Optional[str] = None
 
     def __post_init__(self) -> None:
         _name(self.name, field_name="arm name")
@@ -259,6 +260,8 @@ class ArmSpec:
             raise ValueError(f"arm '{self.name}' joint names must be unique")
         if len({joint.servo_id for joint in joints}) != len(joints):
             raise ValueError(f"arm '{self.name}' servo IDs must be unique")
+        if self.tool_frame is not None:
+            _name(self.tool_frame, field_name=f"arm '{self.name}' tool_frame")
         compliance = self.control.gravity_compliance_rad_per_nm
         if compliance is not None and len(compliance) != len(joints):
             raise ValueError(

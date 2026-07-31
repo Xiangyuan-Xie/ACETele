@@ -14,6 +14,7 @@ allow_unverified_identity = true
 
 [arms.single]
 bus = "arm"
+tool_frame = "link_5"
 
 [[arms.single.joints]]
 name = "joint_1"

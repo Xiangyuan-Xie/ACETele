@@ -13,7 +13,9 @@ from acetele.config.specs import (
     JointSpec,
     RobotSpec,
 )
+from acetele.control import TeleopMode
 from acetele.core import Backend
+from acetele.model import ArmKinematics
 from acetele.runtime import (
     FollowerTeleopSession,
     RobotRuntime,
@@ -85,6 +87,34 @@ def _read_until_available(session: FollowerTeleopSession) -> None:
             if time.monotonic() >= deadline:
                 raise
             time.sleep(0.001)
+
+
+def _cartesian_session() -> FollowerTeleopSession:
+    joints = tuple(
+        JointSpec(f"joint_{index}", index - 1, "HL3915", 1, 0.0)
+        for index in range(1, 5)
+    )
+    spec = RobotSpec(
+        "ace_follower",
+        (
+            BusSpec(
+                "arm",
+                BusType.FEETECH_PACKET,
+                "mock://cartesian-arm",
+                1_000_000,
+                100.0,
+                physical_layer="ttl",
+                family="hls",
+            ),
+        ),
+        (ArmSpec("single", "arm", joints, tool_frame="link_5"),),
+        backend=Backend.MOCK,
+        urdf_path=str(urdf_path),
+    )
+    return FollowerTeleopSession(
+        RobotRuntime(spec),
+        teleop_mode=TeleopMode.EE_POSE,
+    )
 
 
 def test_follower_session_requires_current_sync_cycle_arm_heartbeat():
@@ -217,3 +247,31 @@ def test_slow_end_effector_deadline_covers_its_bus_cycle_and_io_budget():
     assert command.deadline_ns - now_ns == runtime.command_lifetime_ns(group_name)
     assert command.deadline_ns - now_ns > 100_000_000
     assert runtime.command_lifetime_ns("single") == 50_000_000
+
+
+def test_cartesian_follower_accepts_pose_only_after_tracking_and_resets_on_loss():
+    session = _cartesian_session()
+    session.connect()
+    try:
+        _read_until_available(session)
+        kinematics = ArmKinematics(
+            urdf_path,
+            session.arm_names,
+            "link_5",
+        )
+        pose = kinematics.forward([0.0, 0.0, 0.0, 0.0], timestamp_ns=1)
+        now_ns = time.monotonic_ns()
+
+        assert not session.write_arm_pose(pose, now_ns=now_ns)
+        session.set_mode(LeaderSyncMode.SYNC_REQUEST)
+        session.set_mode(LeaderSyncMode.TRACKING)
+        assert not session.write_arm(session.arm_names, [0.0] * 4, now_ns=now_ns)
+        assert session.write_arm_pose(pose, now_ns=now_ns)
+        assert session.status == FollowerSyncStatus.TRACKING
+        assert session.cartesian_diagnostics() is not None
+
+        session.update(now_ns=now_ns + 100_000_001)
+        assert session.status == FollowerSyncStatus.LOST
+        assert session.cartesian_diagnostics() is None
+    finally:
+        session.close()

@@ -134,7 +134,7 @@ class RobotSpecLoader:
             )
         _reject_unknown(
             values,
-            {"bus", "joints", "control", "end_effector"},
+            {"bus", "joints", "control", "end_effector", "tool_frame"},
             path,
         )
         raw_joints = values.get("joints")
@@ -172,11 +172,12 @@ class RobotSpecLoader:
         )
         end_effector = self._parse_end_effector(values.get("end_effector"), path)
         return ArmSpec(
-            _string_value(name, "arm name"),
-            _string(values, "bus", f"{path}.bus"),
-            joints,
-            control,
-            end_effector,
+            name=_string_value(name, "arm name"),
+            bus=_string(values, "bus", f"{path}.bus"),
+            joints=joints,
+            control=control,
+            end_effector=end_effector,
+            tool_frame=_optional_string(values.get("tool_frame"), f"{path}.tool_frame"),
         )
 
     def _parse_end_effector(self, raw: Any, arm_path: str):

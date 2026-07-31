@@ -131,6 +131,33 @@ def test_leader_end_effector_throttling_is_runtime_configured():
     assert 'declare_parameter("end_effector_keepalive", 0.1)' in source
 
 
+def test_cartesian_teleop_ros_interface_is_mode_selected_and_best_effort():
+    parameters = (
+        project_root
+        / "acetele/deploy/ace_robot_ros2/config/ace_robot_params.yaml"
+    ).read_text(encoding="utf-8")
+    leader = (
+        project_root
+        / "acetele/deploy/ace_robot_ros2/ace_robot_ros2/runtime_leader_node.py"
+    ).read_text(encoding="utf-8")
+    follower = (
+        project_root
+        / "acetele/deploy/ace_robot_ros2/ace_robot_ros2/runtime_follower_node.py"
+    ).read_text(encoding="utf-8")
+    package = (
+        project_root / "acetele/deploy/ace_robot_ros2/package.xml"
+    ).read_text(encoding="utf-8")
+
+    assert "teleop_mode: joint" in parameters
+    assert "translation_scale: 2.0" in parameters
+    assert '"/ace_teleop/arm/ee_pose/command"' in leader
+    assert '"/ace_teleop/arm/ee_pose/command"' in follower
+    assert '"/ace_follower/arm/ee_pose/state"' in follower
+    assert "ReliabilityPolicy.BEST_EFFORT" in leader
+    assert "ReliabilityPolicy.BEST_EFFORT" in follower
+    assert "<depend>geometry_msgs</depend>" in package
+
+
 def _load_entry_module(monkeypatch, *, config_path="robot.toml"):
     class FakeNode:
         def __init__(self, name="node"):
