@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ace-robot-zmq"
+version = "0.2.0"
+description = "Low-latency ZeroMQ teleoperation adapter for ACETele"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+dependencies = [
+    "acetele>=0.2,<0.3",
+    "msgpack>=1.0,<2",
+    "pyzmq>=25,<28",
+]
+
+[project.scripts]
+ace-robot-zmq = "ace_robot_zmq.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["ace_robot_zmq*"]
+
+[tool.setuptools.package-data]
+ace_robot_zmq = ["ArmJointState.msg"]
