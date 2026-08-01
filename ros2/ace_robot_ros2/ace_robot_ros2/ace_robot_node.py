@@ -5,7 +5,7 @@ from pathlib import Path
 import rclpy
 from rclpy.node import Node
 
-from acetele.config.spec_loader import load_robot_spec
+from acetele.config import load_robot_spec
 
 
 def _make_robot_node(config_path: str):

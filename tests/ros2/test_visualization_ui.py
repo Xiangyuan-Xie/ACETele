@@ -3,14 +3,14 @@ from pathlib import Path
 project_root = Path(__file__).resolve().parents[2]
 window_source = (
     project_root
-    / "acetele/deploy/visualization_ros2/visualization_ros2/visualization_window.py"
+    / "ros2/visualization_ros2/visualization_ros2/visualization_window.py"
 )
 node_source = (
     project_root
-    / "acetele/deploy/visualization_ros2/visualization_ros2/visualization_node.py"
+    / "ros2/visualization_ros2/visualization_ros2/visualization_node.py"
 )
 parameter_file = (
-    project_root / "acetele/deploy/visualization_ros2/config/visualization_params.yaml"
+    project_root / "ros2/visualization_ros2/config/visualization_params.yaml"
 )
 
 

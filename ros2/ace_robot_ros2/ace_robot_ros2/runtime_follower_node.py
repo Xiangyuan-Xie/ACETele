@@ -18,10 +18,9 @@ from rclpy.qos import (
 from sensor_msgs.msg import JointState as ROSJointState
 from std_msgs.msg import String
 
-from acetele.config.specs import DexterousHandSpec, RobotSpec
-from acetele.control import TeleopMode
 from acetele.runtime import FollowerTeleopSession, RobotRuntime
-from acetele.utils.teleop_sync import LeaderSyncMode
+from acetele.runtime.teleop import LeaderSyncMode, TeleopMode
+from acetele.specification import DexterousHandSpec, RobotSpec
 
 from .pose_messages import pose_from_message, pose_message
 from .spec_validation import validate_ros2_robot_spec
@@ -158,7 +157,7 @@ class RuntimeFollowerNode(Node):
         self._px4_state_pub = self.create_publisher(
             ArmJointState,
             "/fmu/in/arm_joint_state",
-            QoSProfile(depth=10),
+            stream_qos,
         )
         self._arm_command_sub = None
         self._ee_pose_command_sub = None

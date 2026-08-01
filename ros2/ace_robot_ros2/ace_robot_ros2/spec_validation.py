@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from acetele.config.specs import RobotSpec
+from acetele.specification import RobotSpec
 
 
 def validate_ros2_robot_spec(

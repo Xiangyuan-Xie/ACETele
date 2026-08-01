@@ -4,17 +4,15 @@ import types
 from pathlib import Path
 
 import pytest
+from ace_robot_ros2.spec_validation import validate_ros2_robot_spec
 
-from acetele.config.specs import (
+from acetele.specification import (
     ArmSpec,
     BusSpec,
     BusType,
     JointSpec,
     ParallelGripperSpec,
     RobotSpec,
-)
-from acetele.deploy.ace_robot_ros2.ace_robot_ros2.spec_validation import (
-    validate_ros2_robot_spec,
 )
 
 project_root = Path(__file__).resolve().parents[2]
@@ -93,22 +91,22 @@ def test_follower_ros2_spec_validation_enforces_wire_capacity():
 
 def test_robot_launch_defaults_to_packaged_leader_hls_ttl_spec():
     source = (
-        project_root
-        / "acetele/deploy/ace_robot_ros2/launch/ace_robot.launch.py"
+        project_root / "ros2/ace_robot_ros2/launch/ace_robot.launch.py"
     ).read_text(encoding="utf-8")
 
     assert '"ace_leader"' in source
     assert '"feetech_hls_ttl.toml"' in source
+    assert 'packaged_robot_spec("ace_leader", "feetech_hls_ttl.toml")' in source
 
 
 def test_follower_heartbeat_timeout_defaults_to_one_hundred_milliseconds():
     parameters = (
         project_root
-        / "acetele/deploy/ace_robot_ros2/config/ace_robot_params.yaml"
+        / "ros2/ace_robot_ros2/config/ace_robot_params.yaml"
     ).read_text(encoding="utf-8")
     source = (
         project_root
-        / "acetele/deploy/ace_robot_ros2/ace_robot_ros2/runtime_follower_node.py"
+        / "ros2/ace_robot_ros2/ace_robot_ros2/runtime_follower_node.py"
     ).read_text(encoding="utf-8")
 
     assert "heartbeat_timeout: 0.1" in parameters
@@ -118,11 +116,11 @@ def test_follower_heartbeat_timeout_defaults_to_one_hundred_milliseconds():
 def test_leader_end_effector_throttling_is_runtime_configured():
     parameters = (
         project_root
-        / "acetele/deploy/ace_robot_ros2/config/ace_robot_params.yaml"
+        / "ros2/ace_robot_ros2/config/ace_robot_params.yaml"
     ).read_text(encoding="utf-8")
     source = (
         project_root
-        / "acetele/deploy/ace_robot_ros2/ace_robot_ros2/runtime_leader_node.py"
+        / "ros2/ace_robot_ros2/ace_robot_ros2/runtime_leader_node.py"
     ).read_text(encoding="utf-8")
 
     assert "end_effector_publish_threshold: 0.001" in parameters
@@ -131,21 +129,32 @@ def test_leader_end_effector_throttling_is_runtime_configured():
     assert 'declare_parameter("end_effector_keepalive", 0.1)' in source
 
 
+def test_leader_does_not_subscribe_to_px4_landing_state():
+    source = (
+        project_root
+        / "ros2/ace_robot_ros2/ace_robot_ros2/runtime_leader_node.py"
+    ).read_text(encoding="utf-8")
+
+    assert "VehicleLandDetected" not in source
+    assert "/fmu/out/vehicle_land_detected" not in source
+    assert "observe_landed" not in source
+
+
 def test_cartesian_teleop_ros_interface_is_mode_selected_and_best_effort():
     parameters = (
         project_root
-        / "acetele/deploy/ace_robot_ros2/config/ace_robot_params.yaml"
+        / "ros2/ace_robot_ros2/config/ace_robot_params.yaml"
     ).read_text(encoding="utf-8")
     leader = (
         project_root
-        / "acetele/deploy/ace_robot_ros2/ace_robot_ros2/runtime_leader_node.py"
+        / "ros2/ace_robot_ros2/ace_robot_ros2/runtime_leader_node.py"
     ).read_text(encoding="utf-8")
     follower = (
         project_root
-        / "acetele/deploy/ace_robot_ros2/ace_robot_ros2/runtime_follower_node.py"
+        / "ros2/ace_robot_ros2/ace_robot_ros2/runtime_follower_node.py"
     ).read_text(encoding="utf-8")
     package = (
-        project_root / "acetele/deploy/ace_robot_ros2/package.xml"
+        project_root / "ros2/ace_robot_ros2/package.xml"
     ).read_text(encoding="utf-8")
 
     assert "teleop_mode: joint" in parameters
@@ -155,6 +164,7 @@ def test_cartesian_teleop_ros_interface_is_mode_selected_and_best_effort():
     assert '"/ace_follower/arm/ee_pose/state"' in follower
     assert "ReliabilityPolicy.BEST_EFFORT" in leader
     assert "ReliabilityPolicy.BEST_EFFORT" in follower
+    assert '"/fmu/in/arm_joint_state",\n            stream_qos,' in follower
     assert "<depend>geometry_msgs</depend>" in package
 
 
@@ -178,7 +188,7 @@ def _load_entry_module(monkeypatch, *, config_path="robot.toml"):
     rclpy_node.Node = FakeNode
     monkeypatch.setitem(sys.modules, "rclpy", rclpy)
     monkeypatch.setitem(sys.modules, "rclpy.node", rclpy_node)
-    module_name = "acetele.deploy.ace_robot_ros2.ace_robot_ros2.ace_robot_node"
+    module_name = "ace_robot_ros2.ace_robot_node"
     monkeypatch.delitem(sys.modules, module_name, raising=False)
     return importlib.import_module(module_name), FakeNode, rclpy
 
@@ -208,7 +218,7 @@ def test_robot_node_dispatches_only_to_runtime_adapters(
     sentinel = object()
     monkeypatch.setattr(module, "load_robot_spec", lambda _path: spec)
     adapter_module_name = (
-        "acetele.deploy.ace_robot_ros2.ace_robot_ros2." + module_suffix
+        "ace_robot_ros2." + module_suffix
     )
     adapter_module = types.ModuleType(adapter_module_name)
     setattr(adapter_module, class_name, lambda received: sentinel if received is spec else None)

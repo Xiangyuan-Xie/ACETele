@@ -1,5 +1,4 @@
 import os
-from importlib.resources import files
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -7,6 +6,8 @@ from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
+
+from acetele.config import packaged_robot_spec
 
 
 def generate_launch_description():
@@ -18,10 +19,7 @@ def generate_launch_description():
         "ace_robot_params.yaml",
     )
     default_robot_config = str(
-        files("acetele.config").joinpath(
-            "ace_leader",
-            "feetech_hls_ttl.toml",
-        )
+        packaged_robot_spec("ace_leader", "feetech_hls_ttl.toml")
     )
 
     return LaunchDescription(

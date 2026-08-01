@@ -7,22 +7,19 @@ from typing import Optional
 
 import numpy as np
 from geometry_msgs.msg import PoseStamped
-from px4_msgs.msg import VehicleLandDetected
 from rclpy.node import Node
 from rclpy.qos import (
     DurabilityPolicy,
     HistoryPolicy,
     QoSProfile,
     ReliabilityPolicy,
-    qos_profile_sensor_data,
 )
 from sensor_msgs.msg import JointState as ROSJointState
 from std_msgs.msg import String
 
-from acetele.config.specs import DexterousHandSpec, ParallelGripperSpec, RobotSpec
-from acetele.control import TeleopMode
 from acetele.runtime import LeaderTeleopSession, RobotRuntime
-from acetele.utils.teleop_sync import FollowerSyncStatus, LeaderSyncMode
+from acetele.runtime.teleop import FollowerSyncStatus, LeaderSyncMode, TeleopMode
+from acetele.specification import DexterousHandSpec, ParallelGripperSpec, RobotSpec
 
 from .pose_messages import pose_message
 from .spec_validation import validate_ros2_robot_spec
@@ -185,12 +182,6 @@ class RuntimeLeaderNode(Node):
             self._status_callback,
             sync_qos,
         )
-        self._land_sub = self.create_subscription(
-            VehicleLandDetected,
-            "/fmu/out/vehicle_land_detected",
-            self._landed_callback,
-            qos_profile_sensor_data,
-        )
         self._last_end_effector_positions: Optional[np.ndarray] = None
         self._last_end_effector_publish_ns: Optional[int] = None
         self._timer = self.create_timer(1.0 / control_rate, self._control_loop)
@@ -220,15 +211,6 @@ class RuntimeLeaderNode(Node):
             )
         except ValueError as exc:
             self.get_logger().warn(f"Ignoring invalid follower status: {exc}")
-
-    def _landed_callback(self, message: VehicleLandDetected) -> None:
-        """Stop teleoperation on the first landing edge after airborne flight."""
-
-        try:
-            if self._session.observe_landed(bool(message.landed)):
-                self.get_logger().info("Landing detected. Teleoperation stopped.")
-        except RuntimeError as exc:
-            self.get_logger().error(f"Leader stop failed: {exc}")
 
     def _control_loop(self) -> None:
         """Advance synchronization and publish the latest leader state when tracking."""
