@@ -70,6 +70,7 @@ class UrdfModel:
         joint_names: Sequence[str],
         *,
         require_limits: bool = True,
+        require_angular: bool = True,
     ) -> ArmModelMetadata:
         """Select an arm after validating joint type, limits, and tree order."""
 
@@ -79,11 +80,13 @@ class UrdfModel:
             raise ValueError(f"URDF is missing configured joints: {missing}")
         for name in names:
             joint = self.joints[name]
-            if not joint.angular_dof:
+            if require_angular and not joint.angular_dof:
                 raise ValueError(
                     f"configured joint '{name}' must be revolute or continuous; "
                     f"got '{joint.type}'"
                 )
+            if not require_angular and joint.type == "fixed":
+                raise ValueError(f"configured joint '{name}' must be movable")
         selected = set(names)
         # Filtering canonical tree order by the selected names validates ordering
         # without requiring configured arm joints to be contiguous in the full model.

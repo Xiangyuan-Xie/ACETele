@@ -35,17 +35,15 @@ include-package-data = false
 where = ["."]
 include = ["acetele*"]
 exclude = [
-    "acetele.deploy.px4_msgs*",
-    "acetele.deploy.realsense-ros*",
     "build*",
     "tests*",
 ]
 
 [tool.setuptools.package-data]
-"acetele.config" = ["ace_leader/*.toml", "ace_follower/*.toml"]
+"acetele.config" = ["presets/ace_leader/*.toml", "presets/ace_follower/*.toml"]
 "acetele.model.robots.ace_follower" = ["description/*.urdf", "description/meshes/*.STL"]
 "acetele.model.robots.ace_leader" = ["description/*.urdf", "description/*.xml", "description/meshes/*.STL"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-norecursedirs = ["acetele/deploy/realsense-ros"]
+norecursedirs = ["third_party"]

@@ -1,7 +1,7 @@
 import shutil
 from pathlib import Path
 
-from setuptools import find_namespace_packages, setup
+from setuptools import find_packages, setup
 from setuptools.command.build import build as _build
 
 ROOT = Path(__file__).parent
@@ -32,19 +32,17 @@ setup(
     author_email="dragonboat_xxy@163.com",
     license="Apache-2.0",
     cmdclass={"build": CleanBuild},
-    packages=find_namespace_packages(
+    packages=find_packages(
         where=".",
         include=["acetele*"],
-        exclude=[
-            "acetele.deploy.px4_msgs*",
-            "acetele.deploy.realsense-ros*",
-            "build*",
-            "tests*",
-        ],
+        exclude=["build*", "tests*"],
     ),
     include_package_data=False,
     package_data={
-        "acetele.config": ["ace_leader/*.toml", "ace_follower/*.toml"],
+        "acetele.config": [
+            "presets/ace_leader/*.toml",
+            "presets/ace_follower/*.toml",
+        ],
         "acetele.model.robots.ace_follower": [
             "description/*.urdf",
             "description/meshes/*.STL",

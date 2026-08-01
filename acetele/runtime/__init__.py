@@ -1,6 +1,6 @@
-from acetele.runtime.follower_session import FollowerTeleopSession
-from acetele.runtime.leader_session import LeaderTeleopSession
-from acetele.runtime.robot_runtime import (
+from acetele.runtime.calibration import ProgressCallback, calibrate_feetech_home
+from acetele.runtime.follower_runtime import FollowerRuntime
+from acetele.runtime.robot import (
     BusPreflight,
     JointGroupInfo,
     RobotRuntime,
@@ -13,17 +13,32 @@ from acetele.runtime.safety import (
     SafetySnapshot,
     SafetyTransition,
 )
+from acetele.runtime.teleop.follower import FollowerTeleopSession
+from acetele.runtime.teleop.leader import LeaderTeleopSession
+from acetele.runtime.teleop.synchronization import (
+    FollowerSyncController,
+    FollowerSyncStatus,
+    LeaderSyncMode,
+    TeleopMode,
+)
 
 __all__ = [
     "FollowerTeleopSession",
+    "FollowerRuntime",
+    "FollowerSyncController",
+    "FollowerSyncStatus",
     "JointGroupInfo",
     "LeaderTeleopSession",
+    "LeaderSyncMode",
     "RuntimeSafetyController",
     "RuntimeSafetyState",
     "SafetySnapshot",
     "SafetyTransition",
     "BusPreflight",
+    "ProgressCallback",
     "RobotRuntime",
     "RuntimeDiagnostics",
     "RuntimePreflight",
+    "TeleopMode",
+    "calibrate_feetech_home",
 ]

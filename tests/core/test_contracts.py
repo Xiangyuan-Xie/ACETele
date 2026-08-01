@@ -4,6 +4,14 @@ import numpy as np
 import pytest
 
 from acetele.core import EndEffectorPose, JointCommand, JointState, JointUnit, SensorState
+from acetele.specification import Backend
+
+
+def test_backend_is_a_specification_not_a_domain_contract():
+    import acetele.core as core
+
+    assert not hasattr(core, "Backend")
+    assert Backend.PHYSICAL.value == "physical"
 
 
 def test_joint_state_owns_read_only_vectors():

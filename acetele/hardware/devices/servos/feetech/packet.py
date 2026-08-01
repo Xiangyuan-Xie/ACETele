@@ -1,0 +1,574 @@
+"""Actor-owned FEETECH HLS/SMS packet transactions and SI conversions."""
+
+from __future__ import annotations
+
+import math
+import time
+from dataclasses import dataclass
+from typing import Mapping, Optional, Sequence
+
+from acetele.hardware.buses import MotionEnvelope, RecoverableBusError, SerialTransport
+from acetele.hardware.devices.servos.feetech.codec import (
+    FeetechInstruction,
+    FeetechPacketCodec,
+    FeetechPacketError,
+    FeetechStatusPacket,
+)
+from acetele.hardware.devices.servos.feetech.profile import (
+    FeetechPacketFamily,
+    FeetechPacketServoProfile,
+)
+
+
+def nearest_multiturn_position_target(
+    current_position: int,
+    goal_position: int,
+    position_period: int,
+) -> int:
+    """Choose the nearest equivalent count without overflowing signed 15-bit range."""
+
+    if type(current_position) is not int or type(goal_position) is not int:
+        raise ValueError("FEETECH position counts must be integers")
+    if type(position_period) is not int or position_period <= 0 or position_period % 2:
+        raise ValueError("FEETECH position period must be a positive even integer")
+    half_period = position_period // 2
+    shortest_delta = (
+        goal_position - current_position + half_period
+    ) % position_period - half_period
+    if shortest_delta == -half_period and current_position < 0:
+        shortest_delta = half_period
+    adjusted = current_position + shortest_delta
+    maximum = (1 << 15) - 1
+    if not -maximum <= adjusted <= maximum:
+        raise ValueError(
+            "FEETECH multi-turn position range is exhausted: "
+            f"current={current_position}, goal={goal_position}, nearest={adjusted}"
+        )
+    return adjusted
+
+
+@dataclass(frozen=True)
+class FeetechPacketMotion:
+    """One SI position target and optional profile limits."""
+
+    position_rad: float
+    velocity_rad_s: float | None = None
+    acceleration_rad_s2: float | None = None
+    current_limit_a: float | None = None
+
+    def __post_init__(self) -> None:
+        if not math.isfinite(self.position_rad):
+            raise ValueError("FEETECH position must be finite")
+        for field_name in (
+            "velocity_rad_s",
+            "acceleration_rad_s2",
+            "current_limit_a",
+        ):
+            value = getattr(self, field_name)
+            if value is not None and (not math.isfinite(value) or value < 0.0):
+                raise ValueError(f"FEETECH {field_name} must be finite and non-negative")
+
+
+@dataclass(frozen=True)
+class FeetechPacketFastState:
+    """Fast HLS/SMS telemetry converted to SI units."""
+
+    position_rad: float
+    velocity_rad_s: float
+    current_a: float
+    load_ratio: float
+    voltage_v: float
+    temperature_c: int
+    status: int
+    timestamp_ns: int
+
+
+@dataclass(frozen=True)
+class FeetechPacketSlowState:
+    """Low-rate identity and health telemetry for diagnostics."""
+
+    model: str
+    model_number: int
+    voltage_v: float
+    temperature_c: int
+    status: int
+    timestamp_ns: int
+
+
+class FeetechPacketBusProtocol:
+    """Blocking FEETECH packet protocol owned by one serial bus actor."""
+
+    model_address = 3
+    mode_address = 33
+    torque_enable_address = 40
+    goal_start_address = 41
+    # Addresses 56..70 contain position, speed, load, voltage, temperature,
+    # reserved bytes, moving, and current. Fault bits come from the packet error byte;
+    # address 65 is reserved and must never be interpreted as hardware status.
+    present_state_address = 56
+    present_state_length = 15
+
+    def __init__(
+        self,
+        transport: SerialTransport,
+        devices: Mapping[int, FeetechPacketServoProfile],
+        *,
+        expected_model_numbers: Optional[Mapping[int, int]] = None,
+        operation_timeout_s: float = 0.05,
+        clock_ns=time.monotonic_ns,
+    ) -> None:
+        devices = dict(devices)
+        if not devices:
+            raise ValueError("FEETECH packet bus requires at least one servo")
+        for servo_id in devices:
+            FeetechPacketCodec.validate_servo_id(servo_id)
+        families = {profile.family for profile in devices.values()}
+        if len(families) != 1:
+            raise ValueError("FEETECH HLS and SMS profiles cannot share one packet bus")
+        expected_model_numbers = dict(expected_model_numbers or {})
+        if set(expected_model_numbers) - set(devices):
+            raise ValueError("FEETECH expected model map contains unknown servo IDs")
+        resolved_models: dict[int, int] = {}
+        for servo_id, profile in devices.items():
+            model_number = expected_model_numbers.get(servo_id, profile.model_number)
+            if model_number is not None:
+                if type(model_number) is not int or not 0 <= model_number <= 0xFFFF:
+                    raise ValueError("FEETECH expected model numbers must be uint16 values")
+                resolved_models[servo_id] = model_number
+        if operation_timeout_s <= 0.0:
+            raise ValueError("FEETECH packet operation timeout must be positive")
+        # The protocol owns no thread. BusActor is the sole caller after
+        # connection, which keeps packet parsing and response ordering deterministic.
+        self._transport = transport
+        self._devices = devices
+        self._family = next(iter(families))
+        self._expected_model_numbers = resolved_models
+        self._observed_model_numbers: dict[int, int] = {}
+        self._operation_timeout_ns = round(operation_timeout_s * 1e9)
+        self._clock_ns = clock_ns
+        self._software_disabled = True
+        self._last_fast: dict[int, FeetechPacketFastState] = {}
+
+    def connect(self) -> None:
+        """Verify model identities, disable torque, and select position mode."""
+
+        self._last_fast.clear()
+        self._observed_model_numbers.clear()
+        self._software_disabled = True
+        self._transport.connect()
+        try:
+            # Read identity before changing actuator state. Exact model checks prevent
+            # applying a memory map merely because another servo looks similar.
+            for servo_id in self._devices:
+                model_number = FeetechPacketCodec.decode_word(
+                    self._read_register(servo_id, self.model_address, 2)
+                )
+                self._observed_model_numbers[servo_id] = model_number
+                expected = self._expected_model_numbers.get(servo_id)
+                if expected is not None and model_number != expected:
+                    raise RuntimeError(
+                        f"FEETECH servo ID {servo_id} reports model {model_number}, "
+                        f"expected {expected} for {self._devices[servo_id].model}"
+                    )
+            # Torque-off must precede mode selection; changing operating mode under
+            # load is not a safe initialization sequence.
+            self._sync_write(
+                self.torque_enable_address,
+                {servo_id: b"\x00" for servo_id in self._devices},
+            )
+            self._sync_write(
+                self.mode_address,
+                {servo_id: b"\x00" for servo_id in self._devices},
+            )
+            self._software_disabled = True
+        except BaseException:
+            self._software_disabled = True
+            self._observed_model_numbers.clear()
+            self._transport.disconnect()
+            raise
+
+    def cancel(self) -> None:
+        """Interrupt pending transport I/O for bounded shutdown."""
+
+        self._transport.cancel()
+
+    def disconnect(self) -> None:
+        """Release transport and clear cached feedback."""
+
+        self._software_disabled = True
+        self._transport.disconnect()
+
+    def execute_safety(self, label: str, payload) -> object:
+        """Execute ordered enable, hold, disable, or calibration operations."""
+
+        if label == "set_enabled":
+            if type(payload) is not bool:
+                raise ValueError("FEETECH set_enabled payload must be a boolean")
+            if payload:
+                # Seed every goal with measured position before enabling torque. This
+                # avoids a jump toward a stale power-on goal register.
+                if set(self._last_fast) != set(self._devices):
+                    raise RuntimeError(
+                        "FEETECH torque cannot be enabled before a complete state sample"
+                    )
+                hold_values = {
+                    servo_id: self._encode_motion(
+                        profile,
+                        FeetechPacketMotion(self._last_fast[servo_id].position_rad),
+                        reference_position_rad=self._last_fast[servo_id].position_rad,
+                    )
+                    for servo_id, profile in self._devices.items()
+                }
+                self._sync_write(self.goal_start_address, hold_values)
+            self._sync_write(
+                self.torque_enable_address,
+                {servo_id: bytes((int(payload),)) for servo_id in self._devices},
+            )
+            self._software_disabled = not payload
+            return True
+        if label == "emergency_stop":
+            self._software_disabled = True
+            self._sync_write(
+                self.torque_enable_address,
+                {servo_id: b"\x00" for servo_id in self._devices},
+            )
+            return True
+        if label == "hold":
+            if not self._last_fast:
+                raise RuntimeError("FEETECH bus cannot hold before state is available")
+            hold_values = {
+                servo_id: self._encode_motion(
+                    profile,
+                    FeetechPacketMotion(self._last_fast[servo_id].position_rad),
+                    reference_position_rad=self._last_fast[servo_id].position_rad,
+                )
+                for servo_id, profile in self._devices.items()
+            }
+            self._sync_write(self.goal_start_address, hold_values)
+            self._sync_write(
+                self.torque_enable_address,
+                {servo_id: b"\x01" for servo_id in self._devices},
+            )
+            self._software_disabled = False
+            return True
+        if label == "calibrate_offset":
+            if not self._software_disabled:
+                raise RuntimeError("FEETECH offset calibration requires disabled torque")
+            values: dict[int, int] = dict(payload)
+            if not values:
+                raise ValueError("FEETECH calibration payload cannot be empty")
+            for servo_id, raw_position in values.items():
+                if servo_id not in self._devices:
+                    raise ValueError(f"unknown FEETECH calibration servo ID {servo_id}")
+                if type(raw_position) is not int:
+                    raise ValueError("FEETECH calibration positions must be integers")
+                encoded = FeetechPacketCodec.encode_signed_magnitude(raw_position)
+                # Calibration is intentionally per-servo because the instruction has
+                # a status response that must be checked before proceeding.
+                self._send(
+                    FeetechPacketCodec.encode_instruction(
+                        servo_id,
+                        FeetechInstruction.OFFSET_CALIBRATION,
+                        FeetechPacketCodec.word(encoded),
+                    )
+                )
+                status = self._read_status(expected_servo_id=servo_id, parameter_count=0)
+                self._raise_status_error(status)
+            return True
+        raise ValueError(f"unsupported FEETECH packet safety task '{label}'")
+
+    def write_motion(self, targets: Sequence[MotionEnvelope]) -> None:
+        """Merge latest per-ID targets into one packet-family sync write."""
+
+        if self._software_disabled:
+            raise RecoverableBusError("FEETECH motion is blocked while software-disabled")
+        values: dict[int, bytes] = {}
+        try:
+            # Validate and encode the entire actor snapshot before emitting its single
+            # broadcast frame; parameter errors cannot cause a partial bus update.
+            for target in targets:
+                profile = self._devices.get(target.device_id)
+                if profile is None:
+                    raise ValueError(f"unknown FEETECH servo ID {target.device_id}")
+                if target.device_id in values:
+                    raise ValueError("FEETECH motion contains duplicate servo IDs")
+                if not isinstance(target.payload, FeetechPacketMotion):
+                    raise ValueError("FEETECH payload must be FeetechPacketMotion")
+                current_state = self._last_fast.get(target.device_id)
+                if current_state is None:
+                    raise ValueError(
+                        f"FEETECH servo ID {target.device_id} has no current position"
+                    )
+                values[target.device_id] = self._encode_motion(
+                    profile,
+                    target.payload,
+                    reference_position_rad=current_state.position_rad,
+                )
+            deadline_ns = min(target.deadline_ns for target in targets)
+            self._sync_write(
+                self.goal_start_address,
+                values,
+                deadline_ns=deadline_ns,
+            )
+        except (FeetechPacketError, TimeoutError, OSError, ValueError) as exc:
+            raise RecoverableBusError("FEETECH packet motion write failed") from exc
+
+    def read_fast_state(
+        self,
+        *,
+        deadline_ns: int | None = None,
+    ) -> Mapping[int, FeetechPacketFastState]:
+        """Sync-read the contiguous fast-state block and convert it to SI."""
+
+        servo_ids = tuple(self._devices)
+        try:
+            self._send(
+                FeetechPacketCodec.encode_sync_read(
+                    servo_ids,
+                    self.present_state_address,
+                    self.present_state_length,
+                ),
+                deadline_ns=deadline_ns,
+            )
+            packets: dict[int, FeetechStatusPacket] = {}
+            # Sync-read responses can arrive in any ID order. Collect by ID and reject
+            # duplicates so the returned mapping always represents one complete cycle.
+            for _ in servo_ids:
+                packet = self._read_status(
+                    parameter_count=self.present_state_length,
+                    deadline_ns=deadline_ns,
+                )
+                if packet.servo_id not in self._devices or packet.servo_id in packets:
+                    raise FeetechPacketError(
+                        f"unexpected FEETECH sync-read servo ID {packet.servo_id}"
+                    )
+                self._raise_status_error(packet)
+                packets[packet.servo_id] = packet
+            timestamp_ns = self._clock_ns()
+            states = {
+                servo_id: self._decode_fast_state(
+                    self._devices[servo_id],
+                    packets[servo_id].parameters,
+                    timestamp_ns,
+                )
+                for servo_id in servo_ids
+            }
+        except (FeetechPacketError, TimeoutError, OSError, ValueError) as exc:
+            raise RecoverableBusError("FEETECH packet state read failed") from exc
+        self._last_fast = states
+        return states
+
+    def read_slow_state(
+        self,
+        *,
+        deadline_ns: int | None = None,
+    ) -> Mapping[int, FeetechPacketSlowState]:
+        """Return low-rate identity and health telemetry."""
+
+        timestamp_ns = self._clock_ns()
+        return {
+            servo_id: FeetechPacketSlowState(
+                model=self._devices[servo_id].model,
+                model_number=self._observed_model_numbers[servo_id],
+                voltage_v=state.voltage_v,
+                temperature_c=state.temperature_c,
+                status=state.status,
+                timestamp_ns=timestamp_ns,
+            )
+            for servo_id, state in self._last_fast.items()
+        }
+
+    def _encode_motion(
+        self,
+        profile: FeetechPacketServoProfile,
+        motion: FeetechPacketMotion,
+        *,
+        reference_position_rad: float,
+    ) -> bytes:
+        """Encode one SI target using the nearest representable multi-turn branch."""
+
+        goal_position = round(
+            motion.position_rad * profile.counts_per_revolution / (2.0 * math.pi)
+        )
+        current_position = round(
+            reference_position_rad
+            * profile.counts_per_revolution
+            / (2.0 * math.pi)
+        )
+        # A wrapped public angle has infinitely many raw representations. Choosing the
+        # nearest branch avoids an unnecessary full revolution during teleoperation.
+        position = nearest_multiturn_position_target(
+            current_position,
+            goal_position,
+            profile.counts_per_revolution,
+        )
+        raw_position = FeetechPacketCodec.encode_signed_magnitude(position)
+        velocity = (
+            profile.default_velocity_raw
+            if motion.velocity_rad_s is None
+            else round(motion.velocity_rad_s / profile.velocity_unit_rad_s)
+        )
+        acceleration = (
+            profile.default_acceleration_raw
+            if motion.acceleration_rad_s2 is None
+            else round(motion.acceleration_rad_s2 / profile.acceleration_unit_rad_s2)
+        )
+        if not 0 <= velocity <= 0x7FFF:
+            raise ValueError("FEETECH velocity exceeds the signed-magnitude register")
+        if not 0 <= acceleration <= 0xFF:
+            raise ValueError("FEETECH acceleration exceeds the uint8 register")
+        if profile.family == FeetechPacketFamily.HLS:
+            # HLS inserts goal current between position and velocity; SMS reserves the
+            # same bytes, so packet layout remains common while capability differs.
+            current_limit = (
+                profile.default_current_limit_raw
+                if motion.current_limit_a is None
+                else round(motion.current_limit_a / profile.current_unit_a)
+            )
+            if not 0 <= current_limit <= 0x7FFF:
+                raise ValueError("FEETECH current limit exceeds the register range")
+            auxiliary = FeetechPacketCodec.word(current_limit)
+        else:
+            if motion.current_limit_a is not None:
+                raise ValueError("FEETECH SMS packet profile has no goal-current field")
+            auxiliary = b"\x00\x00"
+        return (
+            bytes((acceleration,))
+            + FeetechPacketCodec.word(raw_position)
+            + auxiliary
+            + FeetechPacketCodec.word(velocity)
+        )
+
+    @staticmethod
+    def _nearest_multiturn_position_target(
+        current_position: int,
+        goal_position: int,
+        position_period: int,
+    ) -> int:
+        return nearest_multiturn_position_target(
+            current_position,
+            goal_position,
+            position_period,
+        )
+
+    def _decode_fast_state(
+        self,
+        profile: FeetechPacketServoProfile,
+        data: bytes,
+        timestamp_ns: int,
+    ) -> FeetechPacketFastState:
+        """Decode the contiguous packet-family telemetry block into SI units."""
+
+        position = FeetechPacketCodec.decode_signed_magnitude(
+            FeetechPacketCodec.decode_word(data[0:2])
+        )
+        velocity = FeetechPacketCodec.decode_signed_magnitude(
+            FeetechPacketCodec.decode_word(data[2:4])
+        )
+        load = FeetechPacketCodec.decode_signed_magnitude(
+            FeetechPacketCodec.decode_word(data[4:6]), sign_bit=10
+        )
+        current = FeetechPacketCodec.decode_signed_magnitude(
+            FeetechPacketCodec.decode_word(data[13:15])
+        )
+        return FeetechPacketFastState(
+            position_rad=position * 2.0 * math.pi / profile.counts_per_revolution,
+            velocity_rad_s=velocity * profile.velocity_unit_rad_s,
+            current_a=current * profile.current_unit_a,
+            load_ratio=load / 1000.0,
+            voltage_v=data[6] / 10.0,
+            temperature_c=data[7],
+            # Device errors are carried by the status packet error byte, which
+            # is validated before this documented telemetry block is decoded.
+            status=0,
+            timestamp_ns=timestamp_ns,
+        )
+
+    def _read_register(
+        self,
+        servo_id: int,
+        address: int,
+        length: int,
+        *,
+        deadline_ns: int | None = None,
+    ) -> bytes:
+        """Perform one addressed read and validate its status response."""
+
+        self._send(
+            FeetechPacketCodec.encode_read(servo_id, address, length),
+            deadline_ns=deadline_ns,
+        )
+        packet = self._read_status(
+            expected_servo_id=servo_id,
+            parameter_count=length,
+            deadline_ns=deadline_ns,
+        )
+        self._raise_status_error(packet)
+        return packet.parameters
+
+    def _sync_write(
+        self,
+        address: int,
+        values: Mapping[int, bytes],
+        *,
+        deadline_ns: int | None = None,
+    ) -> None:
+        """Send one broadcast write; the protocol provides no per-servo ACK."""
+
+        self._send(
+            FeetechPacketCodec.encode_sync_write(address, values),
+            deadline_ns=deadline_ns,
+        )
+
+    def _send(self, frame: bytes, *, deadline_ns: int | None = None) -> None:
+        self._transport.write(frame, deadline_ns=self._deadline(deadline_ns))
+
+    def _read_status(
+        self,
+        *,
+        expected_servo_id: int | None = None,
+        parameter_count: int | None = None,
+        deadline_ns: int | None = None,
+    ) -> FeetechStatusPacket:
+        """Resynchronize on the header, then read exactly one bounded status frame."""
+
+        deadline_ns = self._deadline(deadline_ns)
+        header = bytearray()
+        while bytes(header) != FeetechPacketCodec.header:
+            header.extend(self._transport.read_exact(1, deadline_ns=deadline_ns))
+            if len(header) > 2:
+                del header[0]
+        identifier_and_length = self._transport.read_exact(2, deadline_ns=deadline_ns)
+        length = identifier_and_length[1]
+        if length < 2:
+            raise FeetechPacketError("FEETECH status length is smaller than two")
+        suffix = self._transport.read_exact(length, deadline_ns=deadline_ns)
+        return FeetechPacketCodec.decode_status(
+            bytes(header) + identifier_and_length + suffix,
+            expected_servo_id=expected_servo_id,
+            expected_parameter_count=parameter_count,
+        )
+
+    def _deadline(self, deadline_ns: int | None) -> int:
+        operation_deadline_ns = self._clock_ns() + self._operation_timeout_ns
+        if deadline_ns is None:
+            return operation_deadline_ns
+        if type(deadline_ns) is not int or deadline_ns < 0:
+            raise ValueError("FEETECH packet deadline must be a non-negative integer")
+        return min(operation_deadline_ns, deadline_ns)
+
+    @staticmethod
+    def _raise_status_error(packet: FeetechStatusPacket) -> None:
+        if packet.error:
+            raise FeetechPacketError(
+                f"FEETECH servo {packet.servo_id} reported error 0x{packet.error:02x}"
+            )
+
+
+__all__ = [
+    "FeetechPacketBusProtocol",
+    "FeetechPacketFastState",
+    "FeetechPacketMotion",
+    "FeetechPacketSlowState",
+    "nearest_multiturn_position_target",
+]

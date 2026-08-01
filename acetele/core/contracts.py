@@ -10,16 +10,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 from types import MappingProxyType
-from typing import Any, Mapping, Optional, Protocol, Sequence, runtime_checkable
+from typing import Any, Mapping, Optional, Sequence
 
 import numpy as np
-
-
-class Backend(str, Enum):
-    """Select whether a specification creates physical or deterministic mock buses."""
-
-    PHYSICAL = "physical"
-    MOCK = "mock"
 
 
 class JointUnit(str, Enum):
@@ -27,15 +20,6 @@ class JointUnit(str, Enum):
 
     RADIAN = "radian"
     NORMALIZED = "normalized"
-
-
-class SafetyAction(str, Enum):
-    """Safety operations a device can implement without vendor-specific arguments."""
-
-    HOLD = "hold"
-    DISABLE = "disable"
-    DAMPING = "damping"
-    ZERO_EFFORT = "zero_effort"
 
 
 def _names(values: Sequence[str], *, field_name: str) -> tuple[str, ...]:
@@ -274,94 +258,12 @@ class RobotCommand:
         )
 
 
-@dataclass(frozen=True)
-class DeviceCapabilities:
-    """Static capabilities used to reject unsupported operations before I/O."""
-
-    units: tuple[JointUnit, ...]
-    safety_actions: tuple[SafetyAction, ...]
-    max_update_hz: float
-    supports_velocity: bool = False
-    supports_effort: bool = False
-    supports_temperature: bool = False
-    supports_fault_state: bool = False
-    supports_tactile: bool = False
-    supports_verified_disable: bool = False
-
-    def __post_init__(self) -> None:
-        units = tuple(self.units)
-        actions = tuple(self.safety_actions)
-        if not units or any(not isinstance(unit, JointUnit) for unit in units):
-            raise ValueError("device capabilities units must contain JointUnit values")
-        if any(not isinstance(action, SafetyAction) for action in actions):
-            raise ValueError("device capabilities safety_actions must contain SafetyAction values")
-        if not np.isfinite(self.max_update_hz) or self.max_update_hz <= 0.0:
-            raise ValueError("device capabilities max_update_hz must be finite and positive")
-        object.__setattr__(self, "units", units)
-        object.__setattr__(self, "safety_actions", actions)
-
-
-@runtime_checkable
-class JointHardware(Protocol):
-    """Minimal explicit-lifecycle interface for a named joint device."""
-
-    @property
-    def connected(self) -> bool:
-        """Return whether the device owns live hardware resources."""
-
-        ...
-
-    @property
-    def capabilities(self) -> DeviceCapabilities:
-        """Return immutable capabilities known before commands are issued."""
-
-        ...
-
-    def connect(self) -> None:
-        """Acquire hardware resources after static validation."""
-
-        ...
-
-    def read(self) -> JointState:
-        """Return the latest coherent state sample."""
-
-        ...
-
-    def write(self, command: JointCommand) -> None:
-        """Submit a validated, live command."""
-
-        ...
-
-    def hold(self) -> None:
-        """Hold the latest trustworthy position."""
-
-        ...
-
-    def set_enabled(self, enabled: bool) -> None:
-        """Change actuator enable state through a safety transaction."""
-
-        ...
-
-    def emergency_stop(self) -> None:
-        """Execute and latch the strongest supported stop action."""
-
-        ...
-
-    def disconnect(self) -> None:
-        """Release all resources with bounded shutdown."""
-
-        ...
-
-
 __all__ = [
-    "Backend",
-    "DeviceCapabilities",
+    "EndEffectorPose",
     "JointCommand",
-    "JointHardware",
     "JointState",
     "JointUnit",
     "RobotCommand",
     "RobotState",
-    "SafetyAction",
     "SensorState",
 ]

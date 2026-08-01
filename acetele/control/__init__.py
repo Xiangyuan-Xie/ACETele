@@ -1,4 +1,10 @@
-from acetele.control.position_pipeline import (
+from acetele.control.cartesian import (
+    CartesianIKResult,
+    CartesianTeleopController,
+    CartesianTeleopDiagnostics,
+    CartesianTeleopTuning,
+)
+from acetele.control.position import (
     PositionControlDiagnostics,
     PositionControlPipeline,
 )
@@ -10,12 +16,4 @@ __all__ = [
     "CartesianTeleopTuning",
     "PositionControlDiagnostics",
     "PositionControlPipeline",
-    "TeleopMode",
 ]
-from acetele.control.cartesian_teleop import (
-    CartesianIKResult,
-    CartesianTeleopController,
-    CartesianTeleopDiagnostics,
-    CartesianTeleopTuning,
-    TeleopMode,
-)

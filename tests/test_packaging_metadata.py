@@ -1,3 +1,4 @@
+import configparser
 import shutil
 import subprocess
 import sys
@@ -5,6 +6,25 @@ import zipfile
 from pathlib import Path
 
 project_root = Path(__file__).resolve().parents[1]
+
+
+def test_submodule_urls_inherit_the_parent_repository_transport():
+    modules = configparser.ConfigParser()
+    modules.read(project_root / ".gitmodules", encoding="utf-8")
+
+    assert modules['submodule "third_party/px4_msgs"']["url"] == "../px4_msgs.git"
+    assert (
+        modules['submodule "third_party/realsense_ros"']["url"]
+        == "../../realsenseai/realsense-ros.git"
+    )
+    assert (
+        modules['submodule "third_party/micro_xrce_dds_client"']["url"]
+        == "../../eProsima/Micro-XRCE-DDS-Client.git"
+    )
+    assert (
+        modules['submodule "third_party/micro_xrce_dds_agent"']["url"]
+        == "../../eProsima/Micro-XRCE-DDS-Agent.git"
+    )
 
 
 def setup_py_value(option: str) -> str:
@@ -36,11 +56,6 @@ def _copy_isolated_wheel_source(destination: Path) -> None:
         if not source_file.is_file() or source_file.suffix not in copied_suffixes:
             continue
         relative_path = source_file.relative_to(source_package)
-        if relative_path.parts[:2] in (
-            ("deploy", "px4_msgs"),
-            ("deploy", "realsense-ros"),
-        ):
-            continue
         destination_file = destination_package / relative_path
         destination_file.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source_file, destination_file)
@@ -59,20 +74,14 @@ def _copy_isolated_wheel_source(destination: Path) -> None:
         mesh.write_bytes(b"isolated wheel test mesh")
 
     excluded_sentinels = (
-        destination_package / "deploy" / "px4_msgs" / "sentinel.py",
-        destination_package
-        / "deploy"
-        / "realsense-ros"
-        / "realsense2_camera"
-        / "sentinel.py",
+        destination / "ros2" / "sentinel.py",
+        destination / "third_party" / "px4_msgs" / "sentinel.py",
         destination / "tests" / "sentinel.py",
         destination / "build" / "lib" / "tests" / "stale.py",
         destination
         / "build"
         / "lib"
         / "acetele"
-        / "deploy"
-        / "realsense-ros"
         / "stale.py",
     )
     for sentinel in excluded_sentinels:
@@ -110,35 +119,39 @@ def test_isolated_wheel_contains_runtime_files_without_excluded_sources(tmp_path
         files = set(wheel.namelist())
 
     assert {
-        "acetele/config/ace_follower/feetech_sms_rs485.toml",
-        "acetele/config/ace_follower/fashionstar_rs485.toml",
-        "acetele/config/ace_follower/feetech_hls_ttl.toml",
-        "acetele/config/ace_leader/feetech_hls_ttl.toml",
-        "acetele/config/spec_loader.py",
-        "acetele/config/specs.py",
-        "acetele/control/position_pipeline.py",
+        "acetele/config/presets/ace_follower/feetech_sms_rs485.toml",
+        "acetele/config/presets/ace_follower/fashionstar_rs485.toml",
+        "acetele/config/presets/ace_follower/feetech_hls_ttl.toml",
+        "acetele/config/presets/ace_leader/feetech_hls_ttl.toml",
+        "acetele/config/catalog.py",
+        "acetele/config/loader.py",
+        "acetele/control/cartesian.py",
+        "acetele/control/position.py",
         "acetele/core/contracts.py",
-        "acetele/hardware/dexterous_hands/linker_hand/protocol.py",
-        "acetele/hardware/joystick/driver.py",
-        "acetele/hardware/serial/actor.py",
-        "acetele/hardware/smart_servos/fashionstar/protocol.py",
-        "acetele/hardware/smart_servos/feetech/packet_protocol.py",
-        "acetele/hardware/state_estimator.py",
+        "acetele/estimation/joint_state.py",
+        "acetele/hardware/buses/actor.py",
+        "acetele/hardware/buses/serial.py",
+        "acetele/hardware/devices/adapter.py",
+        "acetele/hardware/devices/hands/linker/adapter.py",
+        "acetele/hardware/devices/servos/fashionstar/adapter.py",
+        "acetele/hardware/devices/servos/feetech/adapter.py",
+        "acetele/hardware/inputs/joystick.py",
         "acetele/model/urdf.py",
+        "acetele/model/joint_angle.py",
         "acetele/model/robots/ace_follower/description/ace_follower.urdf",
         "acetele/model/robots/ace_follower/description/meshes/link_1.STL",
         "acetele/model/robots/ace_leader/description/ace_leader.xml",
-        "acetele/runtime/robot_runtime.py",
-        "acetele/runtime/follower_session.py",
-        "acetele/runtime/leader_session.py",
-        "acetele/deploy/ace_robot_ros2/ace_robot_ros2/runtime_follower_node.py",
-        "acetele/deploy/ace_robot_ros2/ace_robot_ros2/runtime_leader_node.py",
-        "acetele/deploy/ace_robot_ros2/ace_robot_ros2/spec_validation.py",
-        "acetele/tools/check_robot_spec.py",
-        "acetele/tools/calibrate_feetech_home.py",
+        "acetele/runtime/preflight.py",
+        "acetele/runtime/calibration.py",
+        "acetele/runtime/robot.py",
+        "acetele/runtime/teleop/follower.py",
+        "acetele/runtime/teleop/leader.py",
+        "acetele/specification/robot.py",
+        "acetele/specification/backend.py",
+        "acetele/tools/tui.py",
     }.issubset(files)
     assert all(not path.startswith(("build/", "tests/")) for path in files)
-    assert all("/px4_msgs/" not in path for path in files)
-    assert all("/realsense-ros/" not in path for path in files)
+    assert all(not path.startswith(("ros2/", "third_party/")) for path in files)
+    assert all(not path.startswith("zeromq/") for path in files)
     assert all(not path.startswith("acetele/equipment/") for path in files)
     assert all(not path.startswith("acetele/robot/") for path in files)
