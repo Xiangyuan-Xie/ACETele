@@ -12,7 +12,7 @@ setup(
         ("share/" + package_name + "/launch", ["launch/visualization.launch.py"]),
         ("share/" + package_name + "/config", ["config/visualization_params.yaml"]),
     ],
-    install_requires=["setuptools"],
+    install_requires=["setuptools", "ace-operator-ui>=0.1,<0.2"],
     zip_safe=True,
     entry_points={
         "console_scripts": [

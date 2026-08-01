@@ -3,7 +3,7 @@ from pathlib import Path
 project_root = Path(__file__).resolve().parents[2]
 window_source = (
     project_root
-    / "ros2/visualization_ros2/visualization_ros2/visualization_window.py"
+    / "apps/ace_operator_ui/ace_operator_ui/window.py"
 )
 node_source = (
     project_root
