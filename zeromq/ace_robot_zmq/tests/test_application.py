@@ -112,6 +112,24 @@ def _publish_follower(application: FollowerApplication):
             time.sleep(0.001)
 
 
+def test_zmq_follower_holds_position_before_a_leader_connects():
+    follower = FollowerApplication(
+        _spec("ace_follower"),
+        ZmqTeleopOptions(PeerRole.FOLLOWER, "127.0.0.1", "127.0.0.1"),
+        peer=RecordingPeer(),
+        xrce_bridge=RecordingXrceBridge(),
+    )
+    follower.connect()
+    try:
+        assert (
+            follower.session.runtime.diagnostics().safety.state
+            == RuntimeSafetyState.HOLD
+        )
+        assert follower.session.status == FollowerSyncStatus.IDLE
+    finally:
+        follower.close()
+
+
 @pytest.mark.parametrize("teleop_mode", (TeleopMode.JOINT, TeleopMode.EE_POSE))
 def test_applications_reuse_sessions_through_tracking(teleop_mode):
     leader_peer = RecordingPeer()

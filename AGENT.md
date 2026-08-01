@@ -162,6 +162,8 @@ DISCONNECTED -> SAFE_DISABLED -> READY -> ACTIVE -> HOLD/FAULT
 ```
 
 - Commands older than their deadline or from an old generation are discarded.
+- Follower applications always seed the measured pose, enable torque, and enter `HOLD` after
+  connection; transport adapters must not expose a runtime bypass for this startup policy.
 - Lost follower heartbeats enter `HOLD`, clear pending motion, and require synchronization again.
 - Each bus actor independently enforces the admitted-command heartbeat. Repeated motion-write
   failures or sustained fast-state loss attempt an emergency stop before latching an actor fault.
@@ -180,11 +182,12 @@ FEETECH packet home calibration is exposed only through the TUI and backed by
 and bounded cleanup. Other protocols must not reuse the FEETECH procedure without their own
 documented safety transaction.
 
-Interactive operators should use `python -m acetele.tools.tui`. Its launch workflows only generate
-shell-safe ROS 2 or ZeroMQ commands. Its calibration workflow must display the complete immutable write plan,
-require explicit Enter confirmation, leave hardware configuration read-only, and restore the
-terminal before connecting a bus. Keep curses rendering separate from discovery, preflight,
-persistence, and hardware execution so safety behavior remains testable without a terminal.
+Interactive operators should use `python -m acetele.tools.tui`. After explicit Enter confirmation,
+its launch workflows must leave curses and execute ROS 2 or ZeroMQ with an argv sequence, never
+through a shell. Its calibration workflow must display the complete immutable write plan, require
+explicit Enter confirmation, leave hardware configuration read-only, and restore the terminal
+before connecting a bus. Keep curses rendering separate from discovery, preflight, persistence,
+and hardware execution so safety behavior remains testable without a terminal.
 
 ## ROS 2
 

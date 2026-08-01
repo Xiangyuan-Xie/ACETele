@@ -330,11 +330,19 @@ class FollowerApplication:
         if self._connected:
             return
         self.xrce.start()
+        session_connected = False
         try:
             self.peer.open()
             self.session.connect()
+            session_connected = True
+            self.session.hold_position()
         except BaseException as exc:
-            _close_preserving_primary(exc, (self.peer.close, self.xrce.close))
+            cleanup = (
+                (self.session.close, self.peer.close, self.xrce.close)
+                if session_connected
+                else (self.peer.close, self.xrce.close)
+            )
+            _close_preserving_primary(exc, cleanup)
         self._connected = True
 
     def process_incoming(self, payload: bytes, *, now_ns: Optional[int] = None) -> bool:

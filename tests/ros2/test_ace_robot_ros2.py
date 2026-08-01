@@ -113,6 +113,25 @@ def test_follower_heartbeat_timeout_defaults_to_one_hundred_milliseconds():
     assert 'declare_parameter("heartbeat_timeout", 0.1)' in source
 
 
+def test_follower_always_holds_measured_position_on_start():
+    parameters = (
+        project_root
+        / "ros2/ace_robot_ros2/config/ace_robot_params.yaml"
+    ).read_text(encoding="utf-8")
+    source = (
+        project_root
+        / "ros2/ace_robot_ros2/ace_robot_ros2/runtime_follower_node.py"
+    ).read_text(encoding="utf-8")
+    launch = (
+        project_root / "ros2/ace_robot_ros2/launch/ace_robot.launch.py"
+    ).read_text(encoding="utf-8")
+
+    assert "self._session.hold_position()" in source
+    assert "hold_on_start" not in parameters
+    assert "hold_on_start" not in source
+    assert "hold_on_start" not in launch
+
+
 def test_leader_end_effector_throttling_is_runtime_configured():
     parameters = (
         project_root

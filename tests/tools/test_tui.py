@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import curses
 import shlex
+import types
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
+import acetele.tools.tui as tui_module
 from acetele.specification import BusSpec, BusType, DirectionControl
 from acetele.tools.tui import (
     LaunchSelection,
@@ -15,6 +17,7 @@ from acetele.tools.tui import (
     TuiWorkflow,
     ZmqLaunchSelection,
     _BiosTui,
+    _execute_command,
     _restore_zmq_selection,
     _updated_state,
     build_calibration_plan,
@@ -123,6 +126,52 @@ def test_default_ee_pose_scales_remain_explicit_floats(packaged):
 
     assert "translation_scale:=2.0" in arguments
     assert "rotation_scale:=1.0" in arguments
+
+
+def test_confirmed_launch_executes_argv_without_a_shell(monkeypatch):
+    observed = {}
+
+    def run(arguments, *, check):
+        observed["arguments"] = arguments
+        observed["check"] = check
+        return type("Completed", (), {"returncode": 7})()
+
+    monkeypatch.setattr("acetele.tools.tui.subprocess.run", run)
+
+    assert _execute_command(("ros2", "launch", "path with spaces")) == 7
+    assert observed == {
+        "arguments": ("ros2", "launch", "path with spaces"),
+        "check": False,
+    }
+
+
+def test_tui_main_executes_the_confirmed_ros_launch(monkeypatch, packaged):
+    selection = LaunchSelection(
+        _choice(packaged, "ace_follower/feetech_hls_ttl.toml")
+    )
+    result = TuiResult(TuiWorkflow.ROS2_LAUNCH, launch=selection)
+    executed = []
+
+    class Store:
+        def load(self):
+            return {}
+
+        def save(self, _document):
+            return None
+
+    monkeypatch.setattr(tui_module.sys, "stdin", types.SimpleNamespace(isatty=lambda: True))
+    monkeypatch.setattr(tui_module.sys, "stdout", types.SimpleNamespace(isatty=lambda: True))
+    monkeypatch.setattr(tui_module, "discover_packaged_robot_specs", lambda: packaged)
+    monkeypatch.setattr(tui_module, "TuiStateStore", Store)
+    monkeypatch.setattr(tui_module.curses, "wrapper", lambda _callback: result)
+    monkeypatch.setattr(
+        tui_module,
+        "_execute_command",
+        lambda arguments: executed.append(arguments) or 0,
+    )
+
+    assert tui_module.main() == 0
+    assert executed == [tui_module._ros_launch_arguments(selection)]
 
 
 def test_zmq_joint_command_round_trips_network_and_config_arguments(packaged):

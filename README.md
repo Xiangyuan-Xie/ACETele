@@ -253,6 +253,10 @@ HLS TTL 配置位于 `ace_leader/feetech_hls_ttl.toml` 和
 `ace_follower/feetech_hls_ttl.toml`。通用 launch 默认使用 Leader 配置；启动 Follower
 或其他硬件组合时必须通过 `config_path` 显式选择。
 
+Follower 完成完整状态读取后，会无条件以实测位置作为目标使能扭矩并进入 `HOLD`，因此即使
+没有 Leader 在线也会保持当前位置。该安全策略没有运行时关闭选项；自动保持仍不能替代独立
+硬件急停。
+
 高频 arm/gripper command 与 state 话题使用 `BEST_EFFORT + KEEP_LAST(1)`，同步状态话题
 使用 `RELIABLE + KEEP_LAST(1)`。Follower 的合法命令在订阅回调中直接进入最新值邮箱，
 不会等待额外控制定时器。平行夹爪保留 `/ace_leader/gripper/command` 和
@@ -380,8 +384,8 @@ python -m acetele.tools.tui
 ```
 
 选择 `Launch ROS 2 Robot` 后，可以选择内置或自定义 RobotSpec、关节/末端位姿模式及位姿
-缩放比例。按 Enter 确认后，TUI 只输出经过安全转义的 `ros2 launch` 命令，不会自行打开硬件；
-检查命令后在 shell 中执行即可。最近一次启动和标定选择保存在 XDG state 目录中。
+缩放比例。按 Enter 确认后，TUI 会退出 curses 并直接启动经过预检的 `ros2 launch` 进程；
+终端输出、信号和退出码均由该进程继承。最近一次启动和标定选择保存在 XDG state 目录中。
 
 也可以直接使用以下命令：
 
@@ -447,7 +451,7 @@ cmake --build build/ace_robot_zmq-xrce --parallel
 Client 和 `ArmJointState` schema；版本不匹配、UDP `8888` 被占用或实体创建失败时会在
 打开机械臂串口前退出。
 
-可通过 TUI 选择 `Launch ZMQ Robot` 分别生成两台主机的命令，也可以直接运行：
+可通过 TUI 选择 `Launch ZMQ Robot` 在两台主机上分别直接启动对应进程，也可以手动运行：
 
 ```bash
 # Leader 主机，FOLLOWER_IP 替换为 Follower 的有线网地址
@@ -461,6 +465,8 @@ python -m ace_robot_zmq follower \
   --peer-host LEADER_IP \
   --xrce-prefix "$HOME/.local/lib/acetele/xrce-2.4.2"
 ```
+
+ZMQ Follower 同样在硬件连接后无条件保持实测位置，不提供绕过该启动安全策略的参数。
 
 PX4 通过有线网连接 Follower 主机上的 Agent：
 

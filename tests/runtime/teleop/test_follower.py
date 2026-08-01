@@ -116,6 +116,22 @@ def _cartesian_session() -> FollowerTeleopSession:
     )
 
 
+def test_follower_can_hold_its_measured_pose_without_a_leader():
+    session = _session()
+    session.connect()
+    try:
+        session.hold_position()
+
+        assert (
+            session.runtime.diagnostics().safety.state
+            == RuntimeSafetyState.HOLD
+        )
+        assert session.status == FollowerSyncStatus.IDLE
+        session.hold_position()
+    finally:
+        session.close()
+
+
 def test_follower_session_requires_current_sync_cycle_arm_heartbeat():
     session = _session()
     session.connect()

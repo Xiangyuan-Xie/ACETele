@@ -127,6 +127,23 @@ class FollowerTeleopSession:
 
         self.runtime.connect()
 
+    def hold_position(self) -> None:
+        """Enable actuator holding at the latest measured position without tracking."""
+
+        safety_state = self.runtime.diagnostics().safety.state
+        if safety_state == RuntimeSafetyState.SAFE_DISABLED:
+            # Runtime enable seeds every actuator goal from the latest complete state
+            # sample before torque is enabled, so standalone holding cannot reuse a
+            # stale power-on target.
+            self.runtime.set_enabled(True)
+            safety_state = RuntimeSafetyState.READY
+        if safety_state in (RuntimeSafetyState.READY, RuntimeSafetyState.ACTIVE):
+            self.runtime.hold()
+        elif safety_state != RuntimeSafetyState.HOLD:
+            raise RuntimeError(
+                f"cannot hold follower position from {safety_state.value}"
+            )
+
     def reset_peer(self) -> None:
         """Hold motion and invalidate all state owned by a previous leader session."""
 

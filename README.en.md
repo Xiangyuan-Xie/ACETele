@@ -261,6 +261,11 @@ The HLS TTL configurations are `ace_leader/feetech_hls_ttl.toml` and
 `ace_follower/feetech_hls_ttl.toml`. The generic launch defaults to the Leader configuration;
 Follower and other hardware assemblies must be selected explicitly through `config_path`.
 
+After receiving a complete state sample, the Follower always seeds the measured positions as goals,
+enables torque, and enters `HOLD`, so it can hold position without a Leader online. This safety
+policy has no runtime bypass; automatic holding still does not replace an independent hardware
+emergency stop.
+
 High-rate arm/gripper command and state topics use `BEST_EFFORT + KEEP_LAST(1)`, while sync topics
 use `RELIABLE + KEEP_LAST(1)`. Valid follower commands enter the latest-value mailbox directly in
 the subscription callback without waiting for another control timer. Parallel grippers retain
@@ -400,9 +405,9 @@ python -m acetele.tools.tui
 ```
 
 Select `Launch ROS 2 Robot` to choose a packaged or custom RobotSpec, joint/pose mode, and Cartesian
-scales. After confirmation with Enter, the TUI prints a shell-safe `ros2 launch` command without opening
-hardware. Review and run that command in the shell. Recent launch and calibration selections are
-stored in the XDG state directory.
+scales. After confirmation with Enter, the TUI leaves curses and directly starts the preflighted
+`ros2 launch` process. Terminal output, signals, and the process exit status are preserved. Recent
+launch and calibration selections are stored in the XDG state directory.
 
 The commands can also be entered directly:
 
@@ -471,7 +476,8 @@ This build neither reads nor overwrites an Agent 3.x installation under `/usr/lo
 robot serial ports, the Follower verifies the Agent, Client, and `ArmJointState` schema. A version
 mismatch, occupied UDP port `8888`, or entity-creation failure aborts startup.
 
-Select `Launch ZMQ Robot` in the TUI to generate one command for each host, or run them directly:
+Select `Launch ZMQ Robot` in the TUI on each host to start that peer directly, or run the commands
+manually:
 
 ```bash
 # Leader host: replace FOLLOWER_IP with the Follower's wired-network address
@@ -485,6 +491,9 @@ python -m ace_robot_zmq follower \
   --peer-host LEADER_IP \
   --xrce-prefix "$HOME/.local/lib/acetele/xrce-2.4.2"
 ```
+
+The ZMQ Follower also holds its measured pose unconditionally after hardware connection and exposes
+no option that bypasses this startup safety policy.
 
 PX4 connects over Ethernet to the Agent on the Follower host:
 

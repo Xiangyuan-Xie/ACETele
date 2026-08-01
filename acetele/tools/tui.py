@@ -1,7 +1,7 @@
-"""Curses front end for launch generation and FEETECH calibration.
+"""Curses front end for robot launch and FEETECH calibration.
 
 The terminal renderer is intentionally thin. Configuration discovery, command
-generation, calibration planning, and state persistence remain ordinary Python so
+construction, calibration planning, and state persistence remain ordinary Python so
 they can be tested without a terminal or hardware.
 """
 
@@ -12,6 +12,7 @@ import json
 import math
 import os
 import shlex
+import subprocess
 import sys
 import textwrap
 from dataclasses import dataclass, field
@@ -304,8 +305,8 @@ def discover_packaged_robot_specs() -> tuple[RobotSpecChoice, ...]:
     return tuple(choices)
 
 
-def build_ros_launch_command(selection: LaunchSelection) -> str:
-    """Return one shell-safe command without executing ROS or opening hardware."""
+def _ros_launch_arguments(selection: LaunchSelection) -> tuple[str, ...]:
+    """Build argv for ROS without involving a shell."""
 
     arguments = [
         "ros2",
@@ -322,11 +323,17 @@ def build_ros_launch_command(selection: LaunchSelection) -> str:
                 f"rotation_scale:={selection.rotation_scale}",
             )
         )
-    return shlex.join(arguments)
+    return tuple(arguments)
 
 
-def build_zmq_launch_command(selection: ZmqLaunchSelection) -> str:
-    """Return a shell-safe direct-peer command without importing the ZMQ adapter."""
+def build_ros_launch_command(selection: LaunchSelection) -> str:
+    """Return the shell-rendered form shown on the launch confirmation page."""
+
+    return shlex.join(_ros_launch_arguments(selection))
+
+
+def _zmq_launch_arguments(selection: ZmqLaunchSelection) -> tuple[str, ...]:
+    """Build argv for the optional ZMQ package without importing that adapter."""
 
     arguments = [
         sys.executable,
@@ -381,7 +388,21 @@ def build_zmq_launch_command(selection: ZmqLaunchSelection) -> str:
                 str(selection.curve_peer_key),
             )
         )
-    return shlex.join(arguments)
+    return tuple(arguments)
+
+
+def build_zmq_launch_command(selection: ZmqLaunchSelection) -> str:
+    """Return the shell-rendered form shown on the launch confirmation page."""
+
+    return shlex.join(_zmq_launch_arguments(selection))
+
+
+def _execute_command(arguments: Sequence[str]) -> int:
+    """Run one confirmed command directly and preserve its process exit status."""
+
+    completed = subprocess.run(tuple(arguments), check=False)
+    return_code = int(completed.returncode)
+    return return_code if return_code >= 0 else 128 - return_code
 
 
 def build_calibration_plan(choice: RobotSpecChoice) -> CalibrationPlan:
@@ -542,8 +563,8 @@ class _BiosTui:
                     "Calibrate FEETECH Home",
                 ),
                 (
-                    "Generate a validated ros2 launch command without starting it.",
-                    "Generate one direct Leader/Follower ZeroMQ command.",
+                    "Validate and start one ROS 2 robot process.",
+                    "Validate and start one direct Leader/Follower ZeroMQ process.",
                     "Write FEETECH packet home offsets after explicit physical confirmation.",
                 ),
             )
@@ -567,7 +588,7 @@ class _BiosTui:
                 fields.extend(("Translation scale", "Rotation scale"))
                 values.extend((self.translation_scale, self.rotation_scale))
             review_index = len(fields)
-            fields.append("Review and generate")
+            fields.append("Review and launch")
             values.append("")
             key = self._draw_form(
                 stdscr,
@@ -667,7 +688,7 @@ class _BiosTui:
                         ("peer_key", "Peer public key", self.zmq_curve_peer_key),
                     )
                 )
-            fields.append(("review", "Review and generate", ""))
+            fields.append(("review", "Review and launch", ""))
             key = self._draw_form(
                 stdscr,
                 "ZMQ TELEOP SETUP",
@@ -816,7 +837,7 @@ class _BiosTui:
             self.status = str(exc)
             return None
         lines = [*selection.choice.summary, "", "Command:", command]
-        if self._confirm_document(stdscr, "CONFIRM ROS 2 COMMAND", lines):
+        if self._confirm_document(stdscr, "CONFIRM ROS 2 LAUNCH", lines):
             return TuiResult(TuiWorkflow.ROS2_LAUNCH, launch=selection)
         return None
 
@@ -860,7 +881,7 @@ class _BiosTui:
             "Command:",
             command,
         ]
-        if self._confirm_document(stdscr, "CONFIRM ZMQ COMMAND", lines):
+        if self._confirm_document(stdscr, "CONFIRM ZMQ LAUNCH", lines):
             return TuiResult(TuiWorkflow.ZMQ_LAUNCH, zmq_launch=selection)
         return None
 
@@ -1391,11 +1412,21 @@ def main() -> int:
         print(f"warning: {warning}", file=sys.stderr)
 
     if result.workflow == TuiWorkflow.ROS2_LAUNCH and result.launch is not None:
-        print(build_ros_launch_command(result.launch))
-        return 0
+        try:
+            return _execute_command(_ros_launch_arguments(result.launch))
+        except KeyboardInterrupt:
+            return 130
+        except OSError as exc:
+            print(_error_chain(exc), file=sys.stderr)
+            return 2
     if result.workflow == TuiWorkflow.ZMQ_LAUNCH and result.zmq_launch is not None:
-        print(build_zmq_launch_command(result.zmq_launch))
-        return 0
+        try:
+            return _execute_command(_zmq_launch_arguments(result.zmq_launch))
+        except KeyboardInterrupt:
+            return 130
+        except OSError as exc:
+            print(_error_chain(exc), file=sys.stderr)
+            return 2
     if result.workflow == TuiWorkflow.CALIBRATE and result.calibration is not None:
         try:
             calibrate_feetech_home(

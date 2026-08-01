@@ -116,3 +116,4 @@ def test_follower_cli_passes_validated_xrce_options(tmp_path, monkeypatch):
     assert options.namespace == "vehicle_1"
     assert options.client_key == 0xACED0042
     assert options.startup_timeout_s == 4.5
+    assert "hold_on_start" not in captured

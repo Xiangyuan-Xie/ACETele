@@ -77,6 +77,7 @@ class RuntimeFollowerNode(Node):
             )
             self._session.connect()
             session_connected = True
+            self._session.hold_position()
             self._initialize_interfaces()
         except BaseException as initialization_error:
             cleanup_error: Optional[BaseException] = None
@@ -189,7 +190,10 @@ class RuntimeFollowerNode(Node):
         )
         self._sequence = 0
         self._timer = self.create_timer(1.0 / publish_rate, self._publish_state)
-        self.get_logger().info("Follower RobotRuntime ROS 2 node started.")
+        safety_state = self._session.runtime.diagnostics().safety.state.value
+        self.get_logger().info(
+            f"Follower RobotRuntime ROS 2 node started in {safety_state}."
+        )
 
     def _arm_command_callback(self, message: ROSJointState) -> None:
         """Validate and submit the arm heartbeat directly to the latest-value mailbox."""
