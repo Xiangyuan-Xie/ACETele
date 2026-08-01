@@ -5,10 +5,12 @@ from acetele.hardware.buses.actor import (
     BusActorDiagnostics,
     BusError,
     BusProtocol,
+    DeviceEnableRequest,
     FatalBusError,
     MotionCommitGate,
     MotionEnvelope,
     RecoverableBusError,
+    resolve_device_enable_request,
 )
 from acetele.hardware.buses.budget import BusBudget, calculate_bus_budget
 from acetele.hardware.buses.modbus_rtu import (
@@ -30,6 +32,7 @@ __all__ = [
     "BusBudget",
     "BusError",
     "BusProtocol",
+    "DeviceEnableRequest",
     "FatalBusError",
     "ModbusProtocolError",
     "MotionCommitGate",
@@ -46,4 +49,5 @@ __all__ = [
     "encode_read_holding_registers",
     "encode_read_input_registers",
     "encode_write_registers",
+    "resolve_device_enable_request",
 ]

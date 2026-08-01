@@ -6,7 +6,12 @@ import time
 
 import pytest
 
-from acetele.hardware.buses import MotionEnvelope, RecoverableBusError, append_crc
+from acetele.hardware.buses import (
+    DeviceEnableRequest,
+    MotionEnvelope,
+    RecoverableBusError,
+    append_crc,
+)
 from acetele.hardware.devices.servos.feetech import (
     FeetechInstruction,
     FeetechModbusBusProtocol,
@@ -106,6 +111,8 @@ class PacketTransport:
                     state[offset] = self.reserved_register_value
                 state[13:15] = FeetechPacketCodec.word(20)
                 self.responses.extend(_status(state_id, bytes(state)))
+        elif instruction == FeetechInstruction.OFFSET_CALIBRATION:
+            self.responses.extend(_status(servo_id))
 
     def read_exact(self, count, *, deadline_ns):
         if len(self.responses) < count:
@@ -151,6 +158,39 @@ def test_packet_protocol_checks_identity_and_requires_explicit_enable():
     assert sync_motion[9:11] == FeetechPacketCodec.word(1024)
     assert state.position_rad == pytest.approx(math.pi / 2.0)
     assert state.current_a == pytest.approx(0.13)
+
+
+def test_packet_protocol_can_enable_arm_without_shared_gripper():
+    profile = feetech_packet_profiles.require("HL3915", context="test")
+    transport = PacketTransport({0: 100, 4: 100})
+    protocol = FeetechPacketBusProtocol(transport, {0: profile, 4: profile})
+    protocol.connect()
+    protocol.read_fast_state()
+
+    protocol.execute_safety("set_enabled", DeviceEnableRequest(True, (0,)))
+    protocol.write_motion((_packet_motion(0, 0.1),))
+
+    with pytest.raises(RecoverableBusError, match="software-disabled servo IDs: 4"):
+        protocol.write_motion((_packet_motion(4, 0.1),))
+    torque_frame = next(
+        frame
+        for frame in reversed(transport.writes)
+        if frame[4] == FeetechInstruction.SYNC_WRITE and frame[5] == 40
+    )
+    assert torque_frame[7:-1] == bytes((0, 1))
+
+
+def test_packet_calibration_matches_official_sdk_signed_int16_parameters():
+    profile = feetech_packet_profiles.require("HL3960", context="test")
+    transport = PacketTransport({1: 1234})
+    protocol = FeetechPacketBusProtocol(transport, {1: profile})
+    protocol.connect()
+
+    protocol.execute_safety("calibrate_offset", {1: -1024})
+
+    frame = transport.writes[-1]
+    assert frame[4] == FeetechInstruction.OFFSET_CALIBRATION
+    assert frame[5:7] == bytes.fromhex("00 fc")
 
 
 def test_packet_protocol_ignores_nonzero_reserved_state_registers():

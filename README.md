@@ -257,6 +257,10 @@ Follower 完成完整状态读取后，会无条件以实测位置作为目标�
 没有 Leader 在线也会保持当前位置。该安全策略没有运行时关闭选项；自动保持仍不能替代独立
 硬件急停。
 
+同步对齐期间，Leader 只使能机械臂关节，平行夹爪保持无扭矩并作为启动扳机。机械臂达到
+Follower 的同步姿态后，将夹爪手动移动到归一化位置 `1.0` 即进入 `TRACKING`，随后 Leader
+机械臂释放扭矩。重新同步会再次释放整条 Leader 总线，再按相同顺序执行。
+
 高频 arm/gripper command 与 state 话题使用 `BEST_EFFORT + KEEP_LAST(1)`，同步状态话题
 使用 `RELIABLE + KEEP_LAST(1)`。Follower 的合法命令在订阅回调中直接进入最新值邮箱，
 不会等待额外控制定时器。平行夹爪保留 `/ace_leader/gripper/command` 和

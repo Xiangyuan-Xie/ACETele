@@ -6,7 +6,11 @@ import time
 from dataclasses import dataclass
 from typing import Mapping, Optional, Sequence
 
-from acetele.hardware.buses import MotionEnvelope, RecoverableBusError
+from acetele.hardware.buses import (
+    MotionEnvelope,
+    RecoverableBusError,
+    resolve_device_enable_request,
+)
 
 
 @dataclass(frozen=True)
@@ -66,18 +70,18 @@ class MockBusProtocol:
         }
         self._clock_ns = clock_ns
         self._connected = False
-        self._enabled = False
+        self._enabled_ids: set[int] = set()
 
     def connect(self) -> None:
         """Reset the in-memory bus to a connected, disabled state."""
 
         self._connected = True
-        self._enabled = False
+        self._enabled_ids.clear()
 
     def disconnect(self) -> None:
         """Disable and disconnect the in-memory bus."""
 
-        self._enabled = False
+        self._enabled_ids.clear()
         self._connected = False
 
     def cancel(self) -> None:
@@ -87,23 +91,31 @@ class MockBusProtocol:
         """Model only software enable and stop behavior needed by runtime tests."""
 
         if label == "set_enabled":
-            if type(payload) is not bool:
-                raise ValueError("mock set_enabled payload must be a boolean")
-            self._enabled = payload
+            enabled, device_ids = resolve_device_enable_request(
+                payload,
+                self._devices,
+                context="mock",
+            )
+            if enabled:
+                self._enabled_ids.update(device_ids)
+            else:
+                self._enabled_ids.difference_update(device_ids)
             return True
         if label in ("hold", "emergency_stop"):
             if label == "emergency_stop":
-                self._enabled = False
+                self._enabled_ids.clear()
             return True
         raise ValueError(f"unsupported mock safety task '{label}'")
 
     def write_motion(self, targets: Sequence[MotionEnvelope]) -> None:
         """Apply a validated target set atomically to in-memory positions."""
 
-        if not self._enabled:
-            raise RecoverableBusError("mock motion is blocked while disabled")
         values: dict[int, tuple[float, ...]] = {}
         for target in targets:
+            if target.device_id not in self._enabled_ids:
+                raise RecoverableBusError(
+                    f"mock motion for device {target.device_id} is blocked while disabled"
+                )
             definition = self._devices.get(target.device_id)
             if definition is None or not isinstance(target.payload, MockMotion):
                 raise RecoverableBusError("invalid mock motion target")

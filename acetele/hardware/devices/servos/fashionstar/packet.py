@@ -5,9 +5,14 @@ from __future__ import annotations
 import math
 import time
 from dataclasses import dataclass, replace
-from typing import Mapping, Optional, Sequence
+from typing import Iterable, Mapping, Optional, Sequence
 
-from acetele.hardware.buses import MotionEnvelope, RecoverableBusError, SerialTransport
+from acetele.hardware.buses import (
+    MotionEnvelope,
+    RecoverableBusError,
+    SerialTransport,
+    resolve_device_enable_request,
+)
 from acetele.hardware.devices.servos.fashionstar.codec import (
     FashionStarCommand,
     FashionStarMonitorState,
@@ -79,7 +84,7 @@ class FashionStarBusProtocol:
         self._operation_timeout_ns = round(operation_timeout_s * 1e9)
         self._clock_ns = clock_ns
         self._last_command_ns: Optional[int] = None
-        self._software_disabled = True
+        self._enabled_ids: set[int] = set()
         self._sync_capable = False
         self._last_states: dict[int, FashionStarMonitorState] = {}
 
@@ -95,7 +100,7 @@ class FashionStarBusProtocol:
         self._last_states.clear()
         self._observed_firmware_versions.clear()
         self._last_command_ns = None
-        self._software_disabled = True
+        self._enabled_ids.clear()
         self._sync_capable = False
         self._transport.connect()
         try:
@@ -166,7 +171,7 @@ class FashionStarBusProtocol:
             # monitor path and fall back to bounded unicast when it is unavailable.
             self._sync_capable = self._probe_sync_monitor()
             self._stop_all(FashionStarStopMode.RELEASE)
-            self._software_disabled = True
+            self._enabled_ids.clear()
         except BaseException:
             self._observed_firmware_versions.clear()
             self._transport.disconnect()
@@ -180,7 +185,7 @@ class FashionStarBusProtocol:
     def disconnect(self) -> None:
         """Release transport and clear negotiated capabilities."""
 
-        self._software_disabled = True
+        self._enabled_ids.clear()
         self._sync_capable = False
         self._observed_firmware_versions.clear()
         self._transport.disconnect()
@@ -189,26 +194,29 @@ class FashionStarBusProtocol:
         """Execute hold, damping, release, enable, or calibration barriers."""
 
         if label == "hold":
-            self._stop_all(FashionStarStopMode.HOLD)
+            self._stop_devices(self._enabled_ids, FashionStarStopMode.HOLD)
             return True
         if label == "emergency_stop":
-            self._software_disabled = True
+            self._enabled_ids.clear()
             self._stop_all(FashionStarStopMode.RELEASE)
             return True
         if label == "set_enabled":
-            if type(payload) is not bool:
-                raise ValueError("FashionStar set_enabled payload must be a boolean")
-            if not payload:
-                self._software_disabled = True
-                self._stop_all(FashionStarStopMode.RELEASE)
+            enabled, servo_ids = resolve_device_enable_request(
+                payload,
+                self._devices,
+                context="FashionStar",
+            )
+            if not enabled:
+                self._enabled_ids.difference_update(servo_ids)
+                self._stop_devices(servo_ids, FashionStarStopMode.RELEASE)
             else:
-                self._stop_all(FashionStarStopMode.HOLD)
-                self._software_disabled = False
+                self._stop_devices(servo_ids, FashionStarStopMode.HOLD)
+                self._enabled_ids.update(servo_ids)
             return True
         if label in ("set_origin", "reset_multi_turn"):
             # These operations change the persistent angle frame. The software latch
             # prevents any queued motion from racing calibration.
-            if not self._software_disabled:
+            if self._enabled_ids:
                 raise RuntimeError(
                     f"FashionStar {label} requires the software-disabled calibration state"
                 )
@@ -227,11 +235,13 @@ class FashionStarBusProtocol:
     def write_motion(self, targets: Sequence[MotionEnvelope]) -> None:
         """Use a sync frame when negotiated, otherwise bounded per-servo writes."""
 
-        if self._software_disabled:
-            raise RecoverableBusError("FashionStar motion is blocked while software-disabled")
         commands: list[tuple[int, FashionStarMotion]] = []
         # Validate the complete mailbox snapshot before selecting a wire strategy.
         for target in targets:
+            if target.device_id not in self._enabled_ids:
+                raise RecoverableBusError(
+                    f"FashionStar servo ID {target.device_id} is software-disabled"
+                )
             if target.device_id not in self._devices:
                 raise RecoverableBusError(f"unknown FashionStar servo ID {target.device_id}")
             if not isinstance(target.payload, FashionStarMotion):
@@ -340,7 +350,16 @@ class FashionStarBusProtocol:
     def _stop_all(self, mode: FashionStarStopMode) -> None:
         """Apply a stop behavior to every configured servo in deterministic order."""
 
-        for servo_id in self._devices:
+        self._stop_devices(self._devices, mode)
+
+    def _stop_devices(
+        self,
+        servo_ids: Iterable[int],
+        mode: FashionStarStopMode,
+    ) -> None:
+        """Apply one stop behavior to a selected deterministic device set."""
+
+        for servo_id in sorted(servo_ids):
             self._send(FashionStarPacketCodec.encode_stop(servo_id, mode))
 
     def _probe_sync_monitor(self) -> bool:

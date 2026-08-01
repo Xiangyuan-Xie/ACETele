@@ -16,6 +16,7 @@ from acetele.hardware.buses import (
     decode_write_registers_response,
     encode_read_holding_registers,
     encode_write_registers,
+    resolve_device_enable_request,
 )
 from acetele.hardware.devices.servos.feetech.profile import FeetechModbusServoProfile
 
@@ -101,14 +102,14 @@ class FeetechModbusBusProtocol:
         self._devices = devices
         self._operation_timeout_ns = round(operation_timeout_s * 1e9)
         self._clock_ns = clock_ns
-        self._software_disabled = True
+        self._enabled_ids: set[int] = set()
         self._last_fast: dict[int, FeetechModbusFastState] = {}
 
     def connect(self) -> None:
         """Verify firmware/profile identity and leave every servo disabled."""
 
         self._last_fast.clear()
-        self._software_disabled = True
+        self._enabled_ids.clear()
         self._transport.connect()
         try:
             # Firmware and servo versions jointly identify the documented register
@@ -133,9 +134,9 @@ class FeetechModbusBusProtocol:
             # so a later mismatch cannot leave only part of the bus configured.
             for slave_id in self._devices:
                 self._write_registers(slave_id, self.torque_enable_address, (0,))
-            self._software_disabled = True
+            self._enabled_ids.clear()
         except BaseException:
-            self._software_disabled = True
+            self._enabled_ids.clear()
             self._transport.disconnect()
             raise
 
@@ -147,23 +148,28 @@ class FeetechModbusBusProtocol:
     def disconnect(self) -> None:
         """Release the serial transport."""
 
-        self._software_disabled = True
+        self._enabled_ids.clear()
         self._transport.disconnect()
 
     def execute_safety(self, label: str, payload) -> object:
         """Execute ordered enable, hold, or emergency-disable transactions."""
 
         if label == "set_enabled":
-            if type(payload) is not bool:
-                raise ValueError("FEETECH Modbus set_enabled payload must be a boolean")
-            if payload:
+            enabled, slave_ids = resolve_device_enable_request(
+                payload,
+                self._devices,
+                context="FEETECH Modbus",
+            )
+            if enabled:
                 # Seed goals from measured positions before torque-on, preventing motion
                 # toward stale values retained in the servo registers.
-                if set(self._last_fast) != set(self._devices):
+                if not set(slave_ids).issubset(self._last_fast):
                     raise RuntimeError(
-                        "FEETECH Modbus torque cannot be enabled before a complete state sample"
+                        "FEETECH Modbus torque cannot be enabled before a complete "
+                        "state sample for selected devices"
                     )
-                for slave_id, state in self._last_fast.items():
+                for slave_id in slave_ids:
+                    state = self._last_fast[slave_id]
                     self._write_registers(
                         slave_id,
                         self.goal_address,
@@ -172,44 +178,54 @@ class FeetechModbusBusProtocol:
                             FeetechModbusMotion(state.position_rad),
                         ),
                     )
-            for slave_id in self._devices:
-                self._write_registers(
-                    slave_id,
-                    self.torque_enable_address,
-                    (int(payload),),
-                )
-            self._software_disabled = not payload
+            try:
+                for slave_id in slave_ids:
+                    self._write_registers(
+                        slave_id,
+                        self.torque_enable_address,
+                        (int(enabled),),
+                    )
+            except BaseException:
+                self._enabled_ids.difference_update(slave_ids)
+                raise
+            if enabled:
+                self._enabled_ids.update(slave_ids)
+            else:
+                self._enabled_ids.difference_update(slave_ids)
             return True
         if label == "emergency_stop":
-            self._software_disabled = True
+            self._enabled_ids.clear()
             for slave_id in self._devices:
                 self._write_registers(slave_id, self.torque_enable_address, (0,))
             return True
         if label == "hold":
-            if not self._last_fast:
+            slave_ids = tuple(sorted(self._enabled_ids))
+            if not slave_ids:
+                return True
+            if not set(slave_ids).issubset(self._last_fast):
                 raise RuntimeError("FEETECH Modbus cannot hold before state is available")
-            for slave_id, state in self._last_fast.items():
+            for slave_id in slave_ids:
+                state = self._last_fast[slave_id]
                 values = self._encode_motion(
                     self._devices[slave_id],
                     FeetechModbusMotion(state.position_rad),
                 )
                 self._write_registers(slave_id, self.goal_address, values)
-            self._software_disabled = False
             return True
         raise ValueError(f"unsupported FEETECH Modbus safety task '{label}'")
 
     def write_motion(self, targets: Sequence[MotionEnvelope]) -> None:
         """Encode and write each latest SI target within its shared deadline."""
 
-        if self._software_disabled:
-            raise RecoverableBusError(
-                "FEETECH Modbus motion is blocked while software-disabled"
-            )
         seen: set[int] = set()
         try:
             deadline_ns = min(target.deadline_ns for target in targets)
             encoded: list[tuple[int, tuple[int, ...]]] = []
             for target in targets:
+                if target.device_id not in self._enabled_ids:
+                    raise ValueError(
+                        f"FEETECH Modbus slave ID {target.device_id} is software-disabled"
+                    )
                 profile = self._devices.get(target.device_id)
                 if profile is None:
                     raise ValueError(

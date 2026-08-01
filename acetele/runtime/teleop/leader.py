@@ -142,9 +142,9 @@ class LeaderTeleopSession:
             RuntimeSafetyState.ACTIVE,
             RuntimeSafetyState.HOLD,
         ):
-            # Holding invalidates the current actor generation before a new peer can
-            # establish an alignment target from its first state sample.
-            self.runtime.hold()
+            # A peer reset must release the complete leader, including a gripper used
+            # as the next synchronization cycle's physical start trigger.
+            self.runtime.set_enabled(False)
         self.mode = LeaderSyncMode.IDLE
         self._follower_positions = None
         self._last_follower_state_ns = None
@@ -251,7 +251,9 @@ class LeaderTeleopSession:
             self._sync_target = self._follower_positions.copy()
         safety_state = self.runtime.diagnostics().safety.state
         if safety_state in (RuntimeSafetyState.SAFE_DISABLED, RuntimeSafetyState.HOLD):
-            self.runtime.set_enabled(True)
+            # Only arm joints hold the synchronization target. End effectors stay
+            # passive so the operator can move the gripper trigger into TRACKING.
+            self.runtime.enable_arm_groups(self._arm_groups)
         elif safety_state == RuntimeSafetyState.FAULT:
             raise RuntimeError("cannot align a faulted leader")
         self.runtime.write(self._target_command(now_ns))

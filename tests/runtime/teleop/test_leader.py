@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import time
 from pathlib import Path
 
@@ -8,7 +9,15 @@ import pytest
 
 from acetele.runtime import LeaderTeleopSession, RobotRuntime, RuntimeSafetyState
 from acetele.runtime.teleop import FollowerSyncStatus, LeaderSyncMode, TeleopMode
-from acetele.specification import ArmSpec, Backend, BusSpec, BusType, JointSpec, RobotSpec
+from acetele.specification import (
+    ArmSpec,
+    Backend,
+    BusSpec,
+    BusType,
+    JointSpec,
+    ParallelGripperSpec,
+    RobotSpec,
+)
 
 urdf_path = (
     Path(__file__).resolve().parents[3]
@@ -117,7 +126,7 @@ def test_leader_session_requests_resync_when_follower_heartbeat_expires():
         session.close()
 
 
-def test_leader_peer_reset_discards_alignment_and_holds_motion():
+def test_leader_peer_reset_discards_alignment_and_releases_all_joints():
     session = _session()
     session.connect()
     try:
@@ -130,7 +139,56 @@ def test_leader_peer_reset_discards_alignment_and_holds_motion():
 
         assert session.mode == LeaderSyncMode.IDLE
         assert session.follower_status == FollowerSyncStatus.IDLE
-        assert session.runtime.diagnostics().safety.state == RuntimeSafetyState.HOLD
+        assert (
+            session.runtime.diagnostics().safety.state
+            == RuntimeSafetyState.SAFE_DISABLED
+        )
+    finally:
+        session.close()
+
+
+def test_leader_alignment_enables_arm_but_leaves_gripper_trigger_passive():
+    joints = tuple(
+        JointSpec(f"joint_{index}", index - 1, "HL3915", 1, 0.0)
+        for index in range(1, 5)
+    )
+    gripper = ParallelGripperSpec(
+        "arm",
+        JointSpec("joint_5", 4, "HL3915", 1, 0.0),
+        math.pi / 4.0,
+    )
+    spec = RobotSpec(
+        "ace_leader",
+        (
+            BusSpec(
+                "arm",
+                BusType.FEETECH_PACKET,
+                "mock://arm",
+                1_000_000,
+                100.0,
+                physical_layer="ttl",
+                family="hls",
+            ),
+        ),
+        (ArmSpec("single", "arm", joints, end_effector=gripper),),
+        backend=Backend.MOCK,
+        urdf_path=str(urdf_path),
+    )
+    session = LeaderTeleopSession(RobotRuntime(spec))
+    session.connect()
+    try:
+        _wait_for_state(session)
+        now_ns = time.monotonic_ns()
+        session.observe_follower_state(
+            tuple(joint.name for joint in joints),
+            (0.0, 0.0, 0.0, 0.0),
+            now_ns=now_ns,
+        )
+        session.step(now_ns=now_ns)
+
+        actor = session.runtime._actors["arm"]  # noqa: SLF001
+        protocol = actor._protocol  # noqa: SLF001
+        assert protocol._enabled_ids == {0, 1, 2, 3}  # noqa: SLF001
     finally:
         session.close()
 

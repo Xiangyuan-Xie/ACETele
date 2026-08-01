@@ -266,6 +266,12 @@ enables torque, and enters `HOLD`, so it can hold position without a Leader onli
 policy has no runtime bypass; automatic holding still does not replace an independent hardware
 emergency stop.
 
+During synchronization, the Leader enables only its arm joints. Its parallel gripper remains
+torque-free and acts as the physical start trigger. Once the arm reaches the Follower alignment
+pose, manually move the gripper to normalized position `1.0` to enter `TRACKING`; the Leader arm is
+then released. A new synchronization cycle first releases the entire Leader bus and repeats this
+sequence.
+
 High-rate arm/gripper command and state topics use `BEST_EFFORT + KEEP_LAST(1)`, while sync topics
 use `RELIABLE + KEEP_LAST(1)`. Valid follower commands enter the latest-value mailbox directly in
 the subscription callback without waiting for another control timer. Parallel grippers retain

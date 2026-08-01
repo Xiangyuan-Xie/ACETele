@@ -30,6 +30,7 @@ from acetele.estimation import RobustJointStateEstimator
 from acetele.hardware.buses import (
     BusActor,
     BusActorDiagnostics,
+    DeviceEnableRequest,
     MotionCommitGate,
     MotionEnvelope,
     SerialDirectionControl,
@@ -478,6 +479,55 @@ class RobotRuntime:
             self._safety.disabled()
 
     @_serialized_operation
+    def enable_arm_groups(self, group_names: tuple[str, ...]) -> None:
+        """Enter READY while enabling only selected arms on their shared buses.
+
+        Leader synchronization uses this boundary to hold arm joints without also
+        applying torque to a passive gripper used as the operator's start trigger.
+        """
+
+        group_names = tuple(group_names)
+        if not group_names:
+            raise ValueError("at least one arm group must be enabled")
+        if any(not isinstance(group_name, str) for group_name in group_names):
+            raise ValueError("arm group names must be strings")
+        if len(set(group_names)) != len(group_names):
+            raise ValueError("arm groups to enable must be unique")
+        unknown = set(group_names) - set(self._groups)
+        if unknown:
+            raise ValueError(
+                "unknown joint groups to enable: "
+                + ", ".join(sorted(unknown))
+            )
+        non_arm = tuple(
+            group_name
+            for group_name in group_names
+            if not self._groups[group_name].is_arm
+        )
+        if non_arm:
+            raise ValueError(
+                "targeted synchronization enable accepts arm groups only: "
+                + ", ".join(non_arm)
+            )
+        self._require_connected()
+        state = self._safety.snapshot().state
+        if state == RuntimeSafetyState.FAULT:
+            raise RuntimeError("robot runtime fault is latched; reset it explicitly")
+        if state not in (RuntimeSafetyState.SAFE_DISABLED, RuntimeSafetyState.HOLD):
+            raise RuntimeError(f"cannot enter READY from {state.value}")
+
+        device_ids_by_bus: dict[str, list[int]] = {}
+        for group_name in group_names:
+            group = self._groups[group_name]
+            device_ids = tuple(joint.servo_id for joint in group.joints)
+            device_ids_by_bus.setdefault(group.bus, []).extend(device_ids)
+
+        self._refresh_position_pipeline_feedback()
+        self._rebase_position_pipelines()
+        self._submit_arm_enable(device_ids_by_bus)
+        self._safety.ready()
+
+    @_serialized_operation
     def emergency_stop(self) -> None:
         """Latch the strongest profile-supported stop on every connected bus."""
 
@@ -797,6 +847,29 @@ class RobotRuntime:
                     first_error = exc
         if first_error is not None:
             self._latch_hardware_fault("safety task 'set_enabled' failed")
+            raise first_error
+
+    def _submit_arm_enable(self, device_ids_by_bus: Mapping[str, list[int]]) -> None:
+        """Enable selected arm devices and fault the runtime on partial failure."""
+
+        first_error: Optional[BaseException] = None
+        for bus_name, device_ids in device_ids_by_bus.items():
+            preflight = self.preflight.buses[bus_name]
+            if not preflight.supports_software_disable:
+                continue
+            request = DeviceEnableRequest(True, tuple(device_ids))
+            try:
+                self._actors[bus_name].submit_safety(
+                    "set_enabled",
+                    request,
+                    wait=True,
+                    clear_motion=False,
+                )
+            except BaseException as exc:
+                if first_error is None:
+                    first_error = exc
+        if first_error is not None:
+            self._latch_hardware_fault("targeted joint-group enable failed")
             raise first_error
 
     def _submit_all_safety(

@@ -7,7 +7,12 @@ import time
 from dataclasses import dataclass
 from typing import Mapping, Optional, Sequence
 
-from acetele.hardware.buses import MotionEnvelope, RecoverableBusError, SerialTransport
+from acetele.hardware.buses import (
+    MotionEnvelope,
+    RecoverableBusError,
+    SerialTransport,
+    resolve_device_enable_request,
+)
 from acetele.hardware.devices.servos.feetech.codec import (
     FeetechInstruction,
     FeetechPacketCodec,
@@ -146,7 +151,7 @@ class FeetechPacketBusProtocol:
         self._observed_model_numbers: dict[int, int] = {}
         self._operation_timeout_ns = round(operation_timeout_s * 1e9)
         self._clock_ns = clock_ns
-        self._software_disabled = True
+        self._enabled_ids: set[int] = set()
         self._last_fast: dict[int, FeetechPacketFastState] = {}
 
     def connect(self) -> None:
@@ -154,7 +159,7 @@ class FeetechPacketBusProtocol:
 
         self._last_fast.clear()
         self._observed_model_numbers.clear()
-        self._software_disabled = True
+        self._enabled_ids.clear()
         self._transport.connect()
         try:
             # Read identity before changing actuator state. Exact model checks prevent
@@ -180,9 +185,9 @@ class FeetechPacketBusProtocol:
                 self.mode_address,
                 {servo_id: b"\x00" for servo_id in self._devices},
             )
-            self._software_disabled = True
+            self._enabled_ids.clear()
         except BaseException:
-            self._software_disabled = True
+            self._enabled_ids.clear()
             self._observed_model_numbers.clear()
             self._transport.disconnect()
             raise
@@ -195,64 +200,78 @@ class FeetechPacketBusProtocol:
     def disconnect(self) -> None:
         """Release transport and clear cached feedback."""
 
-        self._software_disabled = True
+        self._enabled_ids.clear()
         self._transport.disconnect()
 
     def execute_safety(self, label: str, payload) -> object:
         """Execute ordered enable, hold, disable, or calibration operations."""
 
         if label == "set_enabled":
-            if type(payload) is not bool:
-                raise ValueError("FEETECH set_enabled payload must be a boolean")
-            if payload:
-                # Seed every goal with measured position before enabling torque. This
+            enabled, servo_ids = resolve_device_enable_request(
+                payload,
+                self._devices,
+                context="FEETECH packet",
+            )
+            if enabled:
+                # Seed selected goals with measured position before enabling torque. This
                 # avoids a jump toward a stale power-on goal register.
-                if set(self._last_fast) != set(self._devices):
+                if not set(servo_ids).issubset(self._last_fast):
                     raise RuntimeError(
-                        "FEETECH torque cannot be enabled before a complete state sample"
+                        "FEETECH torque cannot be enabled before a complete state sample "
+                        "for selected devices is available"
                     )
                 hold_values = {
                     servo_id: self._encode_motion(
-                        profile,
+                        self._devices[servo_id],
                         FeetechPacketMotion(self._last_fast[servo_id].position_rad),
                         reference_position_rad=self._last_fast[servo_id].position_rad,
                     )
-                    for servo_id, profile in self._devices.items()
+                    for servo_id in servo_ids
                 }
                 self._sync_write(self.goal_start_address, hold_values)
-            self._sync_write(
-                self.torque_enable_address,
-                {servo_id: bytes((int(payload),)) for servo_id in self._devices},
-            )
-            self._software_disabled = not payload
+            try:
+                self._sync_write(
+                    self.torque_enable_address,
+                    {servo_id: bytes((int(enabled),)) for servo_id in servo_ids},
+                )
+            except BaseException:
+                # A failed broadcast leaves the addressed hardware state unknown.
+                self._enabled_ids.difference_update(servo_ids)
+                raise
+            if enabled:
+                self._enabled_ids.update(servo_ids)
+            else:
+                self._enabled_ids.difference_update(servo_ids)
             return True
         if label == "emergency_stop":
-            self._software_disabled = True
+            self._enabled_ids.clear()
             self._sync_write(
                 self.torque_enable_address,
                 {servo_id: b"\x00" for servo_id in self._devices},
             )
             return True
         if label == "hold":
-            if not self._last_fast:
+            servo_ids = tuple(sorted(self._enabled_ids))
+            if not servo_ids:
+                return True
+            if not set(servo_ids).issubset(self._last_fast):
                 raise RuntimeError("FEETECH bus cannot hold before state is available")
             hold_values = {
                 servo_id: self._encode_motion(
-                    profile,
+                    self._devices[servo_id],
                     FeetechPacketMotion(self._last_fast[servo_id].position_rad),
                     reference_position_rad=self._last_fast[servo_id].position_rad,
                 )
-                for servo_id, profile in self._devices.items()
+                for servo_id in servo_ids
             }
             self._sync_write(self.goal_start_address, hold_values)
             self._sync_write(
                 self.torque_enable_address,
-                {servo_id: b"\x01" for servo_id in self._devices},
+                {servo_id: b"\x01" for servo_id in servo_ids},
             )
-            self._software_disabled = False
             return True
         if label == "calibrate_offset":
-            if not self._software_disabled:
+            if self._enabled_ids:
                 raise RuntimeError("FEETECH offset calibration requires disabled torque")
             values: dict[int, int] = dict(payload)
             if not values:
@@ -260,16 +279,19 @@ class FeetechPacketBusProtocol:
             for servo_id, raw_position in values.items():
                 if servo_id not in self._devices:
                     raise ValueError(f"unknown FEETECH calibration servo ID {servo_id}")
-                if type(raw_position) is not int:
-                    raise ValueError("FEETECH calibration positions must be integers")
-                encoded = FeetechPacketCodec.encode_signed_magnitude(raw_position)
+                if type(raw_position) is not int or not -0x7FFF <= raw_position <= 0x7FFF:
+                    raise ValueError(
+                        "FEETECH calibration positions must be signed-15-bit integers"
+                    )
                 # Calibration is intentionally per-servo because the instruction has
-                # a status response that must be checked before proceeding.
+                # a status response that must be checked before proceeding. Unlike
+                # motion registers, the official reOfsCal SDK writes this parameter as
+                # a little-endian two's-complement int16, not signed magnitude.
                 self._send(
                     FeetechPacketCodec.encode_instruction(
                         servo_id,
                         FeetechInstruction.OFFSET_CALIBRATION,
-                        FeetechPacketCodec.word(encoded),
+                        raw_position.to_bytes(2, "little", signed=True),
                     )
                 )
                 status = self._read_status(expected_servo_id=servo_id, parameter_count=0)
@@ -280,8 +302,16 @@ class FeetechPacketBusProtocol:
     def write_motion(self, targets: Sequence[MotionEnvelope]) -> None:
         """Merge latest per-ID targets into one packet-family sync write."""
 
-        if self._software_disabled:
-            raise RecoverableBusError("FEETECH motion is blocked while software-disabled")
+        disabled_ids = tuple(
+            target.device_id
+            for target in targets
+            if target.device_id not in self._enabled_ids
+        )
+        if disabled_ids:
+            raise RecoverableBusError(
+                "FEETECH motion is blocked for software-disabled servo IDs: "
+                + ", ".join(str(servo_id) for servo_id in disabled_ids)
+            )
         values: dict[int, bytes] = {}
         try:
             # Validate and encode the entire actor snapshot before emitting its single

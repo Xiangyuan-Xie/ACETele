@@ -14,7 +14,7 @@ from collections import deque
 from dataclasses import dataclass
 from queue import Empty, Full, Queue
 from threading import Condition, Event, Lock, RLock, Thread
-from typing import Any, Hashable, Optional, Protocol, Sequence
+from typing import Any, Hashable, Iterable, Optional, Protocol, Sequence
 
 
 class BusError(RuntimeError):
@@ -27,6 +27,50 @@ class RecoverableBusError(BusError):
 
 class FatalBusError(BusError):
     """The actor stopped because bus state can no longer be trusted."""
+
+
+@dataclass(frozen=True)
+class DeviceEnableRequest:
+    """Enable or disable only the listed devices on one shared bus."""
+
+    enabled: bool
+    device_ids: tuple[int, ...]
+
+    def __post_init__(self) -> None:
+        if type(self.enabled) is not bool:
+            raise ValueError("device enable state must be a boolean")
+        device_ids = tuple(self.device_ids)
+        if not device_ids:
+            raise ValueError("device enable request requires at least one device ID")
+        if any(type(device_id) is not int or device_id < 0 for device_id in device_ids):
+            raise ValueError("device enable IDs must be non-negative integers")
+        if len(set(device_ids)) != len(device_ids):
+            raise ValueError("device enable IDs must be unique")
+        object.__setattr__(self, "device_ids", device_ids)
+
+
+def resolve_device_enable_request(
+    payload: Any,
+    available_device_ids: Iterable[int],
+    *,
+    context: str,
+) -> tuple[bool, tuple[int, ...]]:
+    """Normalize global and targeted enable payloads against protocol-owned IDs."""
+
+    available = tuple(available_device_ids)
+    if type(payload) is bool:
+        return payload, available
+    if not isinstance(payload, DeviceEnableRequest):
+        raise ValueError(
+            f"{context} set_enabled payload must be a boolean or DeviceEnableRequest"
+        )
+    unknown = set(payload.device_ids) - set(available)
+    if unknown:
+        raise ValueError(
+            f"{context} set_enabled request contains unknown device IDs: "
+            + ", ".join(str(device_id) for device_id in sorted(unknown))
+        )
+    return payload.enabled, payload.device_ids
 
 
 class MotionCommitGate:
@@ -862,7 +906,14 @@ class BusActor:
         """Disarm or reset watchdog state after a confirmed safety transition."""
 
         with self._state_lock:
-            if label == "set_enabled" and payload is True:
+            enable_succeeded = label == "set_enabled" and (
+                payload is True
+                or (
+                    isinstance(payload, DeviceEnableRequest)
+                    and payload.enabled
+                )
+            )
+            if enable_succeeded:
                 self._motion_watchdog_tripped = False
                 self._safety_task_fenced = False
             elif label == "hold":
