@@ -5,7 +5,7 @@ this repository.
 
 ## Project Snapshot
 
-ACETele is a Python robotics teleoperation package with ROS 2 deployment packages. It supports
+ACETele is a Python robotics teleoperation package with parallel ROS 2 and ZeroMQ adapters. It supports
 FEETECH packet and Modbus buses, FashionStar UART/RS485 servos, Linker Hand RS485 devices, joystick
 input, leader/follower synchronization, PX4-facing messages, RealSense integration, and data tools.
 
@@ -15,23 +15,26 @@ compensation, and watchdog behavior can move actuators or alter nonvolatile devi
 ## Repository Map
 
 ```text
-acetele/core/         Immutable vendor-neutral state, command, capability, and protocol contracts.
-acetele/config/       Strict TOML loader and immutable RobotSpec types.
+acetele/core/         Immutable vendor-neutral state, command, pose, and unit contracts.
+acetele/specification/ Immutable bus, control, joint, and robot specifications.
+acetele/config/       Strict TOML loader, packaged presets, and resource catalog.
 acetele/model/        Packaged URDF assets, metadata validation, and optional Pinocchio reduction.
-acetele/hardware/     Serial Actor, vendor protocols/profiles, state estimation, joystick, and mock.
-acetele/control/      Thread-free command conditioning and compensation pipeline.
-acetele/runtime/      Robot assembly, lifecycle, safety state machine, and teleop sessions.
-acetele/deploy/       ROS 2 packages plus PX4 and RealSense deployment dependencies.
-acetele/tools/        Static preflight and hardware calibration tools.
-acetele/utils/        Teleop synchronization enums and small numeric helpers.
+acetele/control/      Thread-free position conditioning and Cartesian control algorithms.
+acetele/estimation/   Robust low-latency joint state estimation.
+acetele/hardware/     Bus infrastructure, device adapters, operator inputs, and simulators.
+acetele/runtime/      Preflight, lifecycle, safety state machine, and teleop sessions.
+acetele/tools/        Static preflight, hardware calibration, and terminal UI tools.
+ros2/                 First-party ROS 2 packages; never included in the core wheel.
+zeromq/               Independent ZeroMQ adapter and its native XRCE companion component.
+third_party/          PX4 messages and RealSense ROS submodules.
 tests/                Unit, architecture, packaging, runtime, and ROS adapter tests.
 ```
 
 Do not edit vendored areas unless the user explicitly asks:
 
 ```text
-acetele/deploy/realsense-ros/
-acetele/deploy/px4_msgs/
+third_party/realsense_ros/
+third_party/px4_msgs/
 ```
 
 ## Architecture
@@ -39,13 +42,16 @@ acetele/deploy/px4_msgs/
 The dependency direction is fixed:
 
 ```text
-core <- config/model/hardware/control <- runtime <- ROS 2 adapters
+core <- specification <- config/model/control/hardware <- runtime <- ROS 2 and ZeroMQ adapters
 ```
 
 - `core` must not import configuration, hardware, runtime, or ROS packages.
+- `Backend` belongs to `specification`; joint-angle transforms belong to `model.joint_angle`.
 - `hardware` must not import ROS or deployment packages.
 - ROS nodes compose a `RobotRuntime`; they do not inherit from robot or hardware classes.
-- Every physical serial port has exactly one `SerialBusActor` owner.
+- Every physical port has exactly one `BusActor` owner.
+- Runtime imports only `BusAdapter` and immutable `AdapterPlan`; concrete FEETECH, FashionStar,
+  Linker, and mock modules stay below the adapter registry.
 - Public control uses canonical joint names and SI units. Servo IDs, counts, registers, and packet
   formats remain inside hardware profiles, protocols, and diagnostics.
 - Constructors perform static validation only. `RobotRuntime.connect()` is the hardware lifecycle
@@ -65,7 +71,6 @@ JointCommand
 SensorState
 RobotState
 RobotCommand
-DeviceCapabilities
 ```
 
 Arrays owned by these contracts are copied and read-only. A command includes a monotonic submission
@@ -141,10 +146,10 @@ Ask before running anything that may open hardware, launch live ROS nodes, enabl
 joint, or write nonvolatile state. Confirm the intended config, robot side, serial port, power state,
 mechanical clearance, and emergency-stop plan.
 
-Safe static preflight does not open hardware:
+Safe static preflight through the unified TUI does not open hardware:
 
 ```bash
-python -m acetele.tools.check_robot_spec /path/to/robot.toml
+python -m acetele.tools.tui
 ```
 
 Preflight must validate URDF order and limits, exact profiles, firmware capabilities, unique port
@@ -158,17 +163,28 @@ DISCONNECTED -> SAFE_DISABLED -> READY -> ACTIVE -> HOLD/FAULT
 
 - Commands older than their deadline or from an old generation are discarded.
 - Lost follower heartbeats enter `HOLD`, clear pending motion, and require synchronization again.
+- Each bus actor independently enforces the admitted-command heartbeat. Repeated motion-write
+  failures or sustained fast-state loss attempt an emergency stop before latching an actor fault.
+- Actor P95/P99 motion latency is measured through successful protocol-write completion; mailbox
+  admission latency must not be reported as hardware latency.
 - Emergency stop clears motion, increments generation, executes the strongest supported hardware
   action, and remains latched until explicit reset.
 - Stale state, repeated protocol failures, device reset, or a missing arm joint enters `FAULT`.
 - Devices without verifiable torque disable require an independent physical emergency stop. Every
   affected physical bus spec must declare that external stop.
+- An in-process actor cannot protect against process termination, host power loss, or kernel failure.
 
-FEETECH packet home calibration is exposed through
-`python -m acetele.tools.calibrate_feetech_home <config> --yes`. Keep calibration profile-specific,
-require `SAFE_DISABLED`, validate the complete plan before connecting hardware, and preserve queue
-barriers and bounded cleanup. Other protocols must not reuse the FEETECH procedure without their own
+FEETECH packet home calibration is exposed only through the TUI and backed by
+`acetele.runtime.calibrate_feetech_home(spec)`. Keep calibration profile-specific, require
+`SAFE_DISABLED`, validate the complete plan before connecting hardware, and preserve queue barriers
+and bounded cleanup. Other protocols must not reuse the FEETECH procedure without their own
 documented safety transaction.
+
+Interactive operators should use `python -m acetele.tools.tui`. Its launch workflows only generate
+shell-safe ROS 2 or ZeroMQ commands. Its calibration workflow must display the complete immutable write plan,
+require explicit Enter confirmation, leave hardware configuration read-only, and restore the
+terminal before connecting a bus. Keep curses rendering separate from discovery, preflight,
+persistence, and hardware execution so safety behavior remains testable without a terminal.
 
 ## ROS 2
 
@@ -189,6 +205,21 @@ The PX4 bridge publishes `/fmu/in/arm_joint_state` as an arm-only fixed-capacity
 `joint_count` marks the dense valid prefix. Grippers and dexterous hands are excluded. Parallel
 grippers use the existing gripper topics; dexterous hands use the separate end-effector topics.
 
+## ZeroMQ
+
+`zeromq/ace_robot_zmq` is a separately packaged adapter and may depend on `pyzmq` and `msgpack`; the
+core ACETele package may not. Keep its direct two-port PUB/SUB protocol versioned, bounded to one
+MessagePack frame, latest-value only, and strict about names, units, finite values, session IDs, and
+monotonically increasing sequence numbers. Remote wall-clock timestamps are diagnostic only.
+
+The Follower's local receipt time drives the 100 ms heartbeat. New peer sessions call
+`reset_peer()`, invalidate old generations, enter HOLD, and require synchronization again. CURVE
+mode must authenticate the exact configured peer key; plaintext mode is only for trusted wired
+networks. The ZMQ Follower does not use ROS 2, but it must publish measured arm-only state to PX4 via
+the pinned native Agent/sidecar in `zeromq/ace_robot_zmq/xrce/`; that process lifecycle must complete before hardware
+connection and any publication failure must force HOLD. `PoseLeaderClient` is the supported VR
+integration surface and must reuse the same follower session and Cartesian safety path.
+
 ## Development Workflow
 
 Install and run focused tests:
@@ -203,12 +234,12 @@ Before handing off broad changes, run:
 
 ```bash
 python -m pytest
-python -m compileall acetele
+python -m compileall acetele zeromq/ace_robot_zmq
 git diff --check
 pre-commit run --all-files
 ```
 
-The pytest configuration excludes `acetele/deploy/realsense-ros` because it is a large third-party
+The pytest configuration excludes `third_party/realsense_ros` because it is a large third-party
 submodule.
 
 ## Packaging
@@ -217,7 +248,8 @@ Keep metadata in `pyproject.toml` and `setup.py` aligned. Python support is `>=3
 includes:
 
 ```text
-acetele.config/*.toml
+acetele.config/presets/ace_leader/*.toml
+acetele.config/presets/ace_follower/*.toml
 acetele.model.robots.ace_follower/description/*.urdf
 acetele.model.robots.ace_follower/description/meshes/*.STL
 acetele.model.robots.ace_leader/description/*.urdf
@@ -226,8 +258,10 @@ acetele.model.robots.ace_leader/description/meshes/*.STL
 ```
 
 When installed resources change, update both packaging files and
-`tests/test_packaging_metadata.py`. Never package `acetele/equipment` or `acetele/robot`; those
-names belong to the removed architecture.
+`tests/test_packaging_metadata.py`. Never package `ros2/`, `zeromq/`, or `third_party/` in the core
+wheel. The ZeroMQ wheel must contain only `ace_robot_zmq` and its metadata. Do not restore
+`acetele/equipment`, `acetele/robot`, `acetele/deploy`, or `acetele/utils`; those paths belong to the
+removed architecture.
 
 ## Change Checklist
 

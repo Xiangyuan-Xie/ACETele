@@ -33,7 +33,7 @@
       <ul>
         <li><a href="#prerequisites">Prerequisites</a></li>
         <li><a href="#installation">Installation</a></li>
-        <li><a href="#sanity-check">Sanity Check</a></li>
+        <li><a href="#hardware-check">Hardware Check</a></li>
       </ul>
     </li>
     <li>
@@ -42,6 +42,7 @@
         <li><a href="#python-api">Python API</a></li>
         <li><a href="#configuration-system">Configuration System</a></li>
         <li><a href="#ros-2-deployment">ROS 2 Deployment</a></li>
+        <li><a href="#zeromq-deployment">ZeroMQ Deployment</a></li>
       </ul>
     </li>
     <li><a href="#contributing">Contributing</a></li>
@@ -53,21 +54,24 @@
 
 ## Project Introduction
 
-ACETele is a Python/ROS2 engineering framework for robot teleoperation and data collection. It aims
-to provide a unified development workflow from local validation to real-hardware deployment.
+ACETele is a Python engineering framework for robot teleoperation and data collection. Parallel ROS 2
+and ZeroMQ adapters provide one workflow from local validation to real-hardware deployment.
 
 ```text
 ACETele/
 ├── acetele/
-│   ├── config/       Robot configurations
-│   ├── control/      Thread-free control and compensation pipelines
 │   ├── core/         Vendor-neutral state and command contracts
-│   ├── deploy/       ROS2 deployment packages
-│   ├── hardware/     Serial Actors, protocols, profiles, and mocks
+│   ├── specification/ Static bus, control, and robot specifications
+│   ├── config/       TOML loading, presets, and resource catalog
 │   ├── model/        URDF assets and Pinocchio models
-│   ├── runtime/      Robot assembly, lifecycle, and safety state machine
-│   ├── tools/        Common tools
-│   └── utils/
+│   ├── control/      Thread-free position and Cartesian algorithms
+│   ├── estimation/   Robust joint-state estimation
+│   ├── hardware/     Buses, device adapters, inputs, and simulators
+│   ├── runtime/      Preflight, lifecycle, safety, and teleop sessions
+│   └── tools/        Checks, calibration, and the unified TUI
+├── ros2/             First-party ROS 2 packages
+├── zeromq/           Direct-TCP adapter and its native PX4 XRCE component
+├── third_party/      PX4, RealSense, and pinned XRCE submodules
 ├── tests/
 ├── pyproject.toml
 ├── setup.py
@@ -82,6 +86,7 @@ ACETele/
 - [Python 3](https://docs.python.org/3/)
 - [ROS2 Humble](https://docs.ros.org/en/humble/)
 - [Pinocchio](https://stack-of-tasks.github.io/pinocchio/)
+- [ZeroMQ](https://zeromq.org/) (optional teleoperation transport)
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -108,13 +113,21 @@ python3 --version
 
 Confirm that Python is 3.10 or newer.
 
-2. Clone the repository and initialize submodules:
+2. Choose HTTPS or SSH to clone the repository and initialize submodules:
 
 ```bash
+# HTTPS
 git clone --recursive https://github.com/Xiangyuan-Xie/ACETele.git
+
+# SSH
+git clone --recursive git@github.com:Xiangyuan-Xie/ACETele.git
+
 cd ACETele
 git submodule update --init --recursive
 ```
+
+Run only one of the two `git clone` commands. Relative submodule URLs automatically follow the
+HTTPS or SSH transport selected for the parent repository.
 
 If the repository has already been cloned, run this from the project root to fill in or update
 submodules:
@@ -133,6 +146,12 @@ python -m pip install -e .
 ```
 
 After opening a new terminal inside the project, run `source .venv/bin/activate` first.
+
+Install the independent adapter as well for two-host ZeroMQ teleoperation without ROS 2:
+
+```bash
+python -m pip install -e zeromq/ace_robot_zmq
+```
 
 4. Install development tools:
 
@@ -160,12 +179,10 @@ sudo apt install -y python3-colcon-common-extensions python3-rosdep
 # If it reports that rosdep already exists, skip that step.
 rosdep update
 
-ACETELE_ROOT="$(pwd)"
-mkdir -p ~/ws_acetele_ros2/src
-cp -r "${ACETELE_ROOT}/acetele/deploy/"* ~/ws_acetele_ros2/src/
-cd ~/ws_acetele_ros2
-rosdep install --from-paths src --ignore-src -r -y
-colcon build --symlink-install
+rosdep install --from-paths ros2 third_party/px4_msgs \
+  third_party/realsense_ros --ignore-src -r -y
+colcon build --symlink-install \
+  --base-paths ros2 third_party/px4_msgs third_party/realsense_ros
 source install/setup.bash
 ```
 
@@ -173,14 +190,13 @@ source install/setup.bash
 
 The project ships physical HLS TTL configurations for both Leader and Follower, and the generic ROS 2
 launch defaults to the Leader spec. Before first use, verify ports, servo IDs, models, and mechanical
-state, then run the static preflight, which does not open the serial port:
+state, then run hardware-free static preflight through the unified TUI:
 
 ```bash
-python -m acetele.tools.check_robot_spec acetele/config/ace_leader/feetech_hls_ttl.toml
-python -m acetele.tools.check_robot_spec acetele/config/ace_follower/feetech_hls_ttl.toml
-python -m acetele.tools.check_robot_spec acetele/config/ace_follower/feetech_sms_rs485.toml
+python -m acetele.tools.tui
 ```
 
+Packaged specs are checked before the main menu opens, and custom specs are checked when selected.
 Passing preflight confirms configuration, URDF, capability, and bus-budget consistency only; it is
 not a physical safety qualification. Without hardware, set `basic.backend` to `mock` in your own
 configuration or run the test suite.
@@ -195,10 +211,10 @@ configuration or run the test suite.
 `connect()` creates serial ports and Actor threads, and `disconnect()` performs bounded cleanup.
 
 ```python
-from acetele.config.spec_loader import load_robot_spec
+from acetele.config import load_robot_spec
 from acetele.runtime import RobotRuntime
 
-spec = load_robot_spec("acetele/config/ace_follower/feetech_sms_rs485.toml")
+spec = load_robot_spec("acetele/config/presets/ace_follower/feetech_sms_rs485.toml")
 runtime = RobotRuntime(spec)
 runtime.connect()
 try:
@@ -225,13 +241,9 @@ adapters currently cover:
 - FashionStar UART/RS485 packet;
 - Generic Linker Hand RS485, with current profiles for O6, L6, L7, and L10 rather than one model-specific adapter.
 
-New configurations explicitly declare buses, joints, and model profiles. Validate URDF mappings,
-profiles, firmware capabilities, and bus utilization without opening a serial port:
-
-```bash
-python -m acetele.tools.check_robot_spec acetele/config/ace_follower/feetech_sms_rs485.toml
-python -m acetele.tools.check_robot_spec acetele/config/ace_follower/fashionstar_rs485.toml
-```
+New configurations explicitly declare buses, joints, and model profiles. The unified TUI validates
+URDF mappings, profiles, firmware capabilities, and bus utilization without opening a serial port,
+then displays the result while selecting a spec.
 
 Each `port` may define only one bus. Arms and end effectors on the same serial port must share that
 bus so the port always has exactly one Actor owner. Unknown TOML fields fail validation instead of
@@ -242,7 +254,7 @@ nodes that own a `RobotRuntime`. Without `config_path`, it starts the HLS TTL Le
 
 ```bash
 ros2 launch ace_robot_ros2 ace_robot.launch.py \
-  config_path:="$PWD/acetele/config/ace_follower/feetech_sms_rs485.toml"
+  config_path:="$PWD/acetele/config/presets/ace_follower/feetech_sms_rs485.toml"
 ```
 
 The HLS TTL configurations are `ace_leader/feetech_hls_ttl.toml` and
@@ -255,6 +267,15 @@ the subscription callback without waiting for another control timer. Parallel gr
 `/ace_leader/gripper/command` and `/ace_follower/gripper/state`; dexterous hands use the separate
 `/ace_leader/end_effector/command` and `/ace_follower/end_effector/state` topics and are not treated
 as the gripper synchronization trigger.
+
+Each bus actor enforces its own command watchdog: an expired valid-motion heartbeat clears the old
+generation and enters `HOLD`; consecutive motion-write failures or sustained fast-state loss first
+attempt an emergency stop and then latch a bus fault. The bus diagnostic fields
+`p95_motion_end_to_end_s` and `p99_motion_end_to_end_s` measure from command reception until the
+protocol write returns successfully, unlike the Runtime-stage metric that only confirms mailbox
+admission. The actor still shares the main process lifetime and cannot cover forced process
+termination, host power loss, or kernel failure, so a physical emergency stop remains mandatory in
+production.
 
 FashionStar and Linker Hand currently have official-frame and test-double verification. Production
 use still requires model-specific hardware identity, disconnect HOLD, emergency-stop, and sustained
@@ -335,48 +356,59 @@ Key fields:
 `mock` and `physical` use the same typed schema. Unknown fields, duplicate ports, unsupported models,
 incorrect joint order, invalid limits, or bus utilization above 70% fail before hardware is opened.
 After placing every FEETECH packet joint at its mechanical home pose and confirming that the robot
-can remain still safely, run:
+can remain still safely, open the unified terminal tool:
 
 ```bash
-python -m acetele.tools.calibrate_feetech_home \
-  acetele/config/ace_follower/feetech_hls_ttl.toml --yes
+python -m acetele.tools.tui
 ```
 
-The command completes all static checks before connecting and writes nonvolatile offsets only while
-the runtime is `SAFE_DISABLED`. It does not apply this procedure to FashionStar, FEETECH Modbus, or
-Linker Hand devices.
+Select `Calibrate FEETECH Home` to review every servo ID, mechanical Home, direction, and raw Home
+target. Calibration starts only after reviewing the complete write plan and pressing Enter.
+The workflow accepts only physical FEETECH packet specs and never permits an arm or gripper joint to
+be omitted individually.
+
+The TUI uses the same immutable spec shown on the confirmation page for full preflight and execution,
+and writes nonvolatile offsets only while the runtime is `SAFE_DISABLED`. It does not apply this
+procedure to FashionStar, FEETECH Modbus, or Linker Hand devices.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 ### ROS 2 Deployment
 
-ROS 2 packages are located in `acetele/deploy`:
+First-party ROS 2 packages live in `ros2/`; external dependencies live in `third_party/`:
 
 | Package | Purpose |
 | --- | --- |
 | `ace_robot_ros2` | Starts a leader or follower robot node according to `config_path` |
 | `data_collector_ros2` | Triggers rosbag data recording according to remote-control channel status |
 | `visualization_ros2` | Displays RGB-D images, joint states, and topic runtime status |
-| `px4_msgs` | PX4 message definition submodule |
-| `realsense-ros` | RealSense camera ROS 2 driver submodule |
+| `third_party/px4_msgs` | PX4 message definition submodule |
+| `third_party/realsense_ros` | RealSense camera ROS 2 driver submodule |
 
 Build example:
 
 ```bash
-ACETELE_ROOT="$(pwd)"
-mkdir -p ~/ws_acetele_ros2/src
-cd ~/ws_acetele_ros2/src
-cp -r "${ACETELE_ROOT}/acetele/deploy/"* .
-cd ..
-colcon build
+colcon build --symlink-install \
+  --base-paths ros2 third_party/px4_msgs third_party/realsense_ros
 source install/setup.bash
 ```
 
 Common launch commands:
 
 ```bash
+python -m acetele.tools.tui
+```
+
+Select `Launch ROS 2 Robot` to choose a packaged or custom RobotSpec, joint/pose mode, and Cartesian
+scales. After confirmation with Enter, the TUI prints a shell-safe `ros2 launch` command without opening
+hardware. Review and run that command in the shell. Recent launch and calibration selections are
+stored in the XDG state directory.
+
+The commands can also be entered directly:
+
+```bash
 ros2 launch ace_robot_ros2 ace_robot.launch.py \
-  config_path:="$PWD/acetele/config/ace_follower/feetech_hls_ttl.toml"
+  config_path:="$PWD/acetele/config/presets/ace_follower/feetech_hls_ttl.toml"
 ros2 launch data_collector_ros2 data_collector.launch.py
 ros2 launch visualization_ros2 visualization.launch.py
 ```
@@ -386,7 +418,7 @@ with the same mode to use end-effector pose teleoperation:
 
 ```bash
 ros2 launch ace_robot_ros2 ace_robot.launch.py \
-  config_path:="$PWD/acetele/config/ace_follower/feetech_hls_ttl.toml" \
+  config_path:="$PWD/acetele/config/presets/ace_follower/feetech_hls_ttl.toml" \
   teleop_mode:=ee_pose translation_scale:=2.0 rotation_scale:=1.0
 ```
 
@@ -414,6 +446,90 @@ Common topics:
 - `/ace_leader/arm/sync_mode`
 - `/ace_follower/arm/sync_status`
 - `/fmu/in/arm_joint_state`
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+### ZeroMQ Deployment
+
+`ace-robot-zmq` is an independent adapter parallel to ROS 2. It reuses the same `RobotRuntime`,
+synchronization state machine, inverse kinematics, command deadlines, and disconnect `HOLD`. It does
+not start ROS 2 or `rclpy`, but the ZMQ Follower always starts an isolated Micro XRCE-DDS Agent 2.4.2
+and native sidecar to publish measured arm state to PX4 `/fmu/in/arm_joint_state`. The teleoperation
+link uses two latest-value TCP streams: the Leader publishes commands on port `5555`, and the
+Follower publishes state on port `5556`.
+
+Build the pinned native stack before first use:
+
+```bash
+git submodule update --init --recursive
+cmake -S zeromq/ace_robot_zmq/xrce -B build/ace_robot_zmq-xrce \
+  -DACETELE_XRCE_PREFIX="$HOME/.local/lib/acetele/xrce-2.4.2"
+cmake --build build/ace_robot_zmq-xrce --parallel
+```
+
+This build neither reads nor overwrites an Agent 3.x installation under `/usr/local`. Before opening
+robot serial ports, the Follower verifies the Agent, Client, and `ArmJointState` schema. A version
+mismatch, occupied UDP port `8888`, or entity-creation failure aborts startup.
+
+Select `Launch ZMQ Robot` in the TUI to generate one command for each host, or run them directly:
+
+```bash
+# Leader host: replace FOLLOWER_IP with the Follower's wired-network address
+python -m ace_robot_zmq leader \
+  --config "$PWD/acetele/config/presets/ace_leader/feetech_hls_ttl.toml" \
+  --peer-host FOLLOWER_IP
+
+# Follower host: replace LEADER_IP with the Leader's wired-network address
+python -m ace_robot_zmq follower \
+  --config "$PWD/acetele/config/presets/ace_follower/feetech_hls_ttl.toml" \
+  --peer-host LEADER_IP \
+  --xrce-prefix "$HOME/.local/lib/acetele/xrce-2.4.2"
+```
+
+PX4 connects over Ethernet to the Agent on the Follower host:
+
+```text
+UXRCE_DDS_CFG=Ethernet
+UXRCE_DDS_AG_IP=<Follower Ethernet IP>
+UXRCE_DDS_PRT=8888
+UXRCE_DDS_DOM_ID=0
+```
+
+Keep PX4's default `UXRCE_DDS_KEY=1`; the sidecar uses the distinct default `0xACED0001`. If either
+value changes, both client keys must remain nonzero and unique. Firewalls must permit the ZMQ TCP
+inbound ports and PX4-to-Follower UDP `8888`. The Follower publishes only RobotSpec arm joints in
+assembly order: 4 to 14 filtered measured positions and velocities. Grippers and dexterous hands are
+excluded.
+
+Both sides must use the same `--teleop-mode joint|ee_pose`. The Follower applies
+`--translation-scale` and `--rotation-scale` in pose mode. Every process start creates a new session
+ID; disconnects, out-of-order frames, and peer restarts clear old commands and require synchronization
+again. Only a valid arm command refreshes the local 100 ms heartbeat, so malformed or forged frames
+cannot prevent `HOLD`.
+
+Plaintext mode is only for a trusted wired LAN. On an untrusted network, generate certificates on
+the two hosts and configure each side with its local secret key and the peer's public key:
+
+```bash
+ace-robot-zmq keygen --output keys --name leader
+ace-robot-zmq keygen --output keys --name follower
+
+# Leader arguments
+--curve-secret-key keys/leader.key_secret --curve-peer-key keys/follower.key
+
+# Follower arguments
+--curve-secret-key keys/follower.key_secret --curve-peer-key keys/leader.key
+```
+
+CURVE encrypts the connection and admits only the configured peer public key. Secret-key permissions
+must deny group and other access. VR and other pose producers can use
+`ace_robot_zmq.PoseLeaderClient` to publish the latest `EndEffectorPose`. The caller owns the sampling
+loop and stable reference frame; the client owns session, sequence, and synchronization handshakes,
+while the Follower keeps the same relative anchors, IK, and hardware safety path.
+
+If the Agent, sidecar, IPC acknowledgement, or DDS session fails at runtime, the Follower clears old
+commands, enters `HOLD`, and exits nonzero. XRCE write success confirms only the local publication
+path; it does not replace PX4 application-level health monitoring.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -466,11 +582,11 @@ without hardware, describe which mocks, logs, or minimal examples were used for 
 
 ### Submodule Changes
 
-If you need to modify `px4_msgs/`, `realsense-ros/`, or another submodule, make and commit the change
+If you need to modify `third_party/px4_msgs/`, `third_party/realsense_ros/`, or another submodule, make and commit the change
 inside the corresponding submodule first:
 
 ```bash
-cd px4_msgs
+cd third_party/px4_msgs
 git checkout -b feat/your-change
 git add .
 git commit -m "feat: your change"
@@ -480,7 +596,7 @@ Then return to the ACETele parent repository and update and commit the correspon
 
 ```bash
 cd ..
-git add px4_msgs
+git add third_party/px4_msgs
 git commit -m "chore: update px4_msgs submodule"
 ```
 

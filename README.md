@@ -25,7 +25,7 @@
     <li>
       <a href="#项目简介">项目简介</a>
       <ul>
-        <li><a href="技术栈">技术栈</a></li>
+        <li><a href="#技术栈">技术栈</a></li>
       </ul>
     </li>
     <li>
@@ -33,7 +33,7 @@
       <ul>
         <li><a href="#环境要求">环境要求</a></li>
         <li><a href="#安装">安装</a></li>
-        <li><a href="#快速自检">快速自检</a></li>
+        <li><a href="#硬件自检">硬件自检</a></li>
       </ul>
     </li>
     <li>
@@ -42,6 +42,7 @@
         <li><a href="#python-api">Python API</a></li>
         <li><a href="#配置系统">配置系统</a></li>
         <li><a href="#ros-2-部署">ROS 2 部署</a></li>
+        <li><a href="#zeromq-部署">ZeroMQ 部署</a></li>
       </ul>
     </li>
     <li><a href="#贡献">贡献</a></li>
@@ -53,20 +54,24 @@
 
 ## 项目简介
 
-ACETele 是一套面向机器人遥操作与数据采集的 Python/ROS2 工程框架，旨在提供从本地验证到真实硬件部署的统一开发流程。
+ACETele 是一套面向机器人遥操作与数据采集的 Python 工程框架，提供并列的 ROS 2 与
+ZeroMQ 适配器，覆盖从本地验证到真实硬件部署的统一开发流程。
 
 ```text
 ACETele/
 ├── acetele/
-│   ├── config/       机器人配置
-│   ├── control/      无线程控制与补偿流水线
 │   ├── core/         厂商无关的状态与命令契约
-│   ├── deploy/       ROS2 部署功能包
-│   ├── hardware/     串口 Actor、协议、型号 Profile 与 Mock
+│   ├── specification/ 静态总线、控制与机器人规格
+│   ├── config/       TOML 加载、预置配置与资源目录
 │   ├── model/        URDF 资源与 Pinocchio 模型
-│   ├── runtime/      机器人装配、生命周期与安全状态机
-│   ├── tools/        常用工具
-│   └── utils/
+│   ├── control/      无线程位置与笛卡尔控制算法
+│   ├── estimation/   鲁棒关节状态估计
+│   ├── hardware/     总线、设备适配器、输入与仿真器
+│   ├── runtime/      预检、生命周期、安全与遥操作会话
+│   └── tools/        检查、标定与统一 TUI
+├── ros2/             第一方 ROS 2 功能包
+├── zeromq/           独立的直接 TCP 遥操作适配器及其原生 PX4 XRCE 组件
+├── third_party/      PX4、RealSense 与固定 XRCE 子模块
 ├── tests/
 ├── pyproject.toml
 ├── setup.py
@@ -81,6 +86,7 @@ ACETele/
 - [Python 3](https://docs.python.org/3/)
 - [ROS2 Humble](https://docs.ros.org/en/humble/)
 - [Pinocchio](https://stack-of-tasks.github.io/pinocchio/)
+- [ZeroMQ](https://zeromq.org/)（可选遥操作传输）
 
 <p align="right">(<a href="#readme-top">返回顶部</a>)</p>
 
@@ -106,13 +112,21 @@ python3 --version
 
 确认 Python 版本为 3.10 或更高。
 
-2. 克隆仓库并初始化子模块：
+2. 选择 HTTPS 或 SSH 克隆仓库并初始化子模块：
 
 ```bash
+# HTTPS
 git clone --recursive https://github.com/Xiangyuan-Xie/ACETele.git
+
+# SSH
+git clone --recursive git@github.com:Xiangyuan-Xie/ACETele.git
+
 cd ACETele
 git submodule update --init --recursive
 ```
+
+以上两条 `git clone` 命令只需执行一条。子模块使用相对 URL，会自动跟随主仓库选择 HTTPS
+或 SSH，不需要分别维护子模块地址。
 
 如果已经克隆过仓库，请在项目根目录补齐或更新子模块：
 
@@ -130,6 +144,12 @@ python -m pip install -e .
 ```
 
 之后每次打开新的终端进入项目时，先运行 `source .venv/bin/activate`。
+
+如需使用不依赖 ROS 2 的双机 ZeroMQ 遥操作，请额外安装独立适配器：
+
+```bash
+python -m pip install -e zeromq/ace_robot_zmq
+```
 
 4. 安装开发工具：
 
@@ -156,28 +176,26 @@ sudo apt install -y python3-colcon-common-extensions python3-rosdep
 # 如果本机尚未初始化 rosdep，先运行 sudo rosdep init；如果提示已存在可跳过。
 rosdep update
 
-ACETELE_ROOT="$(pwd)"
-mkdir -p ~/ws_acetele_ros2/src
-cp -r "${ACETELE_ROOT}/acetele/deploy/"* ~/ws_acetele_ros2/src/
-cd ~/ws_acetele_ros2
-rosdep install --from-paths src --ignore-src -r -y
-colcon build --symlink-install
+rosdep install --from-paths ros2 third_party/px4_msgs \
+  third_party/realsense_ros --ignore-src -r -y
+colcon build --symlink-install \
+  --base-paths ros2 third_party/px4_msgs third_party/realsense_ros
 source install/setup.bash
 ```
 
 ### 硬件自检
 
 项目提供 HLS TTL 的 Leader/Follower 真实硬件配置；ROS 2 通用 launch 默认使用 Leader
-配置。首次运行前请核对端口、舵机 ID、型号和机械状态，再执行不会打开串口的静态预检：
+配置。首次运行前请核对端口、舵机 ID、型号和机械状态，再通过统一 TUI 完成不会打开
+串口的静态预检：
 
 ```bash
-python -m acetele.tools.check_robot_spec acetele/config/ace_leader/feetech_hls_ttl.toml
-python -m acetele.tools.check_robot_spec acetele/config/ace_follower/feetech_hls_ttl.toml
-python -m acetele.tools.check_robot_spec acetele/config/ace_follower/feetech_sms_rs485.toml
+python -m acetele.tools.tui
 ```
 
-预检通过只表示配置、URDF、型号能力和总线预算一致，不代表已经完成真机安全验证。
-无硬件环境请将自有配置的 `basic.backend` 设为 `mock`，或直接运行测试套件。
+内置配置会在进入主菜单前完成预检；自定义配置会在选择时完成预检。预检通过只表示配置、
+URDF、型号能力和总线预算一致，不代表已经完成真机安全验证。无硬件环境请将自有配置的
+`basic.backend` 设为 `mock`，或直接运行测试套件。
 
 <p align="right">(<a href="#readme-top">返回顶部</a>)</p>
 
@@ -189,10 +207,10 @@ python -m acetele.tools.check_robot_spec acetele/config/ace_follower/feetech_sms
 创建串口与 Actor 线程，`disconnect()` 负责有界清理资源。
 
 ```python
-from acetele.config.spec_loader import load_robot_spec
+from acetele.config import load_robot_spec
 from acetele.runtime import RobotRuntime
 
-spec = load_robot_spec("acetele/config/ace_follower/feetech_sms_rs485.toml")
+spec = load_robot_spec("acetele/config/presets/ace_follower/feetech_sms_rs485.toml")
 runtime = RobotRuntime(spec)
 runtime.connect()
 try:
@@ -217,13 +235,8 @@ finally:
 - FashionStar UART/RS485 packet；
 - Linker Hand 通用 RS485 协议，当前 profile 覆盖 O6、L6、L7 和 L10，不绑定单一型号。
 
-新配置必须显式声明总线、每个关节及型号 profile。可以在不打开串口的情况下完成
-URDF、型号、固件能力和总线占用率预检：
-
-```bash
-python -m acetele.tools.check_robot_spec acetele/config/ace_follower/feetech_sms_rs485.toml
-python -m acetele.tools.check_robot_spec acetele/config/ace_follower/fashionstar_rs485.toml
-```
+新配置必须显式声明总线、每个关节及型号 profile。统一 TUI 会在不打开串口的情况下完成
+URDF、型号、固件能力和总线占用率预检，并在选择配置时显示结果。
 
 每个 `port` 只能声明一个 bus；同一串口上的机械臂和末端执行器必须归入同一个 bus，
 确保该端口始终只有一个 Actor 所有者。未知 TOML 字段会直接报错，不会静默回退到默认值。
@@ -233,7 +246,7 @@ Leader/Follower 节点。不传 `config_path` 时默认启动 HLS TTL Leader：
 
 ```bash
 ros2 launch ace_robot_ros2 ace_robot.launch.py \
-  config_path:="$PWD/acetele/config/ace_follower/feetech_sms_rs485.toml"
+  config_path:="$PWD/acetele/config/presets/ace_follower/feetech_sms_rs485.toml"
 ```
 
 HLS TTL 配置位于 `ace_leader/feetech_hls_ttl.toml` 和
@@ -245,6 +258,12 @@ HLS TTL 配置位于 `ace_leader/feetech_hls_ttl.toml` 和
 不会等待额外控制定时器。平行夹爪保留 `/ace_leader/gripper/command` 和
 `/ace_follower/gripper/state`；灵巧手使用独立的 `/ace_leader/end_effector/command` 和
 `/ace_follower/end_effector/state`，不会被当作夹爪同步扳机。
+
+每条总线的 Actor 独立执行命令 watchdog：合法运动心跳超时后清空旧 generation 并进入
+`HOLD`；连续运动写失败或快速状态持续超时会先尝试急停，再锁存总线故障。总线诊断中的
+`p95_motion_end_to_end_s` 和 `p99_motion_end_to_end_s` 从命令接收时间统计到协议写调用成功
+返回，区别于仅表示进入最新值邮箱的 Runtime stage 耗时。Actor 仍与主进程共享生命周期，
+无法覆盖进程被强制终止、主机掉电或内核失效，因此物理急停仍是生产部署的必要条件。
 
 FashionStar 与 Linker Hand 当前完成了官方协议帧和测试替身验证，接入生产系统前仍必须完成
 对应型号的真机身份、断线 HOLD、急停和持续负载测试。FEETECH packet、FashionStar 和
@@ -319,47 +338,56 @@ RS485 型号不会套用近似型号常数。
 
 `mock` 和 `physical` 使用同一份 typed schema。未知字段、重复端口、未知型号、错误关节顺序、
 无效限位或超过 70% 的总线预算都会在打开硬件前失败。FEETECH packet 舵机完成机械 Home
-对齐并确认所有关节可安全静止后，可执行：
+对齐并确认所有关节可安全静止后，推荐打开统一终端工具：
 
 ```bash
-python -m acetele.tools.calibrate_feetech_home \
-  acetele/config/ace_follower/feetech_hls_ttl.toml --yes
+python -m acetele.tools.tui
 ```
 
-该命令会先完成全量静态预检，再连接总线，并且只允许在 `SAFE_DISABLED` 状态写入非易失
-偏置。FashionStar、FEETECH Modbus 和 Linker Hand 不会套用该标定流程。
+选择 `Calibrate FEETECH Home` 后，界面会显示所有关节的舵机 ID、机械 Home、方向和 Home
+目标原始位置。确认完整写入计划后按 Enter，TUI 才会退出并执行标定。该流程只接受
+physical FEETECH packet 配置，不允许单独遗漏某个机械臂或夹爪关节。
+
+TUI 使用确认页持有的同一份不可变配置完成全量预检和标定，只允许在 `SAFE_DISABLED`
+状态写入非易失偏置。FashionStar、FEETECH Modbus 和 Linker Hand 不会套用该标定流程。
 
 <p align="right">(<a href="#readme-top">返回顶部</a>)</p>
 
 ### ROS 2 部署
 
-ROS 2 包位于 `acetele/deploy`：
+第一方 ROS 2 包位于 `ros2/`，外部依赖位于 `third_party/`：
 
 | 包 | 作用 |
 | --- | --- |
 | `ace_robot_ros2` | 根据 `config_path` 启动 leader 或 follower 机器人节点 |
-| `data_collector_ros2` | data_collector_ros2	根据遥控通道状态触发 rosbag 数据录制 |
+| `data_collector_ros2` | 根据遥控通道状态触发 rosbag 数据录制 |
 | `visualization_ros2` | 用于显示 RGB-D 图像、关节状态和 topic 运行状态 |
-| `px4_msgs` | PX4 消息定义子模块 |
-| `realsense-ros` | RealSense 相机 ROS 2 驱动子模块 |
+| `third_party/px4_msgs` | PX4 消息定义子模块 |
+| `third_party/realsense_ros` | RealSense 相机 ROS 2 驱动子模块 |
 
 构建示例：
 
 ```bash
-ACETELE_ROOT="$(pwd)"
-mkdir -p ~/ws_acetele_ros2/src
-cd ~/ws_acetele_ros2/src
-cp -r "${ACETELE_ROOT}/acetele/deploy/"* .
-cd ..
-colcon build
+colcon build --symlink-install \
+  --base-paths ros2 third_party/px4_msgs third_party/realsense_ros
 source install/setup.bash
 ```
 
 常用启动命令：
 
 ```bash
+python -m acetele.tools.tui
+```
+
+选择 `Launch ROS 2 Robot` 后，可以选择内置或自定义 RobotSpec、关节/末端位姿模式及位姿
+缩放比例。按 Enter 确认后，TUI 只输出经过安全转义的 `ros2 launch` 命令，不会自行打开硬件；
+检查命令后在 shell 中执行即可。最近一次启动和标定选择保存在 XDG state 目录中。
+
+也可以直接使用以下命令：
+
+```bash
 ros2 launch ace_robot_ros2 ace_robot.launch.py \
-  config_path:="$PWD/acetele/config/ace_follower/feetech_hls_ttl.toml"
+  config_path:="$PWD/acetele/config/presets/ace_follower/feetech_hls_ttl.toml"
 ros2 launch data_collector_ros2 data_collector.launch.py
 ros2 launch visualization_ros2 visualization.launch.py
 ```
@@ -369,7 +397,7 @@ ros2 launch visualization_ros2 visualization.launch.py
 
 ```bash
 ros2 launch ace_robot_ros2 ace_robot.launch.py \
-  config_path:="$PWD/acetele/config/ace_follower/feetech_hls_ttl.toml" \
+  config_path:="$PWD/acetele/config/presets/ace_follower/feetech_hls_ttl.toml" \
   teleop_mode:=ee_pose translation_scale:=2.0 rotation_scale:=1.0
 ```
 
@@ -395,6 +423,85 @@ ros2 launch ace_robot_ros2 ace_robot.launch.py \
 - `/ace_leader/arm/sync_mode`
 - `/ace_follower/arm/sync_status`
 - `/fmu/in/arm_joint_state`
+
+<p align="right">(<a href="#readme-top">返回顶部</a>)</p>
+
+### ZeroMQ 部署
+
+`ace-robot-zmq` 是与 ROS 2 平行的独立适配器，直接复用相同的 `RobotRuntime`、同步状态机、
+逆运动学、命令 deadline 和失联 `HOLD`。它不启动 ROS 2 或 `rclpy`，但 ZMQ Follower
+会强制启动隔离的 Micro XRCE-DDS Agent 2.4.2 和原生 sidecar，将实测机械臂状态发布到
+PX4 `/fmu/in/arm_joint_state`。默认遥操作链路使用两个最新值 TCP 流：Leader 在 `5555`
+端口发布命令，Follower 在 `5556` 端口发布状态。
+
+首次使用前构建固定版本的原生栈：
+
+```bash
+git submodule update --init --recursive
+cmake -S zeromq/ace_robot_zmq/xrce -B build/ace_robot_zmq-xrce \
+  -DACETELE_XRCE_PREFIX="$HOME/.local/lib/acetele/xrce-2.4.2"
+cmake --build build/ace_robot_zmq-xrce --parallel
+```
+
+该构建不读取或覆盖 `/usr/local` 中可能存在的 Agent 3.x。Follower 启动时核对 Agent、
+Client 和 `ArmJointState` schema；版本不匹配、UDP `8888` 被占用或实体创建失败时会在
+打开机械臂串口前退出。
+
+可通过 TUI 选择 `Launch ZMQ Robot` 分别生成两台主机的命令，也可以直接运行：
+
+```bash
+# Leader 主机，FOLLOWER_IP 替换为 Follower 的有线网地址
+python -m ace_robot_zmq leader \
+  --config "$PWD/acetele/config/presets/ace_leader/feetech_hls_ttl.toml" \
+  --peer-host FOLLOWER_IP
+
+# Follower 主机，LEADER_IP 替换为 Leader 的有线网地址
+python -m ace_robot_zmq follower \
+  --config "$PWD/acetele/config/presets/ace_follower/feetech_hls_ttl.toml" \
+  --peer-host LEADER_IP \
+  --xrce-prefix "$HOME/.local/lib/acetele/xrce-2.4.2"
+```
+
+PX4 通过有线网连接 Follower 主机上的 Agent：
+
+```text
+UXRCE_DDS_CFG=Ethernet
+UXRCE_DDS_AG_IP=<Follower Ethernet IP>
+UXRCE_DDS_PRT=8888
+UXRCE_DDS_DOM_ID=0
+```
+
+PX4 的 `UXRCE_DDS_KEY` 默认保持 `1`；sidecar 默认使用独立的 `0xACED0001`。若修改其中
+任意一侧，两个 client key 仍必须非零且互不相同。防火墙需要允许 Leader/Follower 的
+ZMQ TCP 入站端口，并允许 PX4 到 Follower UDP `8888`。Follower 只聚合 RobotSpec 中的
+机械臂关节，按装配顺序发布 4 至 14 个滤波后实测位置和速度；夹爪及灵巧手不会进入该消息。
+
+两侧必须使用相同的 `--teleop-mode joint|ee_pose`。位姿模式的
+`--translation-scale` 和 `--rotation-scale` 由 Follower 应用。每次进程启动都会生成新的
+session ID；断线、乱序帧或对端重启都会清除旧命令并要求重新同步。只有合法 arm 命令会刷新
+本机 100 ms 心跳，因此损坏或伪造帧不能阻止进入 `HOLD`。
+
+明文模式仅适用于可信有线局域网。非可信网络应在两台主机分别生成证书，并为每一侧配置
+“本机私钥 + 对端公钥”：
+
+```bash
+ace-robot-zmq keygen --output keys --name leader
+ace-robot-zmq keygen --output keys --name follower
+
+# Leader 参数
+--curve-secret-key keys/leader.key_secret --curve-peer-key keys/follower.key
+
+# Follower 参数
+--curve-secret-key keys/follower.key_secret --curve-peer-key keys/leader.key
+```
+
+CURVE 会加密连接并只允许配置的对端公钥。私钥权限必须禁止组用户和其他用户读取。
+VR 或其他位姿源可使用 `ace_robot_zmq.PoseLeaderClient` 发布最新
+`EndEffectorPose`；调用方负责采样循环与稳定参考坐标系，客户端负责 session、序列和同步握手，
+Follower 仍走相同的相对锚点、IK 与硬件安全路径。
+
+Agent、sidecar、IPC ACK 或 DDS session 在运行中失效时，Follower 会清空旧命令、进入
+`HOLD` 并以非零状态退出。XRCE 写成功只确认本地发布链路可用，不替代 PX4 应用层健康检查。
 
 <p align="right">(<a href="#readme-top">返回顶部</a>)</p>
 
@@ -441,10 +548,10 @@ colcon test
 
 ### 子模块修改
 
-如果需要修改 `px4_msgs/`、`realsense-ros/` 或其他子模块，请先在对应子模块内完成修改并提交：
+如果需要修改 `third_party/px4_msgs/`、`third_party/realsense_ros/` 或其他子模块，请先在对应子模块内完成修改并提交：
 
 ```bash
-cd px4_msgs
+cd third_party/px4_msgs
 git checkout -b feat/your-change
 git add .
 git commit -m "feat: your change"
@@ -454,7 +561,7 @@ git commit -m "feat: your change"
 
 ```bash
 cd ..
-git add px4_msgs
+git add third_party/px4_msgs
 git commit -m "chore: update px4_msgs submodule"
 ```
 
