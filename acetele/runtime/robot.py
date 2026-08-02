@@ -579,6 +579,12 @@ class RobotRuntime:
         # Request the strongest stop everywhere before closing any transport. Continue
         # after errors so one broken bus cannot leak all remaining resources.
         for actor in actors.values():
+            if not actor.connected:
+                # A faulted worker already attempted its protocol-level emergency stop
+                # before terminating. No worker remains to consume another FIFO task;
+                # proceed directly to bounded transport cancellation and disconnect.
+                actor.discard_motion()
+                continue
             try:
                 actor.submit_safety("emergency_stop", None, wait=True)
             except BaseException as exc:
@@ -920,7 +926,18 @@ class RobotRuntime:
         if not failed:
             self._synchronize_actor_watchdogs()
             return
-        reason = "robot runtime bus actor faulted: " + ", ".join(failed)
+        details: list[str] = []
+        for name in failed:
+            actor = self._actors[name]
+            diagnostics = getattr(actor, "diagnostics", None)
+            fault = None
+            if callable(diagnostics):
+                try:
+                    fault = diagnostics().fault
+                except BaseException:
+                    fault = None
+            details.append(name if not fault else f"{name} ({fault})")
+        reason = "robot runtime bus actor faulted: " + ", ".join(details)
         if self._safety.snapshot().state != RuntimeSafetyState.FAULT:
             self._safety.fault(reason)
             for actor in self._actors.values():

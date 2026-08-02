@@ -2,6 +2,7 @@ ace_robot_node:
   ros__parameters:
     control_rate: 100.0
     publish_rate: 100.0
+    adaptive_diagnostic_period: 2.0
     heartbeat_timeout: 0.1
     teleop_mode: joint
     translation_scale: 2.0

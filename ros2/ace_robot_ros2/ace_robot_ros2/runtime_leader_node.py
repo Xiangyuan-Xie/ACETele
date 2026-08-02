@@ -19,7 +19,7 @@ from std_msgs.msg import String
 
 from acetele.runtime import LeaderTeleopSession, RobotRuntime
 from acetele.runtime.teleop import FollowerSyncStatus, LeaderSyncMode, TeleopMode
-from acetele.specification import DexterousHandSpec, ParallelGripperSpec, RobotSpec
+from acetele.specification import DexterousHandSpec, RobotSpec
 
 from .pose_messages import pose_message
 from .spec_validation import validate_ros2_robot_spec
@@ -137,10 +137,6 @@ class RuntimeLeaderNode(Node):
             isinstance(end_effector, DexterousHandSpec)
             for end_effector in end_effectors
         )
-        self._uses_gripper_trigger = any(
-            isinstance(end_effector, ParallelGripperSpec)
-            for end_effector in end_effectors
-        )
         command_topic = (
             "/ace_leader/end_effector/command"
             if uses_dexterous_hand
@@ -185,7 +181,9 @@ class RuntimeLeaderNode(Node):
         self._last_end_effector_positions: Optional[np.ndarray] = None
         self._last_end_effector_publish_ns: Optional[int] = None
         self._timer = self.create_timer(1.0 / control_rate, self._control_loop)
-        self.get_logger().info("Leader RobotRuntime ROS 2 node started.")
+        self.get_logger().info(
+            "Leader RobotRuntime ROS 2 node started; waiting for follower state."
+        )
 
     def _state_callback(self, message: ROSJointState) -> None:
         """Record follower feedback only when names and positions match the model."""
@@ -216,23 +214,20 @@ class RuntimeLeaderNode(Node):
         """Advance synchronization and publish the latest leader state when tracking."""
 
         now = self.get_clock().now()
+        previous_mode = self._session.mode
         try:
             state = self._session.step(now_ns=time.monotonic_ns())
-            if self._session.mode == LeaderSyncMode.READY:
-                if not self._uses_gripper_trigger:
-                    self._session.start_tracking()
-                else:
-                    gripper = state.joints[self._end_effector_groups[0]]
-                    if float(gripper.positions[0]) >= 1.0:
-                        self._session.start_tracking()
+            self._session.try_start_tracking(state)
         except (RuntimeError, ValueError) as exc:
             self.get_logger().error(f"Leader runtime control failed: {exc}")
             try:
                 self._session.stop()
             except (RuntimeError, ValueError) as stop_exc:
                 self.get_logger().error(f"Leader emergency stop failed: {stop_exc}")
+            self._report_mode_transition(previous_mode)
             self._publish_mode()
             return
+        self._report_mode_transition(previous_mode)
         # Mode is published every control cycle with depth one. A newly discovered
         # follower therefore converges without a separate mode timer or stale queue.
         self._publish_mode()
@@ -257,6 +252,31 @@ class RuntimeLeaderNode(Node):
                 tuple(float(value) for item in arms for value in item.efforts),
             )
         self._publish_gripper(state, now)
+
+    def _report_mode_transition(self, previous_mode: LeaderSyncMode) -> None:
+        """Emit one actionable message for each operator-visible session transition."""
+
+        current_mode = self._session.mode
+        if current_mode == previous_mode:
+            return
+        if current_mode == LeaderSyncMode.SYNC_REQUEST:
+            message = "Follower detected; aligning the leader arm."
+        elif current_mode == LeaderSyncMode.READY:
+            if self._session.uses_start_trigger:
+                message = (
+                    "Leader aligned; move the gripper from fully released to at least "
+                    f"{self._session.start_trigger_threshold:.0%} to start teleoperation."
+                )
+            else:
+                message = "Leader aligned; starting teleoperation."
+        elif current_mode == LeaderSyncMode.TRACKING:
+            message = "Teleoperation started; leader arm torque is released."
+        elif current_mode == LeaderSyncMode.STOP:
+            self.get_logger().error("Teleoperation stopped by a safety fault.")
+            return
+        else:
+            message = f"Teleoperation mode changed to {current_mode.value}."
+        self.get_logger().info(message)
 
     def _publish_mode(self) -> None:
         message = String()

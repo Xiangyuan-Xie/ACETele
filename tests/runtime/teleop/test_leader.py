@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from acetele.core import JointState, RobotState
 from acetele.runtime import LeaderTeleopSession, RobotRuntime, RuntimeSafetyState
 from acetele.runtime.teleop import FollowerSyncStatus, LeaderSyncMode, TeleopMode
 from acetele.specification import (
@@ -184,11 +185,35 @@ def test_leader_alignment_enables_arm_but_leaves_gripper_trigger_passive():
             (0.0, 0.0, 0.0, 0.0),
             now_ns=now_ns,
         )
-        session.step(now_ns=now_ns)
+        state = session.step(now_ns=now_ns)
 
         actor = session.runtime._actors["arm"]  # noqa: SLF001
         protocol = actor._protocol  # noqa: SLF001
         assert protocol._enabled_ids == {0, 1, 2, 3}  # noqa: SLF001
+
+        state = session.step(now_ns=now_ns + 200_000_001)
+        assert session.mode == LeaderSyncMode.READY
+
+        group_name = "single.end_effector"
+        released = state.joints[group_name]
+        closed = JointState(
+            released.names,
+            [0.9],
+            released.velocities,
+            released.efforts,
+            released.timestamp_ns,
+            released.sequence,
+            released.unit,
+        )
+        triggered_state = RobotState(
+            {**state.joints, group_name: closed},
+            state.sensors,
+        )
+        assert not session.try_start_tracking(triggered_state)
+        assert not session.try_start_tracking(state)
+        assert session.try_start_tracking(triggered_state)
+        assert session.mode == LeaderSyncMode.TRACKING
+        assert protocol._enabled_ids == set()  # noqa: SLF001
     finally:
         session.close()
 

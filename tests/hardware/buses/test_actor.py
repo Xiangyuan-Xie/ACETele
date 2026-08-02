@@ -525,6 +525,10 @@ def test_persistent_fast_state_loss_faults_inside_actor():
         _wait_until(lambda: actor.diagnostics().fault is not None)
 
         assert ("emergency_stop", None) in protocol.safety
+        fault = actor.diagnostics().fault
+        assert fault is not None
+        assert "fast bus state exceeded its timeout" in fault
+        assert "state unavailable" in fault
         with pytest.raises(BusError, match="faulted"):
             actor.get_snapshot()
     finally:

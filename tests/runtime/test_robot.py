@@ -876,6 +876,35 @@ def test_actor_fault_latches_runtime_fault_and_stops_healthy_buses():
     assert healthy.calls == [("emergency_stop", None, False, True)]
 
 
+def test_disconnect_skips_fifo_stop_for_an_actor_that_already_faulted():
+    class FaultedActor:
+        connected = False
+
+        def __init__(self) -> None:
+            self.discard_count = 0
+            self.disconnect_count = 0
+
+        def submit_safety(self, *_args, **_kwargs):
+            raise AssertionError("a dead actor cannot consume another safety task")
+
+        def discard_motion(self):
+            self.discard_count += 1
+
+        def disconnect(self):
+            self.disconnect_count += 1
+
+    runtime = RobotRuntime(_spec())
+    actor = FaultedActor()
+    runtime._actors = {"arm": actor}  # noqa: SLF001
+    runtime._safety.connected()  # noqa: SLF001
+
+    runtime.disconnect()
+
+    assert actor.discard_count == 1
+    assert actor.disconnect_count == 1
+    assert runtime.diagnostics().safety.state == RuntimeSafetyState.DISCONNECTED
+
+
 def test_runtime_preserves_hls_current_based_torque_estimation():
     runtime = RobotRuntime(_spec(backend=Backend.PHYSICAL))
     group = runtime._groups["single"]  # noqa: SLF001 - verifies profile conversion

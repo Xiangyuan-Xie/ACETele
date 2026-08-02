@@ -46,6 +46,21 @@ def test_adaptive_residual_learns_only_after_static_gate():
     assert diagnostics.adaptive_offset_rad[0] > 0.0
 
 
+def test_adaptive_diagnostics_expose_error_and_saturation():
+    pipeline = PositionControlPipeline(
+        _metadata(),
+        ControlSpec(adaptive_position=True),
+    )
+    pipeline.update_feedback(_state(0.0))
+    pipeline.apply(_command(0.5, 0), now_ns=0)
+    pipeline.apply(_command(0.5, 210_000_000), now_ns=210_000_000)
+
+    diagnostics = pipeline.diagnostics()
+    assert diagnostics.target_rad.tolist() == [0.5]
+    assert diagnostics.position_error_rad.tolist() == [0.5]
+    assert diagnostics.adaptive_saturated.tolist() == [True]
+
+
 def test_pipeline_uses_the_tuning_owned_by_control_spec():
     pipeline = PositionControlPipeline(
         _metadata(),

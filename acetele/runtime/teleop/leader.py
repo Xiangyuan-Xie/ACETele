@@ -16,6 +16,7 @@ from acetele.runtime.teleop.synchronization import (
     LeaderSyncMode,
     TeleopMode,
 )
+from acetele.specification import ParallelGripperSpec
 
 
 class LeaderTeleopSession:
@@ -31,6 +32,8 @@ class LeaderTeleopSession:
         sync_velocity_limit_rad_s: float = 2.0,
         sync_acceleration_limit_rad_s2: float = 3.0,
         command_deadline_ns: int = 50_000_000,
+        start_trigger_threshold: float = 0.75,
+        start_trigger_reset_threshold: float = 0.25,
         teleop_mode: TeleopMode = TeleopMode.JOINT,
         kinematics: Optional[ArmKinematics] = None,
     ) -> None:
@@ -51,6 +54,15 @@ class LeaderTeleopSession:
         ):
             if not math.isfinite(limit) or limit <= 0.0:
                 raise ValueError(f"{name} must be finite and positive")
+        if (
+            not math.isfinite(start_trigger_threshold)
+            or not math.isfinite(start_trigger_reset_threshold)
+            or not 0.0 <= start_trigger_reset_threshold < start_trigger_threshold <= 1.0
+        ):
+            raise ValueError(
+                "leader start trigger thresholds must satisfy "
+                "0 <= reset < start <= 1"
+            )
         self.runtime = runtime
         try:
             self.teleop_mode = TeleopMode(teleop_mode)
@@ -62,6 +74,10 @@ class LeaderTeleopSession:
         self._sync_stable_ns = sync_stable_ns
         self._sync_velocity_limit_rad_s = sync_velocity_limit_rad_s
         self._sync_acceleration_limit_rad_s2 = sync_acceleration_limit_rad_s2
+        self._start_trigger_threshold = float(start_trigger_threshold)
+        self._start_trigger_reset_threshold = float(
+            start_trigger_reset_threshold
+        )
         self._arm_groups = tuple(arm.name for arm in runtime.spec.arms)
         self._arm_names = {
             arm.name: tuple(joint.name for joint in arm.joints)
@@ -79,6 +95,12 @@ class LeaderTeleopSession:
             for group_name in self._arm_groups
             for name in self._arm_names[group_name]
         )
+        self._start_trigger_groups = tuple(
+            f"{arm.name}.end_effector"
+            for arm in runtime.spec.arms
+            if isinstance(arm.end_effector, ParallelGripperSpec)
+        )
+        self._start_trigger_armed = False
         self._kinematics = self._resolve_kinematics(kinematics)
         # A slow bus may need a command lifetime longer than the network default;
         # derive it once from the runtime's validated bus schedule.
@@ -107,6 +129,18 @@ class LeaderTeleopSession:
         """Return the last status received from the follower."""
 
         return self._follower_status
+
+    @property
+    def start_trigger_threshold(self) -> float:
+        """Return the normalized gripper position that starts tracking."""
+
+        return self._start_trigger_threshold
+
+    @property
+    def uses_start_trigger(self) -> bool:
+        """Return whether a parallel gripper is the deliberate start control."""
+
+        return bool(self._start_trigger_groups)
 
     def end_effector_pose(
         self,
@@ -152,6 +186,7 @@ class LeaderTeleopSession:
         self._last_follower_status_ns = None
         self._sync_target = None
         self._stable_since_ns = None
+        self._start_trigger_armed = False
 
     def observe_follower_state(
         self,
@@ -215,6 +250,42 @@ class LeaderTeleopSession:
         self.mode = LeaderSyncMode.SYNC_REQUEST
         self._sync_target = None
         self._stable_since_ns = None
+        self._start_trigger_armed = False
+
+    def try_start_tracking(self, state: RobotState) -> bool:
+        """Start only after a deliberate low-to-high gripper trigger gesture.
+
+        A gripper already closed when alignment completes must first return below the
+        reset threshold. This prevents stale startup state from silently beginning
+        teleoperation while keeping transport adapters free of trigger policy.
+        """
+
+        if not isinstance(state, RobotState):
+            raise ValueError("leader start trigger requires a RobotState")
+        if self.mode != LeaderSyncMode.READY:
+            self._start_trigger_armed = False
+            return False
+        if not self._start_trigger_groups:
+            self.start_tracking()
+            return True
+        positions = tuple(
+            float(state.joints[group_name].positions[0])
+            for group_name in self._start_trigger_groups
+        )
+        if not all(math.isfinite(position) for position in positions):
+            raise ValueError("leader start trigger positions must be finite")
+        if not self._start_trigger_armed:
+            if all(
+                position <= self._start_trigger_reset_threshold
+                for position in positions
+            ):
+                self._start_trigger_armed = True
+            return False
+        if all(position >= self._start_trigger_threshold for position in positions):
+            self.start_tracking()
+            self._start_trigger_armed = False
+            return True
+        return False
 
     def start_tracking(self) -> None:
         """Enter tracking after synchronization criteria have held."""

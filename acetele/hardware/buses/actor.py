@@ -29,6 +29,21 @@ class FatalBusError(BusError):
     """The actor stopped because bus state can no longer be trusted."""
 
 
+def _exception_chain_message(error: BaseException) -> str:
+    """Flatten a local cause chain into one diagnostic string without losing context."""
+
+    messages: list[str] = []
+    visited: set[int] = set()
+    current: Optional[BaseException] = error
+    while current is not None and id(current) not in visited:
+        visited.add(id(current))
+        message = str(current).strip() or type(current).__name__
+        if not messages or message != messages[-1]:
+            messages.append(message)
+        current = current.__cause__ or current.__context__
+    return ": ".join(messages)
+
+
 @dataclass(frozen=True)
 class DeviceEnableRequest:
     """Enable or disable only the listed devices on one shared bus."""
@@ -949,9 +964,12 @@ class BusActor:
             self._protocol.execute_safety("emergency_stop", None)
         except BaseException as exc:
             stop_error = exc
-        detail = reason
+        detail = f"{reason}: {_exception_chain_message(cause)}"
         if stop_error is not None:
-            detail += f"; emergency stop also failed: {stop_error}"
+            detail += (
+                "; emergency stop also failed: "
+                + _exception_chain_message(stop_error)
+            )
         raise FatalBusError(detail) from cause
 
     def _read_slow(self, deadline_ns: int) -> None:

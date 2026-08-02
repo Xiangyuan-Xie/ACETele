@@ -100,9 +100,17 @@ class RuntimeFollowerNode(Node):
         """Create QoS-separated data/sync interfaces after the runtime is connected."""
 
         self.declare_parameter("publish_rate", 100.0)
+        self.declare_parameter("adaptive_diagnostic_period", 2.0)
         publish_rate = float(self.get_parameter("publish_rate").value)
+        diagnostic_period = float(
+            self.get_parameter("adaptive_diagnostic_period").value
+        )
         if not np.isfinite(publish_rate) or publish_rate <= 0.0:
             raise ValueError("publish_rate must be finite and positive")
+        if not np.isfinite(diagnostic_period) or diagnostic_period <= 0.0:
+            raise ValueError("adaptive_diagnostic_period must be finite and positive")
+        self._adaptive_diagnostic_period_ns = round(diagnostic_period * 1e9)
+        self._last_adaptive_diagnostic_ns: Optional[int] = None
 
         # Commands and state are latest-value streams: retransmitting an old sample adds
         # latency and is less useful than the next frame. Sync transitions must arrive.
@@ -267,6 +275,7 @@ class RuntimeFollowerNode(Node):
             self.get_logger().error(f"Follower runtime state failed: {exc}")
             self._publish_sync_status()
             return
+        self._report_adaptive_diagnostics(state, now.nanoseconds)
         # Flatten arm assemblies in RobotSpec order. End effectors remain on their own
         # topic and never consume slots in the PX4 arm-only message.
         arm_states = tuple(state.joints[arm.name] for arm in self._session.runtime.spec.arms)
@@ -304,6 +313,44 @@ class RuntimeFollowerNode(Node):
 
         self._publish_sync_status()
         self._publish_px4(now, arm_positions, arm_velocities)
+
+    def _report_adaptive_diagnostics(self, state, now_ns: int) -> None:
+        """Log bounded controller evidence without adding work to the bus actor."""
+
+        if (
+            self._last_adaptive_diagnostic_ns is not None
+            and now_ns - self._last_adaptive_diagnostic_ns
+            < self._adaptive_diagnostic_period_ns
+        ):
+            return
+        self._last_adaptive_diagnostic_ns = now_ns
+        runtime_diagnostics = self._session.runtime.diagnostics()
+        for arm in self._session.runtime.spec.arms:
+            if not arm.control.adaptive_position:
+                continue
+            diagnostics = runtime_diagnostics.controls[arm.name]
+            finite_error = np.nan_to_num(
+                diagnostics.position_error_rad,
+                nan=0.0,
+            )
+            if not np.any(
+                np.abs(finite_error)
+                > arm.control.position_tuning.adaptive_deadband_rad
+            ):
+                continue
+            measured = state.joints[arm.name]
+            message = (
+                f"Adaptive position {arm.name}: "
+                f"active={diagnostics.adaptive_active.astype(int).tolist()} "
+                f"saturated={diagnostics.adaptive_saturated.astype(int).tolist()} "
+                f"error_rad={np.round(finite_error, 4).tolist()} "
+                f"offset_rad={np.round(diagnostics.adaptive_offset_rad, 4).tolist()} "
+                f"effort_nm={np.round(measured.efforts, 3).tolist()}"
+            )
+            if np.any(diagnostics.adaptive_saturated):
+                self.get_logger().warn(message)
+            else:
+                self.get_logger().info(message)
 
     def _publish_sync_status(self) -> None:
         status = String()

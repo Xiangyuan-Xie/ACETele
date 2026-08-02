@@ -22,10 +22,13 @@ from acetele.specification import ControlSpec
 class PositionControlDiagnostics:
     """Read-only offsets and constraint flags for one arm."""
 
+    target_rad: np.ndarray
+    position_error_rad: np.ndarray
     gravity_offset_rad: np.ndarray
     adaptive_estimate_rad: np.ndarray
     adaptive_offset_rad: np.ndarray
     adaptive_active: np.ndarray
+    adaptive_saturated: np.ndarray
     command_limited: np.ndarray
 
     def __post_init__(self) -> None:
@@ -46,8 +49,10 @@ class _PositionControlState:
     motion_direction: np.ndarray
     last_update_ns: Optional[int]
     last_output: Optional[np.ndarray]
+    diagnostic_target: np.ndarray
     gravity_offset: np.ndarray
     active: np.ndarray
+    saturated: np.ndarray
     limited: np.ndarray
 
 
@@ -94,8 +99,10 @@ class PositionControlPipeline:
         self._motion_direction = np.zeros(self._count)
         self._last_update_ns: Optional[int] = None
         self._last_output: Optional[np.ndarray] = None
+        self._diagnostic_target = np.zeros(self._count)
         self._gravity_offset = np.zeros(self._count)
         self._active = np.zeros(self._count, dtype=bool)
+        self._saturated = np.zeros(self._count, dtype=bool)
         self._limited = np.zeros(self._count, dtype=bool)
 
     def update_feedback(self, state: JointState) -> None:
@@ -106,6 +113,7 @@ class PositionControlPipeline:
         self._feedback = state
         if self._last_output is None:
             self._last_output = state.positions.copy()
+            self._diagnostic_target = state.positions.copy()
 
     def rebase_to_feedback(self) -> None:
         """Restart controller history from the latest measured arm position."""
@@ -122,8 +130,14 @@ class PositionControlPipeline:
             if self._feedback is None
             else np.clip(self._feedback.positions, self._lower, self._upper)
         )
+        self._diagnostic_target = (
+            np.zeros(self._count)
+            if self._feedback is None
+            else self._feedback.positions.copy()
+        )
         self._gravity_offset.fill(0.0)
         self._active.fill(False)
+        self._saturated.fill(False)
         self._limited.fill(False)
 
     def apply(self, command: JointCommand, *, now_ns: int) -> JointCommand:
@@ -137,6 +151,8 @@ class PositionControlPipeline:
         # enforce position and slew limits. Reordering these steps defeats anti-windup.
         target = unwrap_near(command.positions, 0.5 * (self._lower + self._upper))
         target = np.clip(target, self._lower, self._upper)
+        self._diagnostic_target = target.copy()
+        self._saturated.fill(False)
         dt = self._dt(now_ns)
         gravity_offset = self._gravity_compensation()
         adaptive_offset = self._adaptive_compensation(
@@ -197,11 +213,22 @@ class PositionControlPipeline:
     def diagnostics(self) -> PositionControlDiagnostics:
         """Return a snapshot that cannot mutate controller-owned arrays."""
 
+        position_error = (
+            np.full(self._count, np.nan)
+            if self._feedback is None
+            else np.asarray(
+                wrap_to_pi(self._diagnostic_target - self._feedback.positions),
+                dtype=float,
+            )
+        )
         return PositionControlDiagnostics(
+            self._diagnostic_target,
+            position_error,
             self._gravity_offset,
             self._estimate,
             self._offset,
             self._active,
+            self._saturated,
             self._limited,
         )
 
@@ -218,8 +245,10 @@ class PositionControlPipeline:
             self._motion_direction.copy(),
             self._last_update_ns,
             None if self._last_output is None else self._last_output.copy(),
+            self._diagnostic_target.copy(),
             self._gravity_offset.copy(),
             self._active.copy(),
+            self._saturated.copy(),
             self._limited.copy(),
         )
 
@@ -237,8 +266,10 @@ class PositionControlPipeline:
         self._last_output = (
             None if state.last_output is None else state.last_output.copy()
         )
+        self._diagnostic_target = state.diagnostic_target.copy()
         self._gravity_offset = state.gravity_offset.copy()
         self._active = state.active.copy()
+        self._saturated = state.saturated.copy()
         self._limited = state.limited.copy()
 
     def _dt(self, now_ns: int) -> float:
@@ -355,9 +386,15 @@ class PositionControlPipeline:
                 self._tuning.maximum_adaptive_offset_rad,
                 self._upper[index] - target[index] - gravity_offset[index],
             )
-            self._estimate[index] = float(
+            bounded_estimate = float(
                 np.clip(estimate_candidate, available_lower, available_upper)
             )
+            self._saturated[index] = bool(
+                active
+                and abs(error) > self._tuning.adaptive_deadband_rad
+                and not math.isclose(estimate_candidate, bounded_estimate)
+            )
+            self._estimate[index] = bounded_estimate
             # Filter the estimate before exposing it to the servo's own position loop;
             # the estimate may reset immediately, but the commanded offset must not.
             alpha = 1.0 - math.exp(

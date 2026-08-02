@@ -33,7 +33,7 @@ from acetele.runtime import (
     RobotRuntime,
 )
 from acetele.runtime.teleop import LeaderSyncMode, TeleopMode
-from acetele.specification import ParallelGripperSpec, RobotSpec
+from acetele.specification import RobotSpec
 
 
 def _close_preserving_primary(
@@ -230,17 +230,9 @@ class LeaderApplication:
         return tuple(frame.joint_states[arm.name] for arm in self.session.runtime.spec.arms)
 
     def _start_tracking_if_ready(self, state: RobotState) -> None:
-        if self.session.mode != LeaderSyncMode.READY:
-            return
-        gripper_groups = tuple(
-            f"{arm.name}.end_effector"
-            for arm in self.session.runtime.spec.arms
-            if isinstance(arm.end_effector, ParallelGripperSpec)
-        )
-        if not gripper_groups or all(
-            float(state.joints[group].positions[0]) >= 1.0 for group in gripper_groups
-        ):
-            self.session.start_tracking()
+        """Delegate the deliberate gripper gesture to the shared session policy."""
+
+        self.session.try_start_tracking(state)
 
     def _end_effector_commands(
         self,
