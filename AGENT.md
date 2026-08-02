@@ -7,7 +7,7 @@ this repository.
 
 ACETele is a Python robotics teleoperation package with parallel ROS 2 and ZeroMQ adapters. It supports
 FEETECH packet and Modbus buses, FashionStar UART/RS485 servos, Linker Hand RS485 devices, joystick
-input, leader/follower synchronization, PX4-facing messages, RealSense integration, and data tools.
+input, leader/follower synchronization, PX4-facing messages, and RealSense image transport.
 
 Hardware-facing code is safety-critical. Serial traffic, torque state, calibration, control
 compensation, and watchdog behavior can move actuators or alter nonvolatile device state.
@@ -26,6 +26,7 @@ acetele/runtime/      Preflight, lifecycle, safety state machine, and teleop ses
 acetele/tools/        Static preflight, hardware calibration, and terminal UI tools.
 ros2/                 First-party ROS 2 packages; never included in the core wheel.
 zeromq/               Independent ZeroMQ adapter and its native XRCE companion component.
+apps/ace_operator_ui/ Shared transport-neutral Qt operator window.
 third_party/          PX4 messages and RealSense ROS submodules.
 tests/                Unit, architecture, packaging, runtime, and ROS adapter tests.
 ```
@@ -222,6 +223,12 @@ networks. The ZMQ Follower does not use ROS 2, but it must publish measured arm-
 the pinned native Agent/sidecar in `zeromq/ace_robot_zmq/xrce/`; that process lifecycle must complete before hardware
 connection and any publication failure must force HOLD. `PoseLeaderClient` is the supported VR
 integration surface and must reuse the same follower session and Cartesian safety path.
+
+Keep ZMQ control (`5555/5556`) and image transport (`5562`) separate. Camera capture and the Qt
+window run outside the control process and must never refresh the control heartbeat. Their failure is
+degraded operation, while the arm-state XRCE Publisher remains safety-critical. Remote color and depth
+previews are compressed and are not persisted. When CURVE is configured, the image endpoint must use
+the same exact-peer credentials without plaintext fallback.
 
 ## Development Workflow
 

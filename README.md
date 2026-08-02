@@ -148,8 +148,15 @@ python -m pip install -e .
 如需使用不依赖 ROS 2 的双机 ZeroMQ 遥操作，请额外安装独立适配器：
 
 ```bash
-python -m pip install -e zeromq/ace_robot_zmq
+python -m pip install -e apps/ace_operator_ui
+# Follower 图传
+python -m pip install -e "zeromq/ace_robot_zmq[camera]"
+# Leader 可视化
+python -m pip install -e "zeromq/ace_robot_zmq[visualization]"
 ```
+
+Jetson 等无法从 PyPI 安装 `pyrealsense2` 的平台需按 Intel librealsense 文档安装对应
+Python binding；ZMQ 包会在打开相机前明确检查该能力。
 
 4. 安装开发工具：
 
@@ -258,8 +265,9 @@ Follower 完成完整状态读取后，会无条件以实测位置作为目标�
 硬件急停。
 
 同步对齐期间，Leader 只使能机械臂关节，平行夹爪保持无扭矩并作为启动扳机。机械臂达到
-Follower 的同步姿态后，将夹爪手动移动到归一化位置 `1.0` 即进入 `TRACKING`，随后 Leader
-机械臂释放扭矩。重新同步会再次释放整条 Leader 总线，再按相同顺序执行。
+Follower 的同步姿态后，先将夹爪释放到归一化位置 `0.25` 以下，再夹到 `0.75` 以上，即可
+进入 `TRACKING` 并释放 Leader 机械臂扭矩。终端会分别提示对齐、等待扳机和遥操作已启动；
+重新同步会清除旧触发状态并再次执行这一完整手势，避免启动时的旧夹爪位置误触发。
 
 高频 arm/gripper command 与 state 话题使用 `BEST_EFFORT + KEEP_LAST(1)`，同步状态话题
 使用 `RELIABLE + KEEP_LAST(1)`。Follower 的合法命令在订阅回调中直接进入最新值邮箱，
@@ -455,22 +463,24 @@ cmake --build build/ace_robot_zmq-xrce --parallel
 Client 和 `ArmJointState` schema；版本不匹配、UDP `8888` 被占用或实体创建失败时会在
 打开机械臂串口前退出。
 
-可通过 TUI 选择 `Launch ZMQ Robot` 在两台主机上分别直接启动对应进程，也可以手动运行：
+TUI 的 `Launch ZMQ Robot` 只启动遥操作控制。图传作为独立进程运行，因此相机或界面故障
+不会刷新或中断机械臂心跳。Follower 先查看设备并发布双路压缩 RGB-D，Leader 再订阅显示：
 
 ```bash
-# Leader 主机，FOLLOWER_IP 替换为 Follower 的有线网地址
-python -m ace_robot_zmq leader \
-  --config "$PWD/acetele/config/presets/ace_leader/feetech_hls_ttl.toml" \
-  --peer-host FOLLOWER_IP
+python -m ace_robot_zmq cameras
+python -m ace_robot_zmq camera \
+  --front-serial FRONT_REALSENSE_SERIAL \
+  --wrist-serial WRIST_REALSENSE_SERIAL
 
-# Follower 主机，LEADER_IP 替换为 Leader 的有线网地址
-python -m ace_robot_zmq follower \
-  --config "$PWD/acetele/config/presets/ace_follower/feetech_hls_ttl.toml" \
-  --peer-host LEADER_IP \
-  --xrce-prefix "$HOME/.local/lib/acetele/xrce-2.4.2"
+# Leader 主机，FOLLOWER_IP 替换为 Follower 的有线网地址
+python -m ace_robot_zmq visualize --follower-host FOLLOWER_IP
 ```
 
 ZMQ Follower 同样在硬件连接后无条件保持实测位置，不提供绕过该启动安全策略的参数。
+
+控制只使用 `5555/5556`，图传只使用 `5562`。图传发送 JPEG 彩色图、Zstd 压缩深度图及
+相机标定元数据，不保存 MCAP、不发送关节遥测，也不订阅 PX4 输出。原有 `ArmJointState`
+XRCE Publisher 仍是关键安全链路，故障会使 Follower 进入 `HOLD`。
 
 PX4 通过有线网连接 Follower 主机上的 Agent：
 
@@ -481,9 +491,9 @@ UXRCE_DDS_PRT=8888
 UXRCE_DDS_DOM_ID=0
 ```
 
-PX4 的 `UXRCE_DDS_KEY` 默认保持 `1`；sidecar 默认使用独立的 `0xACED0001`。若修改其中
-任意一侧，两个 client key 仍必须非零且互不相同。防火墙需要允许 Leader/Follower 的
-ZMQ TCP 入站端口，并允许 PX4 到 Follower UDP `8888`。Follower 只聚合 RobotSpec 中的
+PX4 的 `UXRCE_DDS_KEY` 默认保持 `1`；sidecar 默认使用独立的 `0xACED0001`，两者必须非零
+且不同。防火墙需要允许 Leader/Follower 的 ZMQ TCP `5555/5556/5562`，并允许 PX4 到
+Follower UDP `8888`。Follower 只聚合 RobotSpec 中的
 机械臂关节，按装配顺序发布 4 至 14 个滤波后实测位置和速度；夹爪及灵巧手不会进入该消息。
 
 两侧必须使用相同的 `--teleop-mode joint|ee_pose`。位姿模式的

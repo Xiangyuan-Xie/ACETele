@@ -150,8 +150,15 @@ After opening a new terminal inside the project, run `source .venv/bin/activate`
 Install the independent adapter as well for two-host ZeroMQ teleoperation without ROS 2:
 
 ```bash
-python -m pip install -e zeromq/ace_robot_zmq
+python -m pip install -e apps/ace_operator_ui
+# Follower image transport
+python -m pip install -e "zeromq/ace_robot_zmq[camera]"
+# Leader visualization
+python -m pip install -e "zeromq/ace_robot_zmq[visualization]"
 ```
+
+On platforms such as Jetson where `pyrealsense2` is not available from PyPI, install the matching
+Intel librealsense Python binding separately. The ZMQ package checks this before opening cameras.
 
 4. Install development tools:
 
@@ -268,9 +275,10 @@ emergency stop.
 
 During synchronization, the Leader enables only its arm joints. Its parallel gripper remains
 torque-free and acts as the physical start trigger. Once the arm reaches the Follower alignment
-pose, manually move the gripper to normalized position `1.0` to enter `TRACKING`; the Leader arm is
-then released. A new synchronization cycle first releases the entire Leader bus and repeats this
-sequence.
+pose, release the gripper below normalized position `0.25`, then close it beyond `0.75` to enter
+`TRACKING` and release the Leader arm. The terminal reports alignment, trigger readiness, and the
+start of teleoperation. A new synchronization cycle clears the old trigger state and requires the
+complete gesture again, so a stale startup gripper position cannot start motion.
 
 High-rate arm/gripper command and state topics use `BEST_EFFORT + KEEP_LAST(1)`, while sync topics
 use `RELIABLE + KEEP_LAST(1)`. Valid follower commands enter the latest-value mailbox directly in
@@ -482,24 +490,27 @@ This build neither reads nor overwrites an Agent 3.x installation under `/usr/lo
 robot serial ports, the Follower verifies the Agent, Client, and `ArmJointState` schema. A version
 mismatch, occupied UDP port `8888`, or entity-creation failure aborts startup.
 
-Select `Launch ZMQ Robot` in the TUI on each host to start that peer directly, or run the commands
-manually:
+The TUI's `Launch ZMQ Robot` workflow starts control only. Image transport runs in separate processes,
+so a camera or UI failure cannot refresh or interrupt the robot heartbeat. List devices and publish
+two compressed RGB-D streams on the Follower, then display them on the Leader:
 
 ```bash
-# Leader host: replace FOLLOWER_IP with the Follower's wired-network address
-python -m ace_robot_zmq leader \
-  --config "$PWD/acetele/config/presets/ace_leader/feetech_hls_ttl.toml" \
-  --peer-host FOLLOWER_IP
+python -m ace_robot_zmq cameras
+python -m ace_robot_zmq camera \
+  --front-serial FRONT_REALSENSE_SERIAL \
+  --wrist-serial WRIST_REALSENSE_SERIAL
 
-# Follower host: replace LEADER_IP with the Leader's wired-network address
-python -m ace_robot_zmq follower \
-  --config "$PWD/acetele/config/presets/ace_follower/feetech_hls_ttl.toml" \
-  --peer-host LEADER_IP \
-  --xrce-prefix "$HOME/.local/lib/acetele/xrce-2.4.2"
+# Leader host: replace FOLLOWER_IP with the Follower's wired-network address
+python -m ace_robot_zmq visualize --follower-host FOLLOWER_IP
 ```
 
 The ZMQ Follower also holds its measured pose unconditionally after hardware connection and exposes
 no option that bypasses this startup safety policy.
+
+Control uses only ports `5555/5556`; image transport uses only `5562`. It sends JPEG color, Zstd
+depth, and camera calibration metadata. It does not store MCAP, publish joint telemetry, or subscribe
+to PX4 output. The existing XRCE `ArmJointState` publisher remains safety-critical and still forces
+Follower `HOLD` on failure.
 
 PX4 connects over Ethernet to the Agent on the Follower host:
 
@@ -510,9 +521,9 @@ UXRCE_DDS_PRT=8888
 UXRCE_DDS_DOM_ID=0
 ```
 
-Keep PX4's default `UXRCE_DDS_KEY=1`; the sidecar uses the distinct default `0xACED0001`. If either
-value changes, both client keys must remain nonzero and unique. Firewalls must permit the ZMQ TCP
-inbound ports and PX4-to-Follower UDP `8888`. The Follower publishes only RobotSpec arm joints in
+Keep PX4's default `UXRCE_DDS_KEY=1`; the sidecar uses the distinct default `0xACED0001`. Both keys
+must remain nonzero and different. Firewalls must permit ZMQ TCP `5555/5556/5562` and PX4-to-Follower
+UDP `8888`. The Follower publishes only RobotSpec arm joints in
 assembly order: 4 to 14 filtered measured positions and velocities. Grippers and dexterous hands are
 excluded.
 
