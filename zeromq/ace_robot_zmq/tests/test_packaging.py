@@ -46,7 +46,10 @@ def test_zmq_wheel_contains_only_the_adapter_package(tmp_path):
         "ace_robot_zmq/__init__.py",
         "ace_robot_zmq/__main__.py",
         "ace_robot_zmq/application.py",
+        "ace_robot_zmq/camera.py",
         "ace_robot_zmq/cli.py",
+        "ace_robot_zmq/image_transport.py",
+        "ace_robot_zmq/operator.py",
         "ace_robot_zmq/options.py",
         "ace_robot_zmq/px4_xrce.py",
         "ace_robot_zmq/protocol.py",
@@ -55,6 +58,17 @@ def test_zmq_wheel_contains_only_the_adapter_package(tmp_path):
         "ace_robot_zmq/transport.py",
         "ace_robot_zmq/ArmJointState.msg",
     }.issubset(files)
+    assert all(
+        name not in files
+        for name in (
+            "ace_robot_zmq/observation.py",
+            "ace_robot_zmq/px4_observer.py",
+            "ace_robot_zmq/recording.py",
+            "ace_robot_zmq/relay.py",
+            "ace_robot_zmq/station.py",
+            "ace_robot_zmq/telemetry.py",
+        )
+    )
     assert all(
         not path.startswith(("acetele/", "ros2/", "third_party/", "xrce/"))
         for path in files

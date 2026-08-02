@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Mapping, Optional, Protocol
+from typing import Mapping, Protocol
 
 import numpy as np
 
@@ -53,8 +53,6 @@ class OperatorSnapshot:
     health: Mapping[str, str] = field(default_factory=dict)
     joints: JointView = JointView()
     metrics: Mapping[str, str] = field(default_factory=dict)
-    recording_state: str = "unknown"
-    recording_error: Optional[str] = None
 
     def __post_init__(self) -> None:
         images = {}
@@ -72,8 +70,6 @@ class OperatorDataSource(Protocol):
     """Minimum adapter implemented by ROS 2 and ZeroMQ monitor sources."""
 
     def snapshot(self) -> OperatorSnapshot: ...
-
-    def set_recording(self, active: bool) -> None: ...
 
 
 __all__ = ["JointView", "OperatorDataSource", "OperatorSnapshot"]

@@ -1,6 +1,12 @@
 """Public ZeroMQ adapter API for ACETele."""
 
 from ace_robot_zmq.application import FollowerApplication, LeaderApplication
+from ace_robot_zmq.image_transport import (
+    ImageFrame,
+    ImagePublisher,
+    ImageSubscriber,
+    ImageTransportOptions,
+)
 from ace_robot_zmq.options import CurveCredentials, PeerRole, ZmqTeleopOptions
 from ace_robot_zmq.protocol import (
     FollowerFrame,
@@ -26,6 +32,10 @@ __all__ = [
     "CurveCredentials",
     "FollowerApplication",
     "FollowerFrame",
+    "ImageFrame",
+    "ImagePublisher",
+    "ImageSubscriber",
+    "ImageTransportOptions",
     "JointTarget",
     "LeaderApplication",
     "LeaderFrame",

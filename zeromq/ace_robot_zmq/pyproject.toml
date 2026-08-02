@@ -14,6 +14,19 @@ dependencies = [
     "pyzmq>=25,<28",
 ]
 
+[project.optional-dependencies]
+camera = [
+    "opencv-python-headless>=4.8,<5",
+    "pyrealsense2>=2.55,<3; platform_machine == 'x86_64'",
+    "zstandard>=0.22,<1",
+]
+visualization = [
+    "ace-operator-ui>=0.2,<0.3",
+    "opencv-python>=4.8,<5",
+    "PySide6>=6.5,<7",
+    "zstandard>=0.22,<1",
+]
+
 [project.scripts]
 ace-robot-zmq = "ace_robot_zmq.cli:main"
 

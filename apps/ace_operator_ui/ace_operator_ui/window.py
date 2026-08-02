@@ -21,7 +21,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QPlainTextEdit,
-    QPushButton,
     QSizePolicy,
     QSplitter,
     QTableWidget,
@@ -431,17 +430,11 @@ class OperatorWindow(QMainWindow):
         title_row = QHBoxLayout()
         title = QLabel("Telemetry", pane)
         title.setObjectName("workspaceTitle")
-        self.stream_summary = QLabel("0 / 7 online", pane)
+        self.stream_summary = QLabel("0 / 6 online", pane)
         self.stream_summary.setObjectName("sectionValue")
-        self.record_button = QPushButton("Start recording", pane)
-        self.record_button.clicked.connect(lambda: self._set_recording(True))
-        self.stop_record_button = QPushButton("Stop", pane)
-        self.stop_record_button.clicked.connect(lambda: self._set_recording(False))
         title_row.addWidget(title)
         title_row.addStretch(1)
         title_row.addWidget(self.stream_summary)
-        title_row.addWidget(self.record_button)
-        title_row.addWidget(self.stop_record_button)
         layout.addLayout(title_row)
 
         details = QSplitter(Qt.Vertical, pane)
@@ -596,16 +589,7 @@ class OperatorWindow(QMainWindow):
             snapshot.metadata.get("wrist", ""),
         )
         self.update_joint_table(snapshot.joints)
-        state = snapshot.recording_state.upper()
-        self.record_button.setText("Recording" if state == "RECORDING" else "Start recording")
-        supported = state not in ("UNKNOWN", "UNAVAILABLE")
-        self.record_button.setEnabled(supported and state != "RECORDING")
-        self.stop_record_button.setEnabled(state == "RECORDING")
-        metrics = dict(snapshot.metrics)
-        metrics["recorder.state"] = snapshot.recording_state
-        if snapshot.recording_error:
-            metrics["recorder.error"] = snapshot.recording_error
-        self.update_metrics(metrics)
+        self.update_metrics(snapshot.metrics)
         self.clock_label.setText(datetime.now().strftime("%Y-%m-%d  %H:%M:%S"))
 
     def update_status_table(self, status: Mapping[str, str]) -> None:
@@ -716,17 +700,6 @@ class OperatorWindow(QMainWindow):
                 1,
                 self._table_item(value, align=Qt.AlignRight | Qt.AlignVCenter),
             )
-
-    def _set_recording(self, active: bool) -> None:
-        """Forward an idempotent record request without touching control transport."""
-
-        try:
-            self._source.set_recording(active)
-        except BaseException as exc:
-            self.overall_health.setText(f"RECORDER ERROR: {exc}")
-            self.overall_health.setProperty("health", "degraded")
-            self.overall_health.style().unpolish(self.overall_health)
-            self.overall_health.style().polish(self.overall_health)
 
     def _update_camera_status(self, status: Mapping[str, str]) -> None:
         """Map topic health directly onto each camera panel badge."""

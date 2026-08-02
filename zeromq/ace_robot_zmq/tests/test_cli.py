@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import signal
+from types import SimpleNamespace
 from typing import Callable
 
+import pytest
 from ace_robot_zmq import cli
 
 
@@ -117,3 +119,66 @@ def test_follower_cli_passes_validated_xrce_options(tmp_path, monkeypatch):
     assert options.client_key == 0xACED0042
     assert options.startup_timeout_s == 4.5
     assert "hold_on_start" not in captured
+
+
+def test_camera_cli_builds_image_only_application(monkeypatch):
+    captured = {}
+    application = _NoopApplication()
+    monkeypatch.setattr(cli, "RealSenseCameraSource", lambda options: options)
+    monkeypatch.setattr(cli, "ImagePublisher", lambda options: options)
+
+    def make_camera(source, publisher, options):
+        captured.update(source=source, publisher=publisher, options=options)
+        return application
+
+    monkeypatch.setattr(cli, "CameraApplication", make_camera)
+
+    result = cli.main(
+        (
+            "camera",
+            "--front-serial",
+            "front-1",
+            "--wrist-serial",
+            "wrist-2",
+            "--bind-host",
+            "127.0.0.1",
+        )
+    )
+
+    assert result == 0
+    assert captured["options"].serials == {
+        "front": "front-1",
+        "wrist": "wrist-2",
+    }
+    assert captured["publisher"].endpoint == "tcp://127.0.0.1:5562"
+
+
+def test_camera_discovery_json_contains_only_device_identity(monkeypatch, capsys):
+    monkeypatch.setattr(
+        cli,
+        "discover_realsense_devices",
+        lambda: (SimpleNamespace(serial="123", name="D455", firmware="5.16"),),
+    )
+
+    assert cli.main(("cameras", "--json")) == 0
+    assert capsys.readouterr().out == (
+        '[{"serial": "123", "name": "D455", "firmware": "5.16"}]\n'
+    )
+
+
+@pytest.mark.parametrize("value", ("0", "65536", "not-a-port"))
+def test_image_commands_reject_invalid_port_before_startup(value):
+    with pytest.raises(SystemExit) as error:
+        cli.main(
+            (
+                "camera",
+                "--front-serial",
+                "front",
+                "--wrist-serial",
+                "wrist",
+                "--camera-port",
+                value,
+            )
+        )
+
+    assert error.value.code == 2

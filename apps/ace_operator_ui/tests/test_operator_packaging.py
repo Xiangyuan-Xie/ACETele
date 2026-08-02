@@ -43,7 +43,5 @@ def test_metadata_refresh_updates_both_camera_views():
 
     assert "self.front_metadata_view" in method
     assert "self.wrist_metadata_view" in method
-    recording = source.split("def _set_recording", 1)[1].split(
-        "def _update_camera_status", 1
-    )[0]
-    assert "wrist_json" not in recording
+    assert "Start recording" not in source
+    assert "set_recording" not in source

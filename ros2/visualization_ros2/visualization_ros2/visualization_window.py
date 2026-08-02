@@ -45,11 +45,7 @@ class RosOperatorSource:
                 tuple(arm.velocity),
                 tuple(arm.effort),
             ),
-            recording_state="unavailable",
         )
-
-    def set_recording(self, active: bool) -> None:
-        raise RuntimeError("recording control is not configured for this ROS 2 monitor")
 
 
 def main(args=None) -> int:
