@@ -37,7 +37,6 @@ class FeetechPacketServoProfile:
     current_unit_a: float
     default_velocity_raw: int
     default_acceleration_raw: int
-    default_current_limit_raw: int
     source: ProtocolSource
     torque_constant_kgcm_per_a: float | None = None
     no_load_current_a: float | None = None
@@ -66,8 +65,6 @@ class FeetechPacketServoProfile:
             raise ValueError("FEETECH default velocity is outside the register range")
         if not 0 <= self.default_acceleration_raw <= 0xFF:
             raise ValueError("FEETECH default acceleration is outside the register range")
-        if not 0 <= self.default_current_limit_raw <= 0x7FFF:
-            raise ValueError("FEETECH default current limit is outside the register range")
         self._validate_torque_estimator()
 
     def _validate_torque_estimator(self) -> None:
@@ -147,16 +144,14 @@ def _build_profile_registries() -> tuple[
     """Build the public catalogs while keeping construction details local."""
 
     hls_source = ProtocolSource(
-        "https://www.feetechrc.com/en/839851.html",
-        "FEETECH HLS memory table snapshot 2026-07-30",
-        "dd033a17a585d260162e9cfb8642684bbd454f415ccdf0503d7cd59c5ee92273",
+        "https://gitee.com/ftservo/FTServo_Arduino/raw/main/src/HLSCL.h",
+        "Official FTServo HLS application API 2024-11-21",
+        "9d2659439ba418270de2613d99d720d254eb3bded4e28ec7a0c173825e9d2d4b",
     )
     sms_source = ProtocolSource(
-        "https://github.com/huggingface/lerobot/blob/"
-        "36b8face988669509272b00f4abe6592d0b17aa0/src/lerobot/motors/feetech/"
-        "tables.py",
-        "LeRobot FEETECH table 36b8face",
-        "71f7f7beb17169781bd26a33b165ed4c5c3df7b9c477d36860f9d6011eb00428",
+        "https://gitee.com/ftservo/FTServo_Arduino/raw/main/src/SMS_STS.h",
+        "Official FTServo SMS/STS application API 2024-11-21",
+        "3267f608ce6123570fd2033526d1749f2783baf3e401757b83028a24b0b76899",
     )
     modbus_source = ProtocolSource(
         "https://www.feetechrc.com/Data/feetechrc/upload/file/20240702/"
@@ -165,15 +160,18 @@ def _build_profile_registries() -> tuple[
         "70083087980f7c1f889071cb63b1b14bf3a4c2746e6d6d2c6c0617f7e64bd5d4",
     )
     velocity_unit = 0.732 * math.pi / 30.0
-    acceleration_unit = math.radians(8.7)
+    acceleration_unit = 100.0 * 2.0 * math.pi / 4096.0
     current_unit = 0.0065
+
+    def speed_raw(maximum_rpm: float) -> int:
+        """Choose the fastest register value that does not exceed the data sheet."""
+
+        return math.floor(maximum_rpm / 0.732)
 
     def hls_profile(
         model: str,
         *,
-        velocity: int,
-        acceleration: int,
-        current_limit: int,
+        maximum_speed_rpm: float,
         torque_constant_kgcm_per_a: float,
         no_load_current_a: float,
     ) -> FeetechPacketServoProfile:
@@ -188,9 +186,10 @@ def _build_profile_registries() -> tuple[
             velocity_unit_rad_s=velocity_unit,
             acceleration_unit_rad_s2=acceleration_unit,
             current_unit_a=current_unit,
-            default_velocity_raw=velocity,
-            default_acceleration_raw=acceleration,
-            default_current_limit_raw=current_limit,
+            default_velocity_raw=speed_raw(maximum_speed_rpm),
+            # The official position API defaults ACC to zero. A model-specific
+            # acceleration is applied only when the caller supplies an SI limit.
+            default_acceleration_raw=0,
             source=hls_source,
             torque_constant_kgcm_per_a=torque_constant_kgcm_per_a,
             no_load_current_a=no_load_current_a,
@@ -202,9 +201,7 @@ def _build_profile_registries() -> tuple[
                 "HL3960",
                 hls_profile(
                     "HL3960",
-                    velocity=110,
-                    acceleration=0,
-                    current_limit=1000,
+                    maximum_speed_rpm=60.0,
                     torque_constant_kgcm_per_a=14.84,
                     no_load_current_a=0.300,
                 ),
@@ -213,9 +210,7 @@ def _build_profile_registries() -> tuple[
                 "HL3950",
                 hls_profile(
                     "HL3950",
-                    velocity=110,
-                    acceleration=0,
-                    current_limit=1000,
+                    maximum_speed_rpm=75.0,
                     torque_constant_kgcm_per_a=20.8,
                     no_load_current_a=0.330,
                 ),
@@ -224,9 +219,7 @@ def _build_profile_registries() -> tuple[
                 "HL3930",
                 hls_profile(
                     "HL3930",
-                    velocity=100,
-                    acceleration=250,
-                    current_limit=1000,
+                    maximum_speed_rpm=45.0,
                     torque_constant_kgcm_per_a=12.5,
                     no_load_current_a=0.150,
                 ),
@@ -235,9 +228,7 @@ def _build_profile_registries() -> tuple[
                 "HL3915",
                 hls_profile(
                     "HL3915",
-                    velocity=250,
-                    acceleration=0,
-                    current_limit=500,
+                    maximum_speed_rpm=100.0,
                     torque_constant_kgcm_per_a=9.3,
                     no_load_current_a=0.260,
                 ),
@@ -253,9 +244,8 @@ def _build_profile_registries() -> tuple[
                     velocity_unit_rad_s=velocity_unit,
                     acceleration_unit_rad_s2=acceleration_unit,
                     current_unit_a=current_unit,
-                    default_velocity_raw=110,
+                    default_velocity_raw=speed_raw(60.0),
                     default_acceleration_raw=0,
-                    default_current_limit_raw=1000,
                     source=sms_source,
                 ),
             ),

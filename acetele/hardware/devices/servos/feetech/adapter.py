@@ -19,9 +19,11 @@ from acetele.hardware.buses import (
 )
 from acetele.hardware.devices.adapter import (
     AdapterPlan,
+    AutomaticFaultAction,
     BusAdapter,
     DecodedJointSample,
     GroupDescription,
+    HardwareFault,
     TransportFactory,
     motion_envelope,
 )
@@ -37,7 +39,6 @@ from acetele.hardware.devices.servos.feetech.packet import (
     nearest_multiturn_position_target,
 )
 from acetele.hardware.devices.servos.feetech.profile import (
-    FeetechPacketFamily,
     feetech_modbus_profiles,
     feetech_packet_profiles,
 )
@@ -181,24 +182,15 @@ class FeetechAdapter(BusAdapter):
         if plan.backend == Backend.MOCK:
             self.validate_mock_command(group, command)
             return
-        if plan.spec.type == BusType.FEETECH_MODBUS_RTU:
-            if command.effort_limits is not None:
-                raise ValueError(
-                    f"joint group '{group.name}' cannot map SI effort limits "
-                    "to Modbus torque ratio"
-                )
-            return
-        if command.effort_limits is None:
-            return
-        unsupported = tuple(
-            joint.name
-            for joint in group.joints
-            if plan.profiles[joint.servo_id].family != FeetechPacketFamily.HLS
-        )
-        if unsupported:
+        if command.effort_limits is not None:
+            register = (
+                "HLS goal-torque field"
+                if plan.spec.type == BusType.FEETECH_PACKET
+                else "Modbus torque-ratio field"
+            )
             raise ValueError(
-                "FEETECH packet effort limits require HLS profiles; unsupported joints: "
-                + ", ".join(unsupported)
+                f"joint group '{group.name}' cannot map SI effort limits to the "
+                f"FEETECH {register} without a calibrated actuator model"
             )
 
     def encode_group(
@@ -216,25 +208,17 @@ class FeetechAdapter(BusAdapter):
             profile = plan.profiles[joint.servo_id]
             position *= joint.direction
             if plan.spec.type == BusType.FEETECH_PACKET:
-                current_limit = self._current_limit(
-                    profile,
-                    None
-                    if command.effort_limits is None
-                    else float(command.effort_limits[index]),
-                )
                 self._validate_packet_registers(
                     profile,
                     position,
                     position_references.get(joint.servo_id),
                     velocity,
                     acceleration,
-                    current_limit,
                 )
                 payload: Any = FeetechPacketMotion(
                     position,
                     velocity,
                     acceleration,
-                    current_limit,
                 )
             else:
                 self._validate_modbus_registers(
@@ -278,6 +262,47 @@ class FeetechAdapter(BusAdapter):
             for device_id, state in snapshot.items()
             if isinstance(state, FeetechPacketFastState)
         }
+
+    def hardware_fault(
+        self,
+        plan: AdapterPlan,
+        fast_snapshot: Any,
+        slow_snapshot: Any,
+    ) -> Optional[HardwareFault]:
+        """Decode FEETECH packet status bits before runtime selects containment."""
+
+        if isinstance(fast_snapshot, Mapping):
+            for device_id, state in fast_snapshot.items():
+                if not isinstance(state, FeetechPacketFastState) or not state.status:
+                    continue
+                labels = tuple(
+                    label
+                    for mask, label in (
+                        (0x01, "supply-voltage"),
+                        (0x02, "angle-sensor"),
+                        (0x04, "over-temperature"),
+                        (0x08, "over-current"),
+                        (0x10, "angle-limit"),
+                        (0x20, "overload"),
+                    )
+                    if state.status & mask
+                )
+                unknown = state.status & ~0x3F
+                decoded = ", ".join(labels)
+                if unknown:
+                    decoded = ", ".join(
+                        value for value in (decoded, f"unknown-0x{unknown:02x}") if value
+                    )
+                return HardwareFault(
+                    (
+                        f"bus '{plan.spec.name}' device {device_id} reported FEETECH "
+                        f"{decoded} (status 0x{state.status:02x}, "
+                        f"current={state.current_a:.3f} A, voltage={state.voltage_v:.1f} V, "
+                        f"temperature={state.temperature_c} C)"
+                    ),
+                    AutomaticFaultAction.DISABLE,
+                )
+        return super().hardware_fault(plan, fast_snapshot, slow_snapshot)
 
     def calibration_targets(
         self,
@@ -328,27 +353,12 @@ class FeetechAdapter(BusAdapter):
         return magnitude_nm * float(np.sign(-current_a * direction))
 
     @staticmethod
-    def _current_limit(profile: Any, effort_nm: Optional[float]) -> Optional[float]:
-        if effort_nm is None:
-            return None
-        torque_constant = profile.torque_constant_kgcm_per_a
-        no_load_current = profile.no_load_current_a
-        if torque_constant is None or no_load_current is None:
-            raise ValueError(
-                f"FEETECH profile {profile.model} cannot convert SI effort to current"
-            )
-        if effort_nm == 0.0:
-            return 0.0
-        return no_load_current + effort_nm / (torque_constant * 0.0980665)
-
-    @staticmethod
     def _validate_packet_registers(
         profile: Any,
         position_rad: float,
         reference_rad: Optional[float],
         velocity_rad_s: Optional[float],
         acceleration_rad_s2: Optional[float],
-        current_limit_a: Optional[float],
     ) -> None:
         if reference_rad is None:
             raise ValueError(
@@ -380,12 +390,6 @@ class FeetechAdapter(BusAdapter):
             if not 0 <= raw <= maximum:
                 raise ValueError(
                     f"FEETECH {label} cannot be encoded by profile {profile.model}"
-                )
-        if current_limit_a is not None:
-            raw_current = round(current_limit_a / profile.current_unit_a)
-            if not 0 <= raw_current <= 0x7FFF:
-                raise ValueError(
-                    f"FEETECH current limit cannot be encoded by profile {profile.model}"
                 )
 
     @staticmethod

@@ -60,6 +60,24 @@ def test_packet_profiles_keep_ttl_and_rs485_identity_separate():
     assert sms.model_number == 11272
 
 
+def test_packet_profile_defaults_do_not_exceed_official_model_speeds():
+    expected_velocity = {
+        "HL3960": 81,
+        "HL3950": 102,
+        "HL3930": 61,
+        "HL3915": 136,
+        "SM8512BL": 81,
+    }
+
+    for model, raw_velocity in expected_velocity.items():
+        profile = feetech_packet_profiles.require(model, context="test")
+        assert profile.default_velocity_raw == raw_velocity
+        assert profile.default_acceleration_raw == 0
+        assert profile.acceleration_unit_rad_s2 == pytest.approx(
+            100.0 * 2.0 * math.pi / 4096.0
+        )
+
+
 class PacketTransport:
     def __init__(
         self,
@@ -187,6 +205,28 @@ def test_packet_protocol_can_enable_arm_without_shared_gripper():
         if frame[4] == FeetechInstruction.SYNC_WRITE and frame[5] == 40
     )
     assert torque_frame[7:-1] == bytes((0, 1))
+
+
+def test_hls_position_transactions_never_treat_goal_torque_as_current_limit():
+    profile = feetech_packet_profiles.require("HL3915", context="test")
+    transport = PacketTransport({1: 100})
+    protocol = FeetechPacketBusProtocol(transport, {1: profile})
+    protocol.connect()
+    protocol.read_fast_state()
+
+    protocol.execute_safety("set_enabled", True)
+    protocol.write_motion((_packet_motion(1, 0.25),))
+    protocol.execute_safety("hold", None)
+
+    goal_frames = tuple(
+        frame
+        for frame in transport.writes
+        if frame[4] == FeetechInstruction.SYNC_WRITE and frame[5] == 41
+    )
+    assert len(goal_frames) == 3
+    # Sync-write header and device ID occupy bytes 0..7; addresses 44..45 are
+    # therefore bytes 11..12 in this one-device frame.
+    assert all(frame[11:13] == b"\x00\x00" for frame in goal_frames)
 
 
 def test_packet_hold_reuses_last_command_instead_of_raw_position_outlier():

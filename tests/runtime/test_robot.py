@@ -158,6 +158,23 @@ def test_unknown_profile_fails_before_transport_creation():
     assert not calls
 
 
+def test_feetech_rejects_uncalibrated_si_effort_limits_before_hardware_io():
+    runtime = RobotRuntime(_spec(backend=Backend.PHYSICAL))
+    plan = runtime._adapter_plans["arm"]  # noqa: SLF001
+    now_ns = time.monotonic_ns()
+    command = JointCommand(
+        ("joint_1",),
+        [0.0],
+        now_ns,
+        now_ns + 50_000_000,
+        0,
+        effort_limits=[0.5],
+    )
+
+    with pytest.raises(ValueError, match="without a calibrated actuator model"):
+        plan.adapter.validate_command(plan, plan.groups[0], command)
+
+
 def test_mock_runtime_maps_direction_and_enforces_safety_state():
     runtime = RobotRuntime(_spec())
     runtime.connect()
@@ -556,6 +573,32 @@ def test_hardware_status_latches_fault_before_state_is_published():
     assert "hardware status 0x02" in safety.fault_reason
     assert actor.calls == [("emergency_stop", None, False, True)]
     assert runtime._fault_action == AutomaticFaultAction.DISABLE  # noqa: SLF001
+
+
+def test_feetech_overcurrent_status_has_actionable_fault_diagnostics():
+    runtime = RobotRuntime(_spec())
+    plan = runtime._adapter_plans["arm"]  # noqa: SLF001
+    fault = plan.adapter.hardware_fault(
+        plan,
+        {
+            0: FeetechPacketFastState(
+                position_rad=0.0,
+                velocity_rad_s=0.0,
+                current_a=1.75,
+                load_ratio=0.4,
+                voltage_v=12.0,
+                temperature_c=36,
+                status=0x08,
+                timestamp_ns=time.monotonic_ns(),
+            )
+        },
+        {},
+    )
+
+    assert fault is not None
+    assert "over-current" in fault.reason
+    assert "current=1.750 A" in fault.reason
+    assert fault.action == AutomaticFaultAction.DISABLE
 
 
 def test_stale_hardware_state_faults_without_returning_the_old_snapshot():

@@ -19,10 +19,7 @@ from acetele.hardware.devices.servos.feetech.codec import (
     FeetechPacketError,
     FeetechStatusPacket,
 )
-from acetele.hardware.devices.servos.feetech.profile import (
-    FeetechPacketFamily,
-    FeetechPacketServoProfile,
-)
+from acetele.hardware.devices.servos.feetech.profile import FeetechPacketServoProfile
 
 
 def nearest_multiturn_position_target(
@@ -59,7 +56,6 @@ class FeetechPacketMotion:
     position_rad: float
     velocity_rad_s: float | None = None
     acceleration_rad_s2: float | None = None
-    current_limit_a: float | None = None
 
     def __post_init__(self) -> None:
         if not math.isfinite(self.position_rad):
@@ -67,7 +63,6 @@ class FeetechPacketMotion:
         for field_name in (
             "velocity_rad_s",
             "acceleration_rad_s2",
-            "current_limit_a",
         ):
             value = getattr(self, field_name)
             if value is not None and (not math.isfinite(value) or value < 0.0):
@@ -146,7 +141,6 @@ class FeetechPacketBusProtocol:
         # connection, which keeps packet parsing and response ordering deterministic.
         self._transport = transport
         self._devices = devices
-        self._family = next(iter(families))
         self._expected_model_numbers = resolved_models
         self._observed_model_numbers: dict[int, int] = {}
         self._operation_timeout_ns = round(operation_timeout_s * 1e9)
@@ -469,21 +463,11 @@ class FeetechPacketBusProtocol:
             raise ValueError("FEETECH velocity exceeds the signed-magnitude register")
         if not 0 <= acceleration <= 0xFF:
             raise ValueError("FEETECH acceleration exceeds the uint8 register")
-        if profile.family == FeetechPacketFamily.HLS:
-            # HLS inserts goal current between position and velocity; SMS reserves the
-            # same bytes, so packet layout remains common while capability differs.
-            current_limit = (
-                profile.default_current_limit_raw
-                if motion.current_limit_a is None
-                else round(motion.current_limit_a / profile.current_unit_a)
-            )
-            if not 0 <= current_limit <= 0x7FFF:
-                raise ValueError("FEETECH current limit exceeds the register range")
-            auxiliary = FeetechPacketCodec.word(current_limit)
-        else:
-            if motion.current_limit_a is not None:
-                raise ValueError("FEETECH SMS packet profile has no goal-current field")
-            auxiliary = b"\x00\x00"
+        # Addresses 44..45 are HLS GOAL_TORQUE but SMS GOAL_TIME. They are not a
+        # portable current limit: the persistent/SRAM torque-limit register starts at
+        # 48. Match the vendor position APIs by writing zero here and keep force/torque
+        # control out of the position transaction until it has a calibrated contract.
+        auxiliary = b"\x00\x00"
         return (
             bytes((acceleration,))
             + FeetechPacketCodec.word(raw_position)
