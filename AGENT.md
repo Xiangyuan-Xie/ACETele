@@ -166,13 +166,22 @@ DISCONNECTED -> SAFE_DISABLED -> READY -> ACTIVE -> HOLD/FAULT
 - Follower applications always seed the measured pose, enable torque, and enter `HOLD` after
   connection; transport adapters must not expose a runtime bypass for this startup policy.
 - Lost follower heartbeats enter `HOLD`, clear pending motion, and require synchronization again.
+- A Leader with a parallel gripper automatically powers arm alignment after healthy Follower
+  feedback arrives; one release-to-close gripper gesture then enters tracking. A triggerless Leader
+  still requires explicit alignment and tracking commands.
+- End-effector-only commands never establish or refresh the arm heartbeat. ROS command streams use
+  finite lifespan and latest-value delivery.
 - Each bus actor independently enforces the admitted-command heartbeat. Repeated motion-write
-  failures or sustained fast-state loss attempt an emergency stop before latching an actor fault.
+  failures or sustained fast-state loss clear pending motion, attempt to hold the latest successful
+  command, and latch an actor fault.
 - Actor P95/P99 motion latency is measured through successful protocol-write completion; mailbox
   admission latency must not be reported as hardware latency.
 - Emergency stop clears motion, increments generation, executes the strongest supported hardware
   action, and remains latched until explicit reset.
 - Stale state, repeated protocol failures, device reset, or a missing arm joint enters `FAULT`.
+- `FAULT` carries an explicit containment action: communication/state-trust failures hold the last
+  successful target, device hardware alarms request protocol-level disable, and unsupported disable
+  requires the external emergency stop. Explicit emergency stop always requests the strongest action.
 - Devices without verifiable torque disable require an independent physical emergency stop. Every
   affected physical bus spec must declare that external stop.
 - An in-process actor cannot protect against process termination, host power loss, or kernel failure.

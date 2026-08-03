@@ -15,14 +15,15 @@ class LeaderSyncMode(str, Enum):
     SYNC_REQUEST = "sync_request"
     READY = "ready"
     TRACKING = "tracking"
+    HOLD = "hold"
     STOP = "stop"
 
 
 class FollowerSyncStatus(str, Enum):
     IDLE = "idle"
-    ALIGNING = "aligning"
     READY = "ready"
     TRACKING = "tracking"
+    HOLD = "hold"
     LOST = "lost"
     FAULT = "fault"
 
@@ -45,6 +46,9 @@ class FollowerSyncController:
             self.last_command_ns = None
         elif mode in (LeaderSyncMode.SYNC_REQUEST, LeaderSyncMode.READY):
             self.status = FollowerSyncStatus.READY
+            self.last_command_ns = None
+        elif mode == LeaderSyncMode.HOLD:
+            self.status = FollowerSyncStatus.HOLD
             self.last_command_ns = None
         elif mode == LeaderSyncMode.STOP:
             self.status = FollowerSyncStatus.LOST
@@ -70,6 +74,17 @@ class FollowerSyncController:
         self.last_command_ns = int(now_ns)
         self.status = FollowerSyncStatus.TRACKING
         return True
+
+    def heartbeat_current(self, now_ns: int) -> bool:
+        """Return whether an admitted arm frame still owns the motion session."""
+
+        if type(now_ns) is not int or now_ns < 0:
+            raise ValueError("heartbeat time must be a non-negative integer")
+        return (
+            self.status == FollowerSyncStatus.TRACKING
+            and self.last_command_ns is not None
+            and now_ns - self.last_command_ns <= self._heartbeat_timeout_ns
+        )
 
     def update(self, now_ns: int) -> FollowerSyncStatus:
         if (

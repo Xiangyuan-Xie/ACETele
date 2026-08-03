@@ -19,6 +19,7 @@ from acetele.specification import (
     BusType,
     DexterousHandSpec,
     JointSpec,
+    ParallelGripperSpec,
     RobotSpec,
 )
 
@@ -116,6 +117,38 @@ def _cartesian_session() -> FollowerTeleopSession:
     )
 
 
+def _gripper_session() -> FollowerTeleopSession:
+    bus = BusSpec(
+        "arm",
+        BusType.FEETECH_PACKET,
+        "mock://gripper-arm",
+        1_000_000,
+        100.0,
+        physical_layer="ttl",
+        family="hls",
+    )
+    arm = ArmSpec(
+        "single",
+        "arm",
+        (JointSpec("joint_1", 0, "HL3915", 1, 0.0),),
+        end_effector=ParallelGripperSpec(
+            "arm",
+            JointSpec("joint_5", 4, "HL3915", 1, 0.0),
+            0.75,
+        ),
+    )
+    runtime = RobotRuntime(
+        RobotSpec(
+            "ace_follower",
+            (bus,),
+            (arm,),
+            backend=Backend.MOCK,
+            urdf_path=str(urdf_path),
+        )
+    )
+    return FollowerTeleopSession(runtime)
+
+
 def test_follower_can_hold_its_measured_pose_without_a_leader():
     session = _session()
     session.connect()
@@ -128,6 +161,37 @@ def test_follower_can_hold_its_measured_pose_without_a_leader():
         )
         assert session.status == FollowerSyncStatus.IDLE
         session.hold_position()
+    finally:
+        session.close()
+
+
+def test_leader_idle_mode_keeps_the_follower_powered_in_hold():
+    session = _session()
+    session.connect()
+    try:
+        session.hold_position()
+        session.set_mode(LeaderSyncMode.SYNC_REQUEST)
+        session.set_mode(LeaderSyncMode.IDLE)
+
+        assert session.status == FollowerSyncStatus.IDLE
+        assert session.runtime.diagnostics().safety.state == RuntimeSafetyState.HOLD
+        protocol = session.runtime._actors["arm"]._protocol  # noqa: SLF001
+        assert protocol._enabled_ids == {0}  # noqa: SLF001
+    finally:
+        session.close()
+
+
+def test_remote_idle_cannot_energize_a_safe_disabled_follower():
+    session = _session()
+    session.connect()
+    try:
+        session.set_mode(LeaderSyncMode.IDLE)
+
+        assert session.status == FollowerSyncStatus.IDLE
+        assert (
+            session.runtime.diagnostics().safety.state
+            == RuntimeSafetyState.SAFE_DISABLED
+        )
     finally:
         session.close()
 
@@ -187,6 +251,56 @@ def test_follower_session_heartbeat_timeout_holds_runtime():
         session.close()
 
 
+def test_follower_hold_mode_preserves_torque_and_rejects_motion():
+    session = _session()
+    session.connect()
+    try:
+        _read_until_available(session)
+        session.set_mode(LeaderSyncMode.SYNC_REQUEST)
+        session.set_mode(LeaderSyncMode.HOLD)
+
+        assert session.status == FollowerSyncStatus.HOLD
+        assert session.runtime.diagnostics().safety.state == RuntimeSafetyState.HOLD
+        assert not session.write_arm(
+            ("joint_1",),
+            (0.1,),
+            now_ns=time.monotonic_ns(),
+        )
+    finally:
+        session.close()
+
+
+def test_end_effector_commands_cannot_extend_the_arm_heartbeat():
+    session = _gripper_session()
+    session.connect()
+    try:
+        _read_until_available(session)
+        session.set_mode(LeaderSyncMode.SYNC_REQUEST)
+        session.set_mode(LeaderSyncMode.TRACKING)
+        started_ns = time.monotonic_ns()
+        assert session.write_arm(("joint_1",), (0.0,), now_ns=started_ns)
+        heartbeat_ns = session._sync.last_command_ns  # noqa: SLF001
+        group_name = "single.end_effector"
+
+        assert session.write_end_effector(
+            group_name,
+            ("joint_5",),
+            (0.5,),
+            now_ns=started_ns + 50_000_000,
+        )
+        assert session._sync.last_command_ns == heartbeat_ns  # noqa: SLF001
+        assert not session.write_end_effector(
+            group_name,
+            ("joint_5",),
+            (0.6,),
+            now_ns=started_ns + 100_000_001,
+        )
+        assert session.status == FollowerSyncStatus.LOST
+        assert session.runtime.diagnostics().safety.state == RuntimeSafetyState.HOLD
+    finally:
+        session.close()
+
+
 def test_follower_peer_reset_holds_and_requires_a_new_sync_cycle():
     session = _session()
     session.connect()
@@ -240,6 +354,22 @@ def test_follower_session_reports_latched_runtime_fault():
         assert session.status == FollowerSyncStatus.FAULT
     finally:
         session.close()
+
+
+def test_follower_stop_retries_even_after_a_fault_or_previous_stop(monkeypatch):
+    session = _session()
+    attempts = []
+
+    def stop():
+        attempts.append("stop")
+
+    monkeypatch.setattr(session.runtime, "emergency_stop", stop)
+    session.runtime._safety.fault("test fault")  # noqa: SLF001
+
+    session.set_mode(LeaderSyncMode.STOP)
+    session.set_mode(LeaderSyncMode.STOP)
+
+    assert attempts == ["stop", "stop"]
 
 
 def test_slow_end_effector_deadline_covers_its_bus_cycle_and_io_budget():

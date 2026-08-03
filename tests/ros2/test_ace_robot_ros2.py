@@ -198,8 +198,53 @@ def test_cartesian_teleop_ros_interface_is_mode_selected_and_best_effort():
     assert '"/ace_follower/arm/ee_pose/state"' in follower
     assert "ReliabilityPolicy.BEST_EFFORT" in leader
     assert "ReliabilityPolicy.BEST_EFFORT" in follower
-    assert '"/fmu/in/arm_joint_state",\n            stream_qos,' in follower
+    assert '"/fmu/in/arm_joint_state",\n            px4_qos,' in follower
+    assert "lifespan=Duration(seconds=command_lifespan)" in leader
+    assert "lifespan=Duration(seconds=command_lifespan)" in follower
     assert "<depend>geometry_msgs</depend>" in package
+    assert "<depend>std_srvs</depend>" in package
+
+
+def test_ros_nodes_expose_explicit_emergency_stop_services():
+    leader = (
+        project_root
+        / "ros2/ace_robot_ros2/ace_robot_ros2/runtime_leader_node.py"
+    ).read_text(encoding="utf-8")
+    follower = (
+        project_root
+        / "ros2/ace_robot_ros2/ace_robot_ros2/runtime_follower_node.py"
+    ).read_text(encoding="utf-8")
+
+    assert '"/ace_leader/emergency_stop"' in leader
+    assert '"/ace_leader/authorize_alignment"' in leader
+    assert '"/ace_leader/start_tracking"' in leader
+    assert '"/ace_follower/emergency_stop"' in follower
+    assert "self._session.stop()" in leader
+    assert "self._session.set_mode(LeaderSyncMode.STOP)" in follower
+
+
+def test_leader_automatic_control_errors_hold_instead_of_publishing_emergency_stop():
+    source = (
+        project_root
+        / "ros2/ace_robot_ros2/ace_robot_ros2/runtime_leader_node.py"
+    ).read_text(encoding="utf-8")
+
+    control_error = source.split("def _control_loop", 1)[1].split(
+        "def _report_mode_transition", 1
+    )[0]
+    assert "self._session.hold()" in control_error
+    assert "self._session.stop()" not in control_error
+
+
+def test_follower_fault_cleanup_preserves_the_holding_target():
+    source = (
+        project_root
+        / "ros2/ace_robot_ros2/ace_robot_ros2/runtime_follower_node.py"
+    ).read_text(encoding="utf-8")
+    close_method = source.split("def close(self)", 1)[1]
+
+    assert "RuntimeSafetyState.FAULT" in close_method
+    assert "self._session.close(preserve_hold=preserve_hold)" in close_method
 
 
 def _load_entry_module(monkeypatch, *, config_path="robot.toml"):

@@ -114,9 +114,10 @@ class LeaderTeleopSession:
         self._follower_positions: Optional[np.ndarray] = None
         self._last_follower_state_ns: Optional[int] = None
         self._follower_status = FollowerSyncStatus.IDLE
-        self._last_follower_status_ns: Optional[int] = None
         self._sync_target: Optional[np.ndarray] = None
         self._stable_since_ns: Optional[int] = None
+        self._alignment_authorized = False
+        self._last_step_ns: Optional[int] = None
 
     @property
     def arm_names(self) -> tuple[str, ...]:
@@ -141,6 +142,21 @@ class LeaderTeleopSession:
         """Return whether a parallel gripper is the deliberate start control."""
 
         return bool(self._start_trigger_groups)
+
+    @property
+    def alignment_authorized(self) -> bool:
+        """Return whether the operator authorized powered leader alignment."""
+
+        return self._alignment_authorized
+
+    @property
+    def torque_released(self) -> bool:
+        """Return whether the runtime confirms that leader torque is disabled."""
+
+        return (
+            self.runtime.diagnostics().safety.state
+            == RuntimeSafetyState.SAFE_DISABLED
+        )
 
     def end_effector_pose(
         self,
@@ -183,9 +199,9 @@ class LeaderTeleopSession:
         self._follower_positions = None
         self._last_follower_state_ns = None
         self._follower_status = FollowerSyncStatus.IDLE
-        self._last_follower_status_ns = None
         self._sync_target = None
         self._stable_since_ns = None
+        self._alignment_authorized = False
         self._start_trigger_armed = False
 
     def observe_follower_state(
@@ -218,27 +234,42 @@ class LeaderTeleopSession:
 
         if not isinstance(status, FollowerSyncStatus):
             raise ValueError("follower status must be a FollowerSyncStatus")
+        self._time(now_ns)
         self._follower_status = status
-        self._last_follower_status_ns = self._time(now_ns)
 
     def step(self, *, now_ns: int) -> RobotState:
         """Read leader state and advance alignment or tracking behavior."""
 
         now_ns = self._time(now_ns)
+        self._last_step_ns = now_ns
         state = self.runtime.read()
-        if self.mode == LeaderSyncMode.STOP:
+        if self.mode in (LeaderSyncMode.HOLD, LeaderSyncMode.STOP):
             return state
         if self.mode == LeaderSyncMode.TRACKING and (
-            self._follower_status in (FollowerSyncStatus.LOST, FollowerSyncStatus.FAULT)
-            or not self._follower_recent(now_ns)
-            or not self._status_recent(now_ns)
+            self._follower_status == FollowerSyncStatus.IDLE
+            or not self._follower_available(now_ns)
         ):
-            # Any missing follower heartbeat invalidates tracking. Re-enter alignment
-            # rather than resuming from a potentially stale remote pose.
+            # Joint state is the high-rate liveness signal. Sync status is reliable
+            # control state, but it is not a second heartbeat. IDLE identifies a
+            # restarted follower and therefore invalidates the old tracking cycle.
+            self.hold()
+        if self.mode == LeaderSyncMode.READY and not self._follower_available(now_ns):
+            # Do not let a trigger gesture start from a stale alignment after the remote
+            # runtime stopped publishing or explicitly reported a fault.
             self.request_sync()
-        if self.mode == LeaderSyncMode.IDLE and self._follower_recent(now_ns):
+        if self.mode == LeaderSyncMode.IDLE and self._follower_available(now_ns):
             self.request_sync()
-        if self.mode in (LeaderSyncMode.SYNC_REQUEST, LeaderSyncMode.READY):
+        if self.mode == LeaderSyncMode.SYNC_REQUEST and not self._alignment_authorized:
+            if self._start_trigger_groups:
+                # A physical gripper provides the deliberate TRACKING trigger, so the
+                # powered alignment that precedes it can begin as soon as healthy
+                # follower feedback is available. This preserves the familiar one-
+                # gesture workflow while keeping triggerless integrations explicit.
+                self._alignment_authorized = True
+                self._start_trigger_armed = False
+        if self.mode == LeaderSyncMode.READY or (
+            self.mode == LeaderSyncMode.SYNC_REQUEST and self._alignment_authorized
+        ):
             self._align(state, now_ns)
         return state
 
@@ -250,6 +281,23 @@ class LeaderTeleopSession:
         self.mode = LeaderSyncMode.SYNC_REQUEST
         self._sync_target = None
         self._stable_since_ns = None
+        self._alignment_authorized = False
+        self._start_trigger_armed = False
+
+    def authorize_alignment(self) -> None:
+        """Explicitly authorize powered alignment when no physical trigger is present.
+
+        Built-in leaders with a gripper align automatically and use that gripper to
+        start tracking. External integrations such as VR may call this method from their
+        own deliberate operator control, but absence of a gripper must never silently
+        become authorization.
+        """
+
+        if self.mode != LeaderSyncMode.SYNC_REQUEST:
+            raise RuntimeError("leader must be synchronizing before alignment is authorized")
+        if not self._follower_can_resynchronize():
+            raise RuntimeError("fresh healthy follower feedback is required for alignment")
+        self._alignment_authorized = True
         self._start_trigger_armed = False
 
     def try_start_tracking(self, state: RobotState) -> bool:
@@ -262,26 +310,22 @@ class LeaderTeleopSession:
 
         if not isinstance(state, RobotState):
             raise ValueError("leader start trigger requires a RobotState")
+        if self.mode == LeaderSyncMode.HOLD:
+            # A low-to-high gesture explicitly authorizes a fresh synchronization. The
+            # same gesture may authorize alignment because HOLD already made the risk and
+            # recovery action visible to the operator.
+            if not self._follower_can_resynchronize():
+                return False
+            if self._start_trigger_groups and self._trigger_crossed(state):
+                self.request_sync()
+                self._alignment_authorized = True
+            return False
         if self.mode != LeaderSyncMode.READY:
             self._start_trigger_armed = False
             return False
         if not self._start_trigger_groups:
-            self.start_tracking()
-            return True
-        positions = tuple(
-            float(state.joints[group_name].positions[0])
-            for group_name in self._start_trigger_groups
-        )
-        if not all(math.isfinite(position) for position in positions):
-            raise ValueError("leader start trigger positions must be finite")
-        if not self._start_trigger_armed:
-            if all(
-                position <= self._start_trigger_reset_threshold
-                for position in positions
-            ):
-                self._start_trigger_armed = True
             return False
-        if all(position >= self._start_trigger_threshold for position in positions):
+        if self._trigger_crossed(state):
             self.start_tracking()
             self._start_trigger_armed = False
             return True
@@ -302,9 +346,27 @@ class LeaderTeleopSession:
     def stop(self) -> None:
         """Latch STOP and emergency-stop the leader runtime."""
 
-        if self.mode != LeaderSyncMode.STOP:
-            self.mode = LeaderSyncMode.STOP
-            self.runtime.emergency_stop()
+        self.mode = LeaderSyncMode.STOP
+        self.runtime.emergency_stop()
+
+    def hold(self) -> None:
+        """Suspend teleoperation without turning an automatic error into an E-stop."""
+
+        if self.mode == LeaderSyncMode.STOP:
+            return
+        self.mode = LeaderSyncMode.HOLD
+        self._sync_target = None
+        self._stable_since_ns = None
+        self._alignment_authorized = False
+        self._start_trigger_armed = False
+        safety_state = self.runtime.diagnostics().safety.state
+        if safety_state in (
+            RuntimeSafetyState.READY,
+            RuntimeSafetyState.ACTIVE,
+            RuntimeSafetyState.HOLD,
+        ):
+            # The leader must remain physically backdrivable while the follower holds.
+            self.runtime.set_enabled(False)
 
     def close(self) -> None:
         """Disconnect the owned leader runtime."""
@@ -314,7 +376,7 @@ class LeaderTeleopSession:
     def _align(self, state: RobotState, now_ns: int) -> None:
         """Move the leader to one captured follower pose and require stable convergence."""
 
-        if not self._follower_recent(now_ns) or self._follower_positions is None:
+        if not self._follower_available(now_ns) or self._follower_positions is None:
             return
         if self._sync_target is None:
             # Freeze one target for the entire alignment attempt. Following a moving
@@ -374,6 +436,24 @@ class LeaderTeleopSession:
             offset += count
         return RobotCommand(commands)
 
+    def _trigger_crossed(self, state: RobotState) -> bool:
+        """Consume one deliberate low-to-high gesture from all trigger groups."""
+
+        positions = tuple(
+            float(state.joints[group_name].positions[0])
+            for group_name in self._start_trigger_groups
+        )
+        if not all(math.isfinite(position) for position in positions):
+            raise ValueError("leader start trigger positions must be finite")
+        if not self._start_trigger_armed:
+            if all(
+                position <= self._start_trigger_reset_threshold
+                for position in positions
+            ):
+                self._start_trigger_armed = True
+            return False
+        return all(position >= self._start_trigger_threshold for position in positions)
+
     def _follower_recent(self, now_ns: int) -> bool:
         """Return whether the last follower joint sample is still usable."""
 
@@ -382,12 +462,22 @@ class LeaderTeleopSession:
             and now_ns - self._last_follower_state_ns <= self._follower_timeout_ns
         )
 
-    def _status_recent(self, now_ns: int) -> bool:
-        """Return whether the last follower synchronization status is still usable."""
+    def _follower_available(self, now_ns: int) -> bool:
+        """Return whether current feedback permits alignment or tracking."""
+
+        return self._follower_recent(now_ns) and self._follower_status not in (
+            FollowerSyncStatus.HOLD,
+            FollowerSyncStatus.LOST,
+            FollowerSyncStatus.FAULT,
+        )
+
+    def _follower_can_resynchronize(self) -> bool:
+        """Require fresh feedback and reject manual resume while hardware is faulted."""
 
         return (
-            self._last_follower_status_ns is not None
-            and now_ns - self._last_follower_status_ns <= self._follower_timeout_ns
+            self._last_step_ns is not None
+            and self._follower_recent(self._last_step_ns)
+            and self._follower_status != FollowerSyncStatus.FAULT
         )
 
     def _resolve_kinematics(

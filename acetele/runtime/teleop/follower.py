@@ -173,18 +173,18 @@ class FollowerTeleopSession:
 
         if not isinstance(mode, LeaderSyncMode):
             raise ValueError("follower mode must be a LeaderSyncMode")
-        if mode == self._sync.mode:
+        if mode == self._sync.mode and mode != LeaderSyncMode.STOP:
             return
         self._reset_cartesian_cycle()
         safety_state = self.runtime.diagnostics().safety.state
         # Translate network-level synchronization into the stricter runtime lifecycle.
         # The sync controller is updated only after the hardware action succeeds.
         if mode == LeaderSyncMode.IDLE:
-            if safety_state not in (
-                RuntimeSafetyState.SAFE_DISABLED,
-                RuntimeSafetyState.FAULT,
-            ):
-                self.runtime.set_enabled(False)
+            # IDLE revokes remote command ownership. It must never energize hardware:
+            # standalone startup holding is an explicit local policy implemented by
+            # ``hold_position()``, not a side effect of an unauthenticated network mode.
+            if safety_state in (RuntimeSafetyState.READY, RuntimeSafetyState.ACTIVE):
+                self.runtime.hold()
         elif mode in (LeaderSyncMode.SYNC_REQUEST, LeaderSyncMode.READY):
             # Synchronization holds the follower while the leader moves to its pose;
             # torque remains enabled, but streaming commands are invalidated.
@@ -205,9 +205,11 @@ class FollowerTeleopSession:
                 RuntimeSafetyState.HOLD,
             ):
                 self.runtime.set_enabled(True)
+        elif mode == LeaderSyncMode.HOLD:
+            if safety_state != RuntimeSafetyState.FAULT and safety_state != RuntimeSafetyState.HOLD:
+                self.runtime.hold()
         elif mode == LeaderSyncMode.STOP:
-            if safety_state != RuntimeSafetyState.FAULT:
-                self.runtime.emergency_stop()
+            self.runtime.emergency_stop()
         self._sync.set_mode(mode)
 
     def write_arm(
@@ -341,10 +343,10 @@ class FollowerTeleopSession:
     ) -> bool:
         """Submit end-effector motion only after this cycle has an arm heartbeat."""
 
-        if (
-            self._sync.status != FollowerSyncStatus.TRACKING
-            or self._sync.last_command_ns is None
-        ):
+        if not self._sync.heartbeat_current(now_ns):
+            # Enforce timeout synchronously in the command callback. A busy executor or
+            # end-effector flood must not postpone the periodic timeout check.
+            self.update(now_ns=now_ns)
             return False
         try:
             expected = self._end_effector_names[group_name]
@@ -356,7 +358,7 @@ class FollowerTeleopSession:
             positions,
             now_ns=now_ns,
         )
-        self.runtime.write(RobotCommand(commands))
+        self.runtime.write_auxiliary(RobotCommand(commands))
         return True
 
     def update(self, *, now_ns: int) -> FollowerSyncStatus:
@@ -370,10 +372,10 @@ class FollowerTeleopSession:
                 self.runtime.hold()
         return current
 
-    def close(self) -> None:
-        """Disconnect the owned follower runtime."""
+    def close(self, *, preserve_hold: bool = False) -> None:
+        """Disconnect, optionally preserving the last holding goal after a fault."""
 
-        self.runtime.disconnect()
+        self.runtime.disconnect(preserve_hold=preserve_hold)
 
     def _commands_for_groups(
         self,

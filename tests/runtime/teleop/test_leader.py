@@ -80,6 +80,19 @@ def _wait_for_state(session: LeaderTeleopSession) -> None:
             time.sleep(0.001)
 
 
+def _explicitly_authorize_and_align(
+    session: LeaderTeleopSession,
+    now_ns: int,
+) -> None:
+    """Drive a triggerless test session through its explicit operator boundary."""
+
+    session.step(now_ns=now_ns)
+    assert session.mode == LeaderSyncMode.SYNC_REQUEST
+    session.authorize_alignment()
+    session.step(now_ns=now_ns)
+    session.step(now_ns=now_ns + 200_000_001)
+
+
 def test_leader_session_aligns_then_releases_torque_for_tracking():
     session = _session()
     session.connect()
@@ -92,8 +105,7 @@ def test_leader_session_aligns_then_releases_torque_for_tracking():
             now_ns=now_ns,
         )
 
-        session.step(now_ns=now_ns)
-        session.step(now_ns=now_ns + 200_000_001)
+        _explicitly_authorize_and_align(session, now_ns)
         assert session.mode == LeaderSyncMode.READY
 
         session.start_tracking()
@@ -106,7 +118,7 @@ def test_leader_session_aligns_then_releases_torque_for_tracking():
         session.close()
 
 
-def test_leader_session_requests_resync_when_follower_heartbeat_expires():
+def test_leader_session_holds_without_relocking_when_follower_heartbeat_expires():
     session = _session()
     session.connect()
     try:
@@ -117,12 +129,67 @@ def test_leader_session_requests_resync_when_follower_heartbeat_expires():
             FollowerSyncStatus.READY,
             now_ns=now_ns,
         )
-        session.step(now_ns=now_ns)
-        session.step(now_ns=now_ns + 200_000_001)
+        _explicitly_authorize_and_align(session, now_ns)
         session.start_tracking()
 
         session.step(now_ns=now_ns + 500_000_001)
-        assert session.mode == LeaderSyncMode.SYNC_REQUEST
+        assert session.mode == LeaderSyncMode.HOLD
+    finally:
+        session.close()
+
+
+def test_leader_tracking_does_not_treat_sync_status_as_a_second_heartbeat():
+    session = _session()
+    session.connect()
+    try:
+        _wait_for_state(session)
+        now_ns = time.monotonic_ns()
+        session.observe_follower_state(("joint_1",), (0.0,), now_ns=now_ns)
+        session.observe_follower_status(FollowerSyncStatus.READY, now_ns=now_ns)
+        _explicitly_authorize_and_align(session, now_ns)
+        session.start_tracking()
+
+        # State continues at the data-plane rate while a sync-status sample is old.
+        later_ns = now_ns + 600_000_000
+        session.observe_follower_state(("joint_1",), (0.0,), now_ns=later_ns)
+        session.step(now_ns=later_ns)
+
+        assert session.mode == LeaderSyncMode.TRACKING
+        assert (
+            session.runtime.diagnostics().safety.state
+            == RuntimeSafetyState.SAFE_DISABLED
+        )
+    finally:
+        session.close()
+
+
+@pytest.mark.parametrize(
+    "status",
+    (
+        FollowerSyncStatus.IDLE,
+        FollowerSyncStatus.LOST,
+        FollowerSyncStatus.FAULT,
+    ),
+)
+def test_leader_does_not_relock_against_unavailable_follower(status):
+    session = _session()
+    session.connect()
+    try:
+        _wait_for_state(session)
+        now_ns = time.monotonic_ns()
+        session.observe_follower_state(("joint_1",), (0.0,), now_ns=now_ns)
+        session.observe_follower_status(FollowerSyncStatus.READY, now_ns=now_ns)
+        _explicitly_authorize_and_align(session, now_ns)
+        session.start_tracking()
+        session.observe_follower_status(status, now_ns=now_ns + 210_000_000)
+
+        session.step(now_ns=now_ns + 210_000_000)
+
+        assert session.mode == LeaderSyncMode.HOLD
+        assert (
+            session.runtime.diagnostics().safety.state
+            == RuntimeSafetyState.SAFE_DISABLED
+        )
     finally:
         session.close()
 
@@ -144,6 +211,50 @@ def test_leader_peer_reset_discards_alignment_and_releases_all_joints():
             session.runtime.diagnostics().safety.state
             == RuntimeSafetyState.SAFE_DISABLED
         )
+    finally:
+        session.close()
+
+
+def test_triggerless_leader_never_powers_alignment_without_explicit_authorization():
+    session = _session()
+    session.connect()
+    try:
+        _wait_for_state(session)
+        now_ns = time.monotonic_ns()
+        session.observe_follower_state(("joint_1",), (0.2,), now_ns=now_ns)
+        session.observe_follower_status(FollowerSyncStatus.READY, now_ns=now_ns)
+
+        session.step(now_ns=now_ns)
+        session.step(now_ns=now_ns + 300_000_000)
+
+        assert session.mode == LeaderSyncMode.SYNC_REQUEST
+        assert not session.alignment_authorized
+        assert session.torque_released
+    finally:
+        session.close()
+
+
+def test_leader_hold_retries_an_unconfirmed_torque_release(monkeypatch):
+    session = _session()
+    session.connect()
+    try:
+        session.runtime._safety.ready()  # noqa: SLF001
+        session.mode = LeaderSyncMode.TRACKING
+        attempts = []
+
+        def fail_disable(enabled):
+            attempts.append(enabled)
+            raise RuntimeError("disable failed")
+
+        monkeypatch.setattr(session.runtime, "set_enabled", fail_disable)
+
+        with pytest.raises(RuntimeError, match="disable failed"):
+            session.hold()
+        assert session.mode == LeaderSyncMode.HOLD
+        assert not session.torque_released
+        with pytest.raises(RuntimeError, match="disable failed"):
+            session.hold()
+        assert attempts == [False, False]
     finally:
         session.close()
 
@@ -189,13 +300,10 @@ def test_leader_alignment_enables_arm_but_leaves_gripper_trigger_passive():
 
         actor = session.runtime._actors["arm"]  # noqa: SLF001
         protocol = actor._protocol  # noqa: SLF001
+        # Healthy follower feedback immediately starts powered arm alignment while the
+        # passive gripper remains the single deliberate TRACKING trigger.
         assert protocol._enabled_ids == {0, 1, 2, 3}  # noqa: SLF001
-
-        state = session.step(now_ns=now_ns + 200_000_001)
-        assert session.mode == LeaderSyncMode.READY
-
-        group_name = "single.end_effector"
-        released = state.joints[group_name]
+        released = state.joints["single.end_effector"]
         closed = JointState(
             released.names,
             [0.9],
@@ -206,11 +314,17 @@ def test_leader_alignment_enables_arm_but_leaves_gripper_trigger_passive():
             released.unit,
         )
         triggered_state = RobotState(
-            {**state.joints, group_name: closed},
+            {**state.joints, "single.end_effector": closed},
             state.sensors,
         )
+        state = session.step(now_ns=now_ns + 200_000_001)
+        assert session.mode == LeaderSyncMode.READY
+
+        group_name = "single.end_effector"
         assert not session.try_start_tracking(triggered_state)
-        assert not session.try_start_tracking(state)
+        assert not session.try_start_tracking(
+            RobotState({**state.joints, group_name: released}, state.sensors)
+        )
         assert session.try_start_tracking(triggered_state)
         assert session.mode == LeaderSyncMode.TRACKING
         assert protocol._enabled_ids == set()  # noqa: SLF001
@@ -246,16 +360,42 @@ def test_leader_session_rejects_invalid_sync_motion_limits(value):
 def test_leader_stop_latches_software_stop_before_hardware_failure(monkeypatch):
     session = _session()
     session.mode = LeaderSyncMode.TRACKING
+    attempts = []
+
+    def fail_stop():
+        attempts.append("stop")
+        raise RuntimeError("hardware stop failed")
+
     monkeypatch.setattr(
         session.runtime,
         "emergency_stop",
-        lambda: (_ for _ in ()).throw(RuntimeError("hardware stop failed")),
+        fail_stop,
     )
 
     with pytest.raises(RuntimeError, match="hardware stop failed"):
         session.stop()
 
     assert session.mode == LeaderSyncMode.STOP
+    with pytest.raises(RuntimeError, match="hardware stop failed"):
+        session.stop()
+    assert attempts == ["stop", "stop"]
+
+
+def test_leader_hold_releases_torque_and_requires_a_deliberate_resume():
+    session = _session()
+    session.connect()
+    try:
+        _wait_for_state(session)
+        session.mode = LeaderSyncMode.TRACKING
+        session.hold()
+
+        assert session.mode == LeaderSyncMode.HOLD
+        assert (
+            session.runtime.diagnostics().safety.state
+            == RuntimeSafetyState.SAFE_DISABLED
+        )
+    finally:
+        session.close()
 
 
 def test_leader_cartesian_mode_exposes_tool_pose_from_current_state():

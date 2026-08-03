@@ -273,23 +273,33 @@ enables torque, and enters `HOLD`, so it can hold position without a Leader onli
 policy has no runtime bypass; automatic holding still does not replace an independent hardware
 emergency stop.
 
-During synchronization, the Leader enables only its arm joints. Its parallel gripper remains
-torque-free and acts as the physical start trigger. Once the arm reaches the Follower alignment
-pose, release the gripper below normalized position `0.25`, then close it beyond `0.75` to enter
-`TRACKING` and release the Leader arm. The terminal reports alignment, trigger readiness, and the
-start of teleoperation. A new synchronization cycle clears the old trigger state and requires the
-complete gesture again, so a stale startup gripper position cannot start motion.
+During synchronization, the parallel gripper remains torque-free and acts as the safety trigger.
+Healthy Follower feedback automatically powers the Leader arm and starts alignment. Once aligned,
+release the gripper below normalized position `0.25` and close it beyond `0.75` to enter
+`TRACKING`; Leader arm torque is then released immediately. Tracking loss or an automatic control
+error enters `HOLD` without automatically relocking the Leader. One complete gesture authorizes a
+fresh synchronization cycle after recovery. Trigger state is never reused across cycles.
+Leaders without a parallel gripper never power alignment or start tracking automatically. They
+require explicit calls to the `/ace_leader/authorize_alignment` and
+`/ace_leader/start_tracking` `std_srvs/Trigger` services. Explicit emergency-stop services are
+`/ace_leader/emergency_stop` and `/ace_follower/emergency_stop`.
 
-High-rate arm/gripper command and state topics use `BEST_EFFORT + KEEP_LAST(1)`, while sync topics
-use `RELIABLE + KEEP_LAST(1)`. Valid follower commands enter the latest-value mailbox directly in
-the subscription callback without waiting for another control timer. Parallel grippers retain
+High-rate arm/gripper command and state topics use finite-lifespan
+`BEST_EFFORT + KEEP_LAST(1)`, while sync topics use `RELIABLE + KEEP_LAST(1)`. Valid commands enter
+the latest-value mailbox in the subscription callback without waiting for another control timer.
+Parallel grippers retain
 `/ace_leader/gripper/command` and `/ace_follower/gripper/state`; dexterous hands use the separate
 `/ace_leader/end_effector/command` and `/ace_follower/end_effector/state` topics and are not treated
 as the gripper synchronization trigger.
 
 Each bus actor enforces its own command watchdog: an expired valid-motion heartbeat clears the old
-generation and enters `HOLD`; consecutive motion-write failures or sustained fast-state loss first
-attempt an emergency stop and then latch a bus fault. The bus diagnostic fields
+generation and enters `HOLD`; consecutive motion-write failures or sustained fast-state loss clear
+pending motion, attempt to hold the latest successfully commanded pose, and latch a bus fault.
+Communication and state-trust failures retain that holding target. Explicit device alarms such as
+thermal or overload faults request the strongest protocol-supported disable action; devices without
+software disable explicitly require the external emergency stop. Explicit `STOP` always requests
+the strongest stop action.
+The bus diagnostic fields
 `p95_motion_end_to_end_s` and `p99_motion_end_to_end_s` measure from command reception until the
 protocol write returns successfully, unlike the Runtime-stage metric that only confirms mailbox
 admission. The actor still shares the main process lifetime and cannot cover forced process
@@ -476,6 +486,8 @@ not start ROS 2 or `rclpy`, but the ZMQ Follower always starts an isolated Micro
 and native sidecar to publish measured arm state to PX4 `/fmu/in/arm_joint_state`. The teleoperation
 link uses two latest-value TCP streams: the Leader publishes commands on port `5555`, and the
 Follower publishes state on port `5556`.
+Sending `SIGUSR1` to a running ZMQ process requests explicit STOP; ordinary `SIGINT/SIGTERM` retains
+the bounded shutdown path.
 
 Build the pinned native stack before first use:
 

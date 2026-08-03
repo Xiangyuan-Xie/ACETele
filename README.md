@@ -264,19 +264,28 @@ Follower 完成完整状态读取后，会无条件以实测位置作为目标�
 没有 Leader 在线也会保持当前位置。该安全策略没有运行时关闭选项；自动保持仍不能替代独立
 硬件急停。
 
-同步对齐期间，Leader 只使能机械臂关节，平行夹爪保持无扭矩并作为启动扳机。机械臂达到
-Follower 的同步姿态后，先将夹爪释放到归一化位置 `0.25` 以下，再夹到 `0.75` 以上，即可
-进入 `TRACKING` 并释放 Leader 机械臂扭矩。终端会分别提示对齐、等待扳机和遥操作已启动；
-重新同步会清除旧触发状态并再次执行这一完整手势，避免启动时的旧夹爪位置误触发。
+同步时平行夹爪保持无扭矩并作为安全扳机。收到健康的 Follower 状态后，Leader 机械臂自动
+带电并对齐 Follower；达到同步姿态后，将夹爪释放到归一化位置 `0.25` 以下再夹到 `0.75`
+以上，即进入 `TRACKING`，Leader 机械臂扭矩随即释放。跟踪失联或自动控制异常只进入
+`HOLD`，不会自动重新锁住 Leader；恢复时仍需一次完整夹爪手势授权新的同步周期。旧触发
+状态不会跨同步周期复用。
+没有平行夹爪的 Leader 不会自动带电或开始跟踪，必须显式调用
+`/ace_leader/authorize_alignment` 和 `/ace_leader/start_tracking` 两个 `std_srvs/Trigger`
+service。显式急停入口为 `/ace_leader/emergency_stop` 和 `/ace_follower/emergency_stop`。
 
-高频 arm/gripper command 与 state 话题使用 `BEST_EFFORT + KEEP_LAST(1)`，同步状态话题
-使用 `RELIABLE + KEEP_LAST(1)`。Follower 的合法命令在订阅回调中直接进入最新值邮箱，
-不会等待额外控制定时器。平行夹爪保留 `/ace_leader/gripper/command` 和
+高频 arm/gripper command 与 state 话题使用带有限 lifespan 的
+`BEST_EFFORT + KEEP_LAST(1)`，同步状态话题使用 `RELIABLE + KEEP_LAST(1)`。合法命令在订阅
+回调中直接进入最新值邮箱，不会等待额外控制定时器。平行夹爪保留
+`/ace_leader/gripper/command` 和
 `/ace_follower/gripper/state`；灵巧手使用独立的 `/ace_leader/end_effector/command` 和
 `/ace_follower/end_effector/state`，不会被当作夹爪同步扳机。
 
 每条总线的 Actor 独立执行命令 watchdog：合法运动心跳超时后清空旧 generation 并进入
-`HOLD`；连续运动写失败或快速状态持续超时会先尝试急停，再锁存总线故障。总线诊断中的
+`HOLD`；连续运动写失败或快速状态持续超时会清空待执行命令、尽力保持最后可信姿态，再锁存
+总线故障。通信及状态可信度故障保持最后一次成功命令；设备明确报告过温、过载等硬件状态
+故障时请求协议支持的最强禁用动作；无法软件禁用的设备会明确要求外部急停。显式 `STOP`/急停
+始终请求最强停止动作。
+总线诊断中的
 `p95_motion_end_to_end_s` 和 `p99_motion_end_to_end_s` 从命令接收时间统计到协议写调用成功
 返回，区别于仅表示进入最新值邮箱的 Runtime stage 耗时。Actor 仍与主进程共享生命周期，
 无法覆盖进程被强制终止、主机掉电或内核失效，因此物理急停仍是生产部署的必要条件。
@@ -449,6 +458,7 @@ ros2 launch ace_robot_ros2 ace_robot.launch.py \
 会强制启动隔离的 Micro XRCE-DDS Agent 2.4.2 和原生 sidecar，将实测机械臂状态发布到
 PX4 `/fmu/in/arm_joint_state`。默认遥操作链路使用两个最新值 TCP 流：Leader 在 `5555`
 端口发布命令，Follower 在 `5556` 端口发布状态。
+运行中的 ZMQ 进程收到 `SIGUSR1` 时执行显式 STOP；普通 `SIGINT/SIGTERM` 仍走有界退出流程。
 
 首次使用前构建固定版本的原生栈：
 

@@ -8,6 +8,7 @@ from typing import Optional
 import numpy as np
 from geometry_msgs.msg import PoseStamped
 from px4_msgs.msg import ArmJointState
+from rclpy.duration import Duration
 from rclpy.node import Node
 from rclpy.qos import (
     DurabilityPolicy,
@@ -17,9 +18,11 @@ from rclpy.qos import (
 )
 from sensor_msgs.msg import JointState as ROSJointState
 from std_msgs.msg import String
+from std_srvs.srv import Trigger
 
-from acetele.runtime import FollowerTeleopSession, RobotRuntime
-from acetele.runtime.teleop import LeaderSyncMode, TeleopMode
+from acetele.hardware.devices import AutomaticFaultAction
+from acetele.runtime import FollowerTeleopSession, RobotRuntime, RuntimeSafetyState
+from acetele.runtime.teleop import FollowerSyncStatus, LeaderSyncMode, TeleopMode
 from acetele.specification import DexterousHandSpec, RobotSpec
 
 from .pose_messages import pose_from_message, pose_message
@@ -43,7 +46,7 @@ class RuntimeFollowerNode(Node):
         session_connected = False
         self._closed = False
         try:
-            super().__init__("ace_follower_robot_node")
+            super().__init__("ace_follower_robot")
             node_initialized = True
             self.declare_parameter("heartbeat_timeout", 0.1)
             self.declare_parameter("teleop_mode", TeleopMode.JOINT.value)
@@ -101,20 +104,42 @@ class RuntimeFollowerNode(Node):
 
         self.declare_parameter("publish_rate", 100.0)
         self.declare_parameter("adaptive_diagnostic_period", 2.0)
+        self.declare_parameter("command_lifespan", 0.05)
+        self.declare_parameter("state_lifespan", 0.5)
         publish_rate = float(self.get_parameter("publish_rate").value)
         diagnostic_period = float(
             self.get_parameter("adaptive_diagnostic_period").value
         )
+        command_lifespan = float(self.get_parameter("command_lifespan").value)
+        state_lifespan = float(self.get_parameter("state_lifespan").value)
         if not np.isfinite(publish_rate) or publish_rate <= 0.0:
             raise ValueError("publish_rate must be finite and positive")
-        if not np.isfinite(diagnostic_period) or diagnostic_period <= 0.0:
-            raise ValueError("adaptive_diagnostic_period must be finite and positive")
+        if any(
+            not np.isfinite(value) or value <= 0.0
+            for value in (diagnostic_period, command_lifespan, state_lifespan)
+        ):
+            raise ValueError("follower timing parameters must be finite and positive")
         self._adaptive_diagnostic_period_ns = round(diagnostic_period * 1e9)
         self._last_adaptive_diagnostic_ns: Optional[int] = None
+        self._last_runtime_fault_message: Optional[str] = None
 
         # Commands and state are latest-value streams: retransmitting an old sample adds
         # latency and is less useful than the next frame. Sync transitions must arrive.
-        stream_qos = QoSProfile(
+        command_qos = QoSProfile(
+            depth=1,
+            history=HistoryPolicy.KEEP_LAST,
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            durability=DurabilityPolicy.VOLATILE,
+            lifespan=Duration(seconds=command_lifespan),
+        )
+        state_qos = QoSProfile(
+            depth=1,
+            history=HistoryPolicy.KEEP_LAST,
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            durability=DurabilityPolicy.VOLATILE,
+            lifespan=Duration(seconds=state_lifespan),
+        )
+        px4_qos = QoSProfile(
             depth=1,
             history=HistoryPolicy.KEEP_LAST,
             reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -144,29 +169,30 @@ class RuntimeFollowerNode(Node):
         self._arm_state_pub = self.create_publisher(
             ROSJointState,
             "/ace_follower/arm/state",
-            stream_qos,
+            state_qos,
         )
         self._ee_pose_state_pub = None
         if self._session.teleop_mode == TeleopMode.EE_POSE:
             self._ee_pose_state_pub = self.create_publisher(
                 PoseStamped,
                 "/ace_follower/arm/ee_pose/state",
-                stream_qos,
+                state_qos,
             )
         self._end_effector_state_pub = self.create_publisher(
             ROSJointState,
             state_topic,
-            stream_qos,
+            state_qos,
         )
         self._sync_status_pub = self.create_publisher(
             String,
             "/ace_follower/arm/sync_status",
             sync_qos,
         )
+        self._last_published_sync_status: Optional[FollowerSyncStatus] = None
         self._px4_state_pub = self.create_publisher(
             ArmJointState,
             "/fmu/in/arm_joint_state",
-            stream_qos,
+            px4_qos,
         )
         self._arm_command_sub = None
         self._ee_pose_command_sub = None
@@ -175,20 +201,20 @@ class RuntimeFollowerNode(Node):
                 ROSJointState,
                 "/ace_leader/arm/command",
                 self._arm_command_callback,
-                stream_qos,
+                command_qos,
             )
         else:
             self._ee_pose_command_sub = self.create_subscription(
                 PoseStamped,
                 "/ace_teleop/arm/ee_pose/command",
                 self._ee_pose_command_callback,
-                stream_qos,
+                command_qos,
             )
         self._end_effector_command_sub = self.create_subscription(
             ROSJointState,
             command_topic,
             self._end_effector_command_callback,
-            stream_qos,
+            command_qos,
         )
         self._sync_mode_sub = self.create_subscription(
             String,
@@ -196,8 +222,14 @@ class RuntimeFollowerNode(Node):
             self._sync_mode_callback,
             sync_qos,
         )
+        self._emergency_stop_service = self.create_service(
+            Trigger,
+            "/ace_follower/emergency_stop",
+            self._emergency_stop_callback,
+        )
         self._sequence = 0
         self._timer = self.create_timer(1.0 / publish_rate, self._publish_state)
+        self._publish_sync_status()
         safety_state = self._session.runtime.diagnostics().safety.state.value
         self.get_logger().info(
             f"Follower RobotRuntime ROS 2 node started in {safety_state}."
@@ -219,7 +251,8 @@ class RuntimeFollowerNode(Node):
                 now_ns=time.monotonic_ns(),
             )
         except (RuntimeError, ValueError) as exc:
-            self.get_logger().warn(f"Ignoring invalid arm command: {exc}")
+            self._report_runtime_error("Ignoring invalid arm command", exc)
+        self._publish_sync_status()
 
     def _ee_pose_command_callback(self, message: PoseStamped) -> None:
         """Convert and submit one generic Cartesian source sample without timer delay."""
@@ -229,7 +262,8 @@ class RuntimeFollowerNode(Node):
             pose = pose_from_message(message, timestamp_ns=now_ns)
             self._session.write_arm_pose(pose, now_ns=now_ns)
         except (RuntimeError, ValueError) as exc:
-            self.get_logger().warn(f"Ignoring invalid end-effector pose command: {exc}")
+            self._report_runtime_error("Ignoring invalid end-effector pose command", exc)
+        self._publish_sync_status()
 
     def _end_effector_command_callback(self, message: ROSJointState) -> None:
         """Submit end-effector motion only through the session's heartbeat gate."""
@@ -254,7 +288,8 @@ class RuntimeFollowerNode(Node):
                 now_ns=time.monotonic_ns(),
             )
         except (RuntimeError, ValueError) as exc:
-            self.get_logger().warn(f"Ignoring invalid end-effector command: {exc}")
+            self._report_runtime_error("Ignoring invalid end-effector command", exc)
+        self._publish_sync_status()
 
     def _sync_mode_callback(self, message: String) -> None:
         """Translate a reliable sync-mode message into one session transition."""
@@ -263,7 +298,8 @@ class RuntimeFollowerNode(Node):
             mode = LeaderSyncMode(message.data)
             self._session.set_mode(mode)
         except (RuntimeError, ValueError) as exc:
-            self.get_logger().warn(f"Ignoring invalid sync mode: {exc}")
+            self._report_runtime_error("Ignoring invalid sync mode", exc)
+        self._publish_sync_status()
 
     def _publish_state(self) -> None:
         """Publish one coherent runtime sample to local ROS and PX4 interfaces."""
@@ -272,7 +308,7 @@ class RuntimeFollowerNode(Node):
         try:
             state = self._session.read(now_ns=time.monotonic_ns())
         except RuntimeError as exc:
-            self.get_logger().error(f"Follower runtime state failed: {exc}")
+            self._report_runtime_error("Follower runtime state failed", exc)
             self._publish_sync_status()
             return
         self._report_adaptive_diagnostics(state, now.nanoseconds)
@@ -311,6 +347,8 @@ class RuntimeFollowerNode(Node):
                 tuple(end_state.efforts),
             )
 
+        # ``read()`` advances the heartbeat state machine. This call is cheap when the
+        # enum is unchanged and emits DDS traffic only for a real transition.
         self._publish_sync_status()
         self._publish_px4(now, arm_positions, arm_velocities)
 
@@ -352,10 +390,61 @@ class RuntimeFollowerNode(Node):
             else:
                 self.get_logger().info(message)
 
-    def _publish_sync_status(self) -> None:
+    def _publish_sync_status(self, *, force: bool = False) -> None:
+        """Publish only synchronization transitions instead of mirroring state at 100 Hz."""
+
+        current = self._session.status
+        if not force and self._last_published_sync_status == current:
+            return
         status = String()
-        status.data = self._session.status.value
+        status.data = current.value
         self._sync_status_pub.publish(status)
+        self._last_published_sync_status = current
+
+    def _report_runtime_error(self, context: str, error: BaseException) -> None:
+        """Report a latched runtime fault once, including the first bus-level cause."""
+
+        diagnostics = self._session.runtime.diagnostics()
+        if diagnostics.safety.state != RuntimeSafetyState.FAULT:
+            self.get_logger().warn(f"{context}: {error}")
+            return
+        bus_faults = tuple(
+            f"{name}: {bus.fault}"
+            for name, bus in diagnostics.buses.items()
+            if bus.fault
+        )
+        reason = diagnostics.safety.fault_reason or str(error)
+        if diagnostics.fault_action == AutomaticFaultAction.DISABLE:
+            action = "the runtime requested protocol-level torque disable"
+        elif diagnostics.fault_action == AutomaticFaultAction.EXTERNAL_ESTOP:
+            action = (
+                "software motion is held, but this device requires the independent "
+                "hardware emergency stop"
+            )
+        else:
+            action = "the runtime retained the last trustworthy holding target"
+        detail = f"Follower runtime fault: {reason}; {action}."
+        if bus_faults:
+            detail += "; bus fault: " + "; ".join(bus_faults)
+        if detail == self._last_runtime_fault_message:
+            return
+        self._last_runtime_fault_message = detail
+        self.get_logger().error(detail)
+
+    def _emergency_stop_callback(self, _request, response):
+        """Expose the follower's strongest profile-supported stop as an operator API."""
+
+        try:
+            self._session.set_mode(LeaderSyncMode.STOP)
+        except (RuntimeError, ValueError) as exc:
+            response.success = False
+            response.message = f"Follower emergency stop failed: {exc}"
+            self.get_logger().error(response.message)
+        else:
+            response.success = True
+            response.message = "Follower emergency stop latched."
+        self._publish_sync_status(force=True)
+        return response
 
     @staticmethod
     def _publish_joint_state(
@@ -434,12 +523,26 @@ class RuntimeFollowerNode(Node):
             )
 
     def close(self) -> None:
-        """Idempotently disconnect the session-owned runtime."""
+        """Disconnect while preserving a faulted follower's last holding target."""
 
         if self._closed:
             return
         self._closed = True
-        self._session.close()
+        # A runtime fault has already closed motion admission and requested HOLD. Do not
+        # turn subsequent ROS cleanup (including Ctrl+C after a fault) into an implicit
+        # emergency stop that releases a gravity-loaded arm.
+        try:
+            diagnostics = self._session.runtime.diagnostics()
+            preserve_hold = (
+                diagnostics.safety.state == RuntimeSafetyState.FAULT
+                and diagnostics.fault_action != AutomaticFaultAction.DISABLE
+            )
+        except BaseException:
+            # Diagnostics are best effort during teardown. If safety state cannot be
+            # established, retaining the last servo target is the conservative payload
+            # support policy; independent hardware E-stop remains available.
+            preserve_hold = True
+        self._session.close(preserve_hold=preserve_hold)
 
 
 __all__ = ["RuntimeFollowerNode"]

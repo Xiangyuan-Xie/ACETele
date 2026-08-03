@@ -7,6 +7,7 @@ from typing import Optional
 
 import numpy as np
 from geometry_msgs.msg import PoseStamped
+from rclpy.duration import Duration
 from rclpy.node import Node
 from rclpy.qos import (
     DurabilityPolicy,
@@ -16,6 +17,7 @@ from rclpy.qos import (
 )
 from sensor_msgs.msg import JointState as ROSJointState
 from std_msgs.msg import String
+from std_srvs.srv import Trigger
 
 from acetele.runtime import LeaderTeleopSession, RobotRuntime
 from acetele.runtime.teleop import FollowerSyncStatus, LeaderSyncMode, TeleopMode
@@ -36,7 +38,7 @@ class RuntimeLeaderNode(Node):
         node_initialized = False
         self._closed = False
         try:
-            super().__init__("ace_leader_robot_node")
+            super().__init__("ace_leader_robot")
             node_initialized = True
             self._initialize(runtime)
         except BaseException as initialization_error:
@@ -67,6 +69,8 @@ class RuntimeLeaderNode(Node):
         self.declare_parameter("sync_profile_acceleration", 3.0)
         self.declare_parameter("end_effector_publish_threshold", 0.001)
         self.declare_parameter("end_effector_keepalive", 0.1)
+        self.declare_parameter("command_lifespan", 0.05)
+        self.declare_parameter("state_lifespan", 0.5)
         self.declare_parameter("teleop_mode", TeleopMode.JOINT.value)
         control_rate = float(self.get_parameter("control_rate").value)
         follower_timeout = float(self.get_parameter("follower_state_timeout").value)
@@ -82,6 +86,8 @@ class RuntimeLeaderNode(Node):
         end_effector_keepalive = float(
             self.get_parameter("end_effector_keepalive").value
         )
+        command_lifespan = float(self.get_parameter("command_lifespan").value)
+        state_lifespan = float(self.get_parameter("state_lifespan").value)
         try:
             teleop_mode = TeleopMode(str(self.get_parameter("teleop_mode").value))
         except ValueError as exc:
@@ -95,6 +101,8 @@ class RuntimeLeaderNode(Node):
             sync_acceleration,
             end_effector_publish_threshold,
             end_effector_keepalive,
+            command_lifespan,
+            state_lifespan,
         )
         if any(not np.isfinite(value) or value <= 0.0 for value in values):
             raise ValueError("leader ROS 2 parameters must be finite and positive")
@@ -113,11 +121,19 @@ class RuntimeLeaderNode(Node):
 
         # High-rate data is replaceable; synchronization state is not. Keeping each
         # history at depth one prevents DDS queues from replaying stale teleoperation.
-        stream_qos = QoSProfile(
+        command_qos = QoSProfile(
             depth=1,
             history=HistoryPolicy.KEEP_LAST,
             reliability=ReliabilityPolicy.BEST_EFFORT,
             durability=DurabilityPolicy.VOLATILE,
+            lifespan=Duration(seconds=command_lifespan),
+        )
+        state_qos = QoSProfile(
+            depth=1,
+            history=HistoryPolicy.KEEP_LAST,
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            durability=DurabilityPolicy.VOLATILE,
+            lifespan=Duration(seconds=state_lifespan),
         )
         sync_qos = QoSProfile(
             depth=1,
@@ -148,29 +164,30 @@ class RuntimeLeaderNode(Node):
             self._arm_command_pub = self.create_publisher(
                 ROSJointState,
                 "/ace_leader/arm/command",
-                stream_qos,
+                command_qos,
             )
         else:
             self._ee_pose_command_pub = self.create_publisher(
                 PoseStamped,
                 "/ace_teleop/arm/ee_pose/command",
-                stream_qos,
+                command_qos,
             )
         self._end_effector_command_pub = self.create_publisher(
             ROSJointState,
             command_topic,
-            stream_qos,
+            command_qos,
         )
         self._sync_mode_pub = self.create_publisher(
             String,
             "/ace_leader/arm/sync_mode",
             sync_qos,
         )
+        self._last_published_mode: Optional[LeaderSyncMode] = None
         self._state_sub = self.create_subscription(
             ROSJointState,
             "/ace_follower/arm/state",
             self._state_callback,
-            stream_qos,
+            state_qos,
         )
         self._sync_status_sub = self.create_subscription(
             String,
@@ -178,9 +195,25 @@ class RuntimeLeaderNode(Node):
             self._status_callback,
             sync_qos,
         )
+        self._emergency_stop_service = self.create_service(
+            Trigger,
+            "/ace_leader/emergency_stop",
+            self._emergency_stop_callback,
+        )
+        self._authorize_alignment_service = self.create_service(
+            Trigger,
+            "/ace_leader/authorize_alignment",
+            self._authorize_alignment_callback,
+        )
+        self._start_tracking_service = self.create_service(
+            Trigger,
+            "/ace_leader/start_tracking",
+            self._start_tracking_callback,
+        )
         self._last_end_effector_positions: Optional[np.ndarray] = None
         self._last_end_effector_publish_ns: Optional[int] = None
         self._timer = self.create_timer(1.0 / control_rate, self._control_loop)
+        self._publish_mode()
         self.get_logger().info(
             "Leader RobotRuntime ROS 2 node started; waiting for follower state."
         )
@@ -221,16 +254,16 @@ class RuntimeLeaderNode(Node):
         except (RuntimeError, ValueError) as exc:
             self.get_logger().error(f"Leader runtime control failed: {exc}")
             try:
-                self._session.stop()
-            except (RuntimeError, ValueError) as stop_exc:
-                self.get_logger().error(f"Leader emergency stop failed: {stop_exc}")
+                self._session.hold()
+            except (RuntimeError, ValueError) as hold_exc:
+                self.get_logger().error(f"Leader fault hold failed: {hold_exc}")
             self._report_mode_transition(previous_mode)
-            self._publish_mode()
+            if self._session.mode != previous_mode:
+                self._publish_mode()
             return
         self._report_mode_transition(previous_mode)
-        # Mode is published every control cycle with depth one. A newly discovered
-        # follower therefore converges without a separate mode timer or stale queue.
-        self._publish_mode()
+        if self._session.mode != previous_mode:
+            self._publish_mode()
         if self._session.mode != LeaderSyncMode.TRACKING:
             return
         if self._session.teleop_mode == TeleopMode.EE_POSE:
@@ -260,7 +293,26 @@ class RuntimeLeaderNode(Node):
         if current_mode == previous_mode:
             return
         if current_mode == LeaderSyncMode.SYNC_REQUEST:
-            message = "Follower detected; aligning the leader arm."
+            if self._session.follower_status == FollowerSyncStatus.FAULT:
+                self.get_logger().error(
+                    "Follower reported a hardware fault; leader torque remains released "
+                    "while waiting for a healthy follower."
+                )
+                return
+            if self._session.follower_status == FollowerSyncStatus.LOST:
+                self.get_logger().warn(
+                    "Follower command heartbeat was lost; leader torque remains released "
+                    "until synchronization can restart."
+                )
+                return
+            message = (
+                "Follower detected; leader arm torque is enabled for automatic alignment."
+                if self._session.uses_start_trigger
+                else (
+                    "Follower detected; waiting for explicit operator authorization "
+                    "because no gripper start trigger is configured."
+                )
+            )
         elif current_mode == LeaderSyncMode.READY:
             if self._session.uses_start_trigger:
                 message = (
@@ -268,9 +320,21 @@ class RuntimeLeaderNode(Node):
                     f"{self._session.start_trigger_threshold:.0%} to start teleoperation."
                 )
             else:
-                message = "Leader aligned; starting teleoperation."
+                message = "Leader aligned; waiting for an explicit start command."
         elif current_mode == LeaderSyncMode.TRACKING:
             message = "Teleoperation started; leader arm torque is released."
+        elif current_mode == LeaderSyncMode.HOLD:
+            if self._session.torque_released:
+                message = (
+                    "Teleoperation is holding the follower; leader torque is released. "
+                    "Release then close the gripper to request a fresh synchronization."
+                )
+            else:
+                self.get_logger().error(
+                    "Teleoperation entered HOLD, but leader torque release could not be "
+                    "confirmed. Use the hardware emergency stop before handling the arm."
+                )
+                return
         elif current_mode == LeaderSyncMode.STOP:
             self.get_logger().error("Teleoperation stopped by a safety fault.")
             return
@@ -278,10 +342,60 @@ class RuntimeLeaderNode(Node):
             message = f"Teleoperation mode changed to {current_mode.value}."
         self.get_logger().info(message)
 
-    def _publish_mode(self) -> None:
+    def _publish_mode(self, *, force: bool = False) -> None:
+        """Publish only transitions; reliable DDS handles delivery of each event."""
+
+        if not force and self._last_published_mode == self._session.mode:
+            return
         message = String()
         message.data = self._session.mode.value
         self._sync_mode_pub.publish(message)
+        self._last_published_mode = self._session.mode
+
+    def _emergency_stop_callback(self, _request, response):
+        """Latch local STOP and publish it even when hardware stop dispatch fails."""
+
+        try:
+            self._session.stop()
+        except (RuntimeError, ValueError) as exc:
+            response.success = False
+            response.message = f"Leader emergency stop failed: {exc}"
+            self.get_logger().error(response.message)
+        else:
+            response.success = True
+            response.message = "Leader emergency stop latched."
+        finally:
+            self._publish_mode(force=True)
+        return response
+
+    def _authorize_alignment_callback(self, _request, response):
+        """Provide a deliberate start control for leaders without a gripper trigger."""
+
+        try:
+            self._session.authorize_alignment()
+        except (RuntimeError, ValueError) as exc:
+            response.success = False
+            response.message = f"Alignment authorization rejected: {exc}"
+        else:
+            response.success = True
+            response.message = "Powered leader alignment authorized."
+            self.get_logger().warn(response.message)
+        return response
+
+    def _start_tracking_callback(self, _request, response):
+        """Explicitly release the aligned leader and enter TRACKING."""
+
+        try:
+            self._session.start_tracking()
+        except (RuntimeError, ValueError) as exc:
+            response.success = False
+            response.message = f"Tracking start rejected: {exc}"
+        else:
+            response.success = True
+            response.message = "Teleoperation tracking started."
+            self.get_logger().info(response.message)
+            self._publish_mode()
+        return response
 
     def _publish_gripper(self, state, now) -> None:
         """Rate-reduce end-effector traffic while preserving a periodic keepalive."""
