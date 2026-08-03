@@ -84,7 +84,9 @@ class PeerSequenceGate:
     def session_id(self) -> Optional[bytes]:
         return self._session_id
 
-    def admit(self, session_id: bytes, sequence: int, *, now_ns: int) -> SequenceAdmission:
+    def preview(self, session_id: bytes, sequence: int, *, now_ns: int) -> SequenceAdmission:
+        """Validate one candidate without renewing or replacing the active lease."""
+
         if not isinstance(session_id, bytes) or len(session_id) != 16:
             return SequenceAdmission(False, reason="invalid session_id")
         if type(sequence) is not int or sequence < 0:
@@ -95,8 +97,6 @@ class PeerSequenceGate:
             if self._sequence is not None and sequence <= self._sequence:
                 return SequenceAdmission(False, reason="duplicate or out-of-order sequence")
             gap = 0 if self._sequence is None else max(0, sequence - self._sequence - 1)
-            self._sequence = sequence
-            self._last_valid_ns = now_ns
             return SequenceAdmission(True, sequence_gap=gap)
         if session_id in self._retired:
             return SequenceAdmission(False, reason="retired session")
@@ -106,13 +106,38 @@ class PeerSequenceGate:
             and now_ns - self._last_valid_ns <= self._heartbeat_timeout_ns
         ):
             return SequenceAdmission(False, reason="another peer session is active")
-        if self._session_id is not None:
+        return SequenceAdmission(True, new_session=True)
+
+    def commit(
+        self,
+        session_id: bytes,
+        sequence: int,
+        *,
+        now_ns: int,
+    ) -> SequenceAdmission:
+        """Commit a frame only after the application accepted its runtime effects."""
+
+        admission = self.preview(session_id, sequence, now_ns=now_ns)
+        if not admission.accepted:
+            raise RuntimeError(
+                "sequence admission changed before commit: "
+                + (admission.reason or "rejected")
+            )
+        if admission.new_session and self._session_id is not None:
             self._retired.append(self._session_id)
             del self._retired[:-8]
         self._session_id = session_id
         self._sequence = sequence
         self._last_valid_ns = now_ns
-        return SequenceAdmission(True, new_session=True)
+        return admission
+
+    def admit(self, session_id: bytes, sequence: int, *, now_ns: int) -> SequenceAdmission:
+        """Validate and commit immediately for callers without a runtime stage."""
+
+        admission = self.preview(session_id, sequence, now_ns=now_ns)
+        if not admission.accepted:
+            return admission
+        return self.commit(session_id, sequence, now_ns=now_ns)
 
 
 class ZmqPeer:

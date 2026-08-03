@@ -134,12 +134,24 @@ def _run_lifecycle(application) -> int:
 
     signal.signal(signal.SIGINT, request_stop)
     signal.signal(signal.SIGTERM, request_stop)
+    if hasattr(signal, "SIGUSR1"):
+        signal.signal(signal.SIGUSR1, request_stop)
     primary_error: Optional[BaseException] = None
     cleanup_error: Optional[BaseException] = None
     try:
         application.run(lambda: stopping)
     except BaseException as exc:
         primary_error = exc
+    if received_signal == getattr(signal, "SIGUSR1", None):
+        try:
+            stop = getattr(application, "stop", None)
+            if callable(stop):
+                stop()
+        except BaseException as exc:
+            if primary_error is None:
+                primary_error = exc
+            else:
+                cleanup_error = exc
     try:
         application.close()
     except BaseException as exc:
@@ -156,6 +168,8 @@ def _run_lifecycle(application) -> int:
         return 130
     if received_signal == signal.SIGTERM:
         return 128 + signal.SIGTERM
+    if received_signal == getattr(signal, "SIGUSR1", None):
+        return 128 + signal.SIGUSR1
     return 0
 
 

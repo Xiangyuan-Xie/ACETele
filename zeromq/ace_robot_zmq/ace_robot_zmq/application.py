@@ -26,11 +26,13 @@ from ace_robot_zmq.px4_xrce import (
 from ace_robot_zmq.transport import PeerSequenceGate, TransportDiagnostics, ZmqPeer
 
 from acetele.core import JointState, RobotState
+from acetele.hardware.devices import AutomaticFaultAction
 from acetele.runtime import (
     FollowerRuntime,
     FollowerTeleopSession,
     LeaderTeleopSession,
     RobotRuntime,
+    RuntimeSafetyState,
 )
 from acetele.runtime.teleop import LeaderSyncMode, TeleopMode
 from acetele.specification import RobotSpec
@@ -132,13 +134,13 @@ class LeaderApplication:
         except (KeyError, ProtocolError, TypeError, ValueError) as exc:
             self.peer.record_rejection(str(exc))
             return False
-        admission = self._gate.admit(
+        admission = self._gate.preview(
             frame.session_id,
             frame.sequence,
             now_ns=received_ns,
         )
-        self.peer.record_admission(admission)
         if not admission.accepted:
+            self.peer.record_admission(admission)
             return False
         if admission.new_session:
             self.session.reset_peer()
@@ -146,6 +148,12 @@ class LeaderApplication:
         positions = tuple(value for state in arm_states for value in state.positions)
         self.session.observe_follower_state(names, positions, now_ns=received_ns)
         self.session.observe_follower_status(frame.status, now_ns=received_ns)
+        committed = self._gate.commit(
+            frame.session_id,
+            frame.sequence,
+            now_ns=received_ns,
+        )
+        self.peer.record_admission(committed)
         return True
 
     def publish_once(self, *, now_ns: Optional[int] = None) -> LeaderFrame:
@@ -211,6 +219,44 @@ class LeaderApplication:
         callbacks = (self.session.close, self.peer.close) if self._connected else (self.peer.close,)
         self._connected = False
         _close_preserving_primary(None, callbacks)
+
+    def stop(self) -> None:
+        """Latch local emergency stop and send a STOP frame without sampling hardware."""
+
+        primary_error: Optional[BaseException] = None
+        try:
+            self.session.stop()
+        except BaseException as exc:
+            primary_error = exc
+        if self._connected:
+            frame = LeaderFrame(
+                self._session_id,
+                self._sequence,
+                self._wall_clock_ns(),
+                LeaderSyncMode.STOP,
+                self.session.teleop_mode,
+                None,
+                None,
+                {},
+            )
+            self._sequence += 1
+            try:
+                self.peer.send(self.codec.encode_leader(frame))
+            except BaseException as exc:
+                if primary_error is None:
+                    primary_error = exc
+        if primary_error is not None:
+            raise primary_error
+
+    def authorize_alignment(self) -> None:
+        """Expose the session's explicit triggerless alignment boundary to operators."""
+
+        self.session.authorize_alignment()
+
+    def start_tracking(self) -> None:
+        """Explicitly start a triggerless leader after alignment reaches READY."""
+
+        self.session.start_tracking()
 
     def diagnostics(self) -> TransportDiagnostics:
         """Return the latest immutable network counters and timing sample."""
@@ -317,6 +363,7 @@ class FollowerApplication:
         self._xrce_timestamp_provider = xrce_timestamp_provider
         self._closed = False
         self._connected = False
+        self._preserve_hold_on_close = False
 
     def connect(self) -> None:
         if self._connected:
@@ -348,13 +395,13 @@ class FollowerApplication:
         except (KeyError, ProtocolError, TypeError, ValueError) as exc:
             self.peer.record_rejection(str(exc))
             return False
-        admission = self._gate.admit(
+        admission = self._gate.preview(
             frame.session_id,
             frame.sequence,
             now_ns=received_ns,
         )
-        self.peer.record_admission(admission)
         if not admission.accepted:
+            self.peer.record_admission(admission)
             return False
         if admission.new_session:
             self.session.reset_peer()
@@ -382,8 +429,19 @@ class FollowerApplication:
             if frame.mode == LeaderSyncMode.TRACKING and not arm_accepted:
                 raise ProtocolError("tracking frame was not admitted by the follower session")
         except (RuntimeError, ValueError, ProtocolError) as exc:
+            if (
+                self.session.runtime.diagnostics().safety.state
+                == RuntimeSafetyState.FAULT
+            ):
+                self._preserve_hold_on_close = self._fault_requires_hold()
             self.peer.record_rejection(str(exc))
             return False
+        committed = self._gate.commit(
+            frame.session_id,
+            frame.sequence,
+            now_ns=received_ns,
+        )
+        self.peer.record_admission(committed)
         self.peer.record_runtime_stage_duration(
             self._clock_ns() - processing_started_ns
         )
@@ -408,6 +466,7 @@ class FollowerApplication:
                     timestamp_sample_us=timestamps[1],
                 )
         except Px4XrceError:
+            self._preserve_hold_on_close = True
             self.session.reset_peer()
             raise
         self._px4_sequence = (self._px4_sequence + 1) & 0xFFFFFFFF
@@ -430,31 +489,51 @@ class FollowerApplication:
         return frame
 
     def run(self, should_stop: Callable[[], bool]) -> None:
-        self.connect()
-        period_ns = round(1e9 / self.options.cycle_hz)
-        next_publish_ns = self._clock_ns()
-        while not should_stop():
-            now_ns = self._clock_ns()
-            timeout_ms = max(0, math.ceil((next_publish_ns - now_ns) / 1e6))
-            payload = self.peer.receive(timeout_ms=timeout_ms)
-            if payload is not None:
-                self.process_incoming(payload, now_ns=self._clock_ns())
-            now_ns = self._clock_ns()
-            if now_ns >= next_publish_ns:
-                self.publish_once(now_ns=now_ns)
-                next_publish_ns = max(next_publish_ns + period_ns, now_ns + period_ns)
+        try:
+            self.connect()
+            period_ns = round(1e9 / self.options.cycle_hz)
+            next_publish_ns = self._clock_ns()
+            while not should_stop():
+                now_ns = self._clock_ns()
+                timeout_ms = max(0, math.ceil((next_publish_ns - now_ns) / 1e6))
+                payload = self.peer.receive(timeout_ms=timeout_ms)
+                if payload is not None:
+                    self.process_incoming(payload, now_ns=self._clock_ns())
+                now_ns = self._clock_ns()
+                if now_ns >= next_publish_ns:
+                    self.publish_once(now_ns=now_ns)
+                    next_publish_ns = max(next_publish_ns + period_ns, now_ns + period_ns)
+        except BaseException:
+            self._preserve_hold_on_close = self._fault_requires_hold(default=True)
+            try:
+                self.session.reset_peer()
+            except BaseException:
+                pass
+            raise
 
     def close(self) -> None:
         if self._closed:
             return
         self._closed = True
         callbacks = (
-            (self.session.close, self.peer.close, self.xrce.close)
+            (
+                lambda: self.session.close(
+                    preserve_hold=self._preserve_hold_on_close
+                ),
+                self.peer.close,
+                self.xrce.close,
+            )
             if self._connected
             else (self.peer.close, self.xrce.close)
         )
         self._connected = False
         _close_preserving_primary(None, callbacks)
+
+    def stop(self) -> None:
+        """Execute the follower's strongest profile-supported emergency stop."""
+
+        self._preserve_hold_on_close = False
+        self.session.set_mode(LeaderSyncMode.STOP)
 
     def diagnostics(self) -> TransportDiagnostics:
         """Return the latest immutable network counters and timing sample."""
@@ -482,6 +561,17 @@ class FollowerApplication:
                 raise ProtocolError(
                     f"end-effector command '{group_name}' does not match RobotSpec"
                 )
+
+    def _fault_requires_hold(self, *, default: bool = False) -> bool:
+        """Preserve support unless diagnostics confirm a disable-class fault."""
+
+        try:
+            diagnostics = self.session.runtime.diagnostics()
+        except BaseException:
+            return default
+        if diagnostics.safety.state != RuntimeSafetyState.FAULT:
+            return default
+        return diagnostics.fault_action != AutomaticFaultAction.DISABLE
 
 
 __all__ = ["FollowerApplication", "LeaderApplication"]

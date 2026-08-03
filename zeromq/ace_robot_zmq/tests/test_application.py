@@ -130,6 +130,25 @@ def test_zmq_follower_holds_position_before_a_leader_connects():
         follower.close()
 
 
+def test_zmq_leader_stop_sends_stop_without_another_hardware_sample():
+    peer = RecordingPeer()
+    leader = LeaderApplication(
+        _spec("ace_leader"),
+        ZmqTeleopOptions(PeerRole.LEADER, "127.0.0.1", "127.0.0.1"),
+        peer=peer,
+        session_id=b"l" * 16,
+    )
+    leader.connect()
+    try:
+        leader.stop()
+
+        frame = leader.codec.decode_leader(peer.sent[-1])
+        assert frame.mode == LeaderSyncMode.STOP
+        assert frame.arm_command is None
+    finally:
+        leader.close()
+
+
 @pytest.mark.parametrize("teleop_mode", (TeleopMode.JOINT, TeleopMode.EE_POSE))
 def test_applications_reuse_sessions_through_tracking(teleop_mode):
     leader_peer = RecordingPeer()
@@ -158,6 +177,13 @@ def test_applications_reuse_sessions_through_tracking(teleop_mode):
             _publish_follower(follower)
             assert leader.process_incoming(follower_peer.sent[-1])
             leader.publish_once(now_ns=time.monotonic_ns())
+            if (
+                leader.session.mode == LeaderSyncMode.SYNC_REQUEST
+                and not leader.session.alignment_authorized
+            ):
+                leader.authorize_alignment()
+            if leader.session.mode == LeaderSyncMode.READY:
+                leader.start_tracking()
             assert follower.process_incoming(leader_peer.sent[-1])
             if follower.session.status == FollowerSyncStatus.TRACKING:
                 break
@@ -207,6 +233,47 @@ def test_follower_rejects_wrong_teleop_mode_without_refreshing_session_heartbeat
     assert "do not match" in peer.rejections[-1]
 
 
+def test_runtime_rejected_frame_does_not_renew_or_claim_the_peer_lease(monkeypatch):
+    peer = RecordingPeer()
+    follower = FollowerApplication(
+        _spec("ace_follower"),
+        ZmqTeleopOptions(PeerRole.FOLLOWER, "127.0.0.1", "127.0.0.1"),
+        peer=peer,
+        xrce_bridge=RecordingXrceBridge(),
+    )
+    original_set_mode = follower.session.set_mode
+    monkeypatch.setattr(
+        follower.session,
+        "set_mode",
+        lambda _mode: (_ for _ in ()).throw(RuntimeError("runtime rejected")),
+    )
+    rejected = follower.codec.encode_leader(
+        LeaderFrame(
+            b"a" * 16,
+            0,
+            1,
+            LeaderSyncMode.SYNC_REQUEST,
+            TeleopMode.JOINT,
+        )
+    )
+
+    assert not follower.process_incoming(rejected, now_ns=1)
+    assert follower._gate.session_id is None  # noqa: SLF001
+
+    monkeypatch.setattr(follower.session, "set_mode", original_set_mode)
+    accepted = follower.codec.encode_leader(
+        LeaderFrame(
+            b"b" * 16,
+            0,
+            2,
+            LeaderSyncMode.SYNC_REQUEST,
+            TeleopMode.JOINT,
+        )
+    )
+    assert follower.process_incoming(accepted, now_ns=2)
+    assert follower._gate.session_id == b"b" * 16  # noqa: SLF001
+
+
 def test_follower_xrce_failure_holds_session_before_propagating():
     bridge = RecordingXrceBridge()
     follower = FollowerApplication(
@@ -216,6 +283,15 @@ def test_follower_xrce_failure_holds_session_before_propagating():
         xrce_bridge=bridge,
     )
     follower.connect()
+    actor = follower.session.runtime._actors["arm"]  # noqa: SLF001
+    labels = []
+    submit_safety = actor.submit_safety
+
+    def recording_submit(label, payload, **kwargs):
+        labels.append(label)
+        return submit_safety(label, payload, **kwargs)
+
+    actor.submit_safety = recording_submit
     try:
         follower.session.set_mode(LeaderSyncMode.SYNC_REQUEST)
         _publish_follower(follower)
@@ -226,6 +302,8 @@ def test_follower_xrce_failure_holds_session_before_propagating():
         assert follower.session.status == FollowerSyncStatus.IDLE
     finally:
         follower.close()
+    assert "hold" in labels
+    assert "emergency_stop" not in labels
 
 
 def test_follower_uses_injected_px4_clock_timestamps():
