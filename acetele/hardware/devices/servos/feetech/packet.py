@@ -153,11 +153,13 @@ class FeetechPacketBusProtocol:
         self._clock_ns = clock_ns
         self._enabled_ids: set[int] = set()
         self._last_fast: dict[int, FeetechPacketFastState] = {}
+        self._hold_positions_rad: dict[int, float] = {}
 
     def connect(self) -> None:
         """Verify model identities, disable torque, and select position mode."""
 
         self._last_fast.clear()
+        self._hold_positions_rad.clear()
         self._observed_model_numbers.clear()
         self._enabled_ids.clear()
         self._transport.connect()
@@ -201,6 +203,7 @@ class FeetechPacketBusProtocol:
         """Release transport and clear cached feedback."""
 
         self._enabled_ids.clear()
+        self._hold_positions_rad.clear()
         self._transport.disconnect()
 
     def execute_safety(self, label: str, payload) -> object:
@@ -229,6 +232,12 @@ class FeetechPacketBusProtocol:
                     for servo_id in servo_ids
                 }
                 self._sync_write(self.goal_start_address, hold_values)
+                self._hold_positions_rad.update(
+                    {
+                        servo_id: self._last_fast[servo_id].position_rad
+                        for servo_id in servo_ids
+                    }
+                )
             try:
                 self._sync_write(
                     self.torque_enable_address,
@@ -254,13 +263,13 @@ class FeetechPacketBusProtocol:
             servo_ids = tuple(sorted(self._enabled_ids))
             if not servo_ids:
                 return True
-            if not set(servo_ids).issubset(self._last_fast):
-                raise RuntimeError("FEETECH bus cannot hold before state is available")
+            if not set(servo_ids).issubset(self._hold_positions_rad):
+                raise RuntimeError("FEETECH bus has no trustworthy hold target")
             hold_values = {
                 servo_id: self._encode_motion(
                     self._devices[servo_id],
-                    FeetechPacketMotion(self._last_fast[servo_id].position_rad),
-                    reference_position_rad=self._last_fast[servo_id].position_rad,
+                    FeetechPacketMotion(self._hold_positions_rad[servo_id]),
+                    reference_position_rad=self._hold_positions_rad[servo_id],
                 )
                 for servo_id in servo_ids
             }
@@ -287,6 +296,7 @@ class FeetechPacketBusProtocol:
                 # a status response that must be checked before proceeding. Unlike
                 # motion registers, the official reOfsCal SDK writes this parameter as
                 # a little-endian two's-complement int16, not signed magnitude.
+                self._discard_stale_input()
                 self._send(
                     FeetechPacketCodec.encode_instruction(
                         servo_id,
@@ -340,6 +350,14 @@ class FeetechPacketBusProtocol:
                 values,
                 deadline_ns=deadline_ns,
             )
+            # Only a successfully transmitted target is eligible for a later HOLD.
+            # Raw telemetry remains diagnostic input and can never overwrite this cache.
+            self._hold_positions_rad.update(
+                {
+                    target.device_id: target.payload.position_rad
+                    for target in targets
+                }
+            )
         except (FeetechPacketError, TimeoutError, OSError, ValueError) as exc:
             raise RecoverableBusError("FEETECH packet motion write failed") from exc
 
@@ -352,6 +370,10 @@ class FeetechPacketBusProtocol:
 
         servo_ids = tuple(self._devices)
         try:
+            # A timed-out sync read may leave a partial or delayed status packet in the
+            # kernel buffer. Starting the next request from that suffix can mix samples
+            # or repeatedly report duplicate IDs, so establish a clean frame boundary.
+            self._discard_stale_input()
             self._send(
                 FeetechPacketCodec.encode_sync_read(
                     servo_ids,
@@ -372,7 +394,6 @@ class FeetechPacketBusProtocol:
                     raise FeetechPacketError(
                         f"unexpected FEETECH sync-read servo ID {packet.servo_id}"
                     )
-                self._raise_status_error(packet)
                 packets[packet.servo_id] = packet
             timestamp_ns = self._clock_ns()
             states = {
@@ -380,6 +401,7 @@ class FeetechPacketBusProtocol:
                     self._devices[servo_id],
                     packets[servo_id].parameters,
                     timestamp_ns,
+                    status=packets[servo_id].error,
                 )
                 for servo_id in servo_ids
             }
@@ -486,6 +508,8 @@ class FeetechPacketBusProtocol:
         profile: FeetechPacketServoProfile,
         data: bytes,
         timestamp_ns: int,
+        *,
+        status: int,
     ) -> FeetechPacketFastState:
         """Decode the contiguous packet-family telemetry block into SI units."""
 
@@ -508,9 +532,11 @@ class FeetechPacketBusProtocol:
             load_ratio=load / 1000.0,
             voltage_v=data[6] / 10.0,
             temperature_c=data[7],
-            # Device errors are carried by the status packet error byte, which
-            # is validated before this documented telemetry block is decoded.
-            status=0,
+            # A complete state response remains usable as telemetry even when its
+            # packet error byte reports a device alarm. Runtime interprets that alarm
+            # and schedules the appropriate disable action; malformed packets and
+            # transport errors still fail before reaching this point.
+            status=status,
             timestamp_ns=timestamp_ns,
         )
 
@@ -524,6 +550,7 @@ class FeetechPacketBusProtocol:
     ) -> bytes:
         """Perform one addressed read and validate its status response."""
 
+        self._discard_stale_input()
         self._send(
             FeetechPacketCodec.encode_read(servo_id, address, length),
             deadline_ns=deadline_ns,
@@ -535,6 +562,13 @@ class FeetechPacketBusProtocol:
         )
         self._raise_status_error(packet)
         return packet.parameters
+
+    def _discard_stale_input(self) -> None:
+        """Discard bytes left by an abandoned response before sending a new request."""
+
+        discard_input = getattr(self._transport, "discard_input", None)
+        if callable(discard_input):
+            discard_input()
 
     def _sync_write(
         self,

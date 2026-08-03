@@ -67,12 +67,15 @@ class PacketTransport:
         *,
         position: int = 1024,
         reserved_register_value: int = 0,
+        state_error: int = 0,
     ) -> None:
         self.models = models
         self.position = position
         self.reserved_register_value = reserved_register_value
+        self.state_error = state_error
         self.responses = bytearray()
         self.writes: list[bytes] = []
+        self.discard_count = 0
         self.connected = False
 
     def connect(self):
@@ -83,6 +86,10 @@ class PacketTransport:
 
     def cancel(self):
         pass
+
+    def discard_input(self):
+        self.discard_count += 1
+        self.responses.clear()
 
     def write(self, frame, *, deadline_ns):
         self.writes.append(frame)
@@ -110,7 +117,9 @@ class PacketTransport:
                 for offset in (8, 9, 11, 12):
                     state[offset] = self.reserved_register_value
                 state[13:15] = FeetechPacketCodec.word(20)
-                self.responses.extend(_status(state_id, bytes(state)))
+                self.responses.extend(
+                    _status(state_id, bytes(state), error=self.state_error)
+                )
         elif instruction == FeetechInstruction.OFFSET_CALIBRATION:
             self.responses.extend(_status(servo_id))
 
@@ -180,6 +189,31 @@ def test_packet_protocol_can_enable_arm_without_shared_gripper():
     assert torque_frame[7:-1] == bytes((0, 1))
 
 
+def test_packet_hold_reuses_last_command_instead_of_raw_position_outlier():
+    profile = feetech_packet_profiles.require("HL3915", context="test")
+    transport = PacketTransport({1: 100})
+    protocol = FeetechPacketBusProtocol(transport, {1: profile})
+    protocol.connect()
+    protocol.read_fast_state()
+    protocol.execute_safety("set_enabled", True)
+    target_rad = 0.25
+    protocol.write_motion((_packet_motion(1, target_rad),))
+
+    transport.position = 12_000
+    protocol.read_fast_state()
+    protocol.execute_safety("hold", None)
+
+    hold_frame = next(
+        frame
+        for frame in reversed(transport.writes)
+        if frame[4] == FeetechInstruction.SYNC_WRITE and frame[5] == 41
+    )
+    raw_position = FeetechPacketCodec.decode_signed_magnitude(
+        FeetechPacketCodec.decode_word(hold_frame[9:11])
+    )
+    assert raw_position == round(target_rad * profile.counts_per_revolution / (2.0 * math.pi))
+
+
 def test_packet_calibration_matches_official_sdk_signed_int16_parameters():
     profile = feetech_packet_profiles.require("HL3960", context="test")
     transport = PacketTransport({1: 1234})
@@ -202,6 +236,32 @@ def test_packet_protocol_ignores_nonzero_reserved_state_registers():
     state = protocol.read_fast_state()[1]
 
     assert state.status == 0
+
+
+def test_packet_protocol_exposes_device_alarm_for_runtime_containment():
+    profile = feetech_packet_profiles.require("HL3960", context="test")
+    transport = PacketTransport({1: 1234}, state_error=0x04)
+    protocol = FeetechPacketBusProtocol(transport, {1: profile})
+
+    protocol.connect()
+    state = protocol.read_fast_state()[1]
+
+    assert state.status == 0x04
+
+
+def test_packet_protocol_discards_abandoned_response_before_each_read():
+    profile = feetech_packet_profiles.require("HL3960", context="test")
+    transport = PacketTransport({1: 1234})
+    protocol = FeetechPacketBusProtocol(transport, {1: profile})
+    protocol.connect()
+    previous_discards = transport.discard_count
+    transport.responses.extend(b"\xff\xff\x01")
+
+    state = protocol.read_fast_state()
+
+    assert state[1].position_rad == pytest.approx(math.pi / 2.0)
+    assert transport.discard_count == previous_discards + 1
+    assert not transport.responses
 
 
 def test_hls_profile_records_unverified_model_number_from_hardware():
@@ -261,10 +321,11 @@ def test_packet_protocol_rejects_exhausted_multiturn_position_range():
 
 
 class ModbusTransport:
-    def __init__(self) -> None:
+    def __init__(self, *, position: int = 1024) -> None:
         self.responses = bytearray()
         self.writes: list[bytes] = []
         self.connected = False
+        self.position = position
 
     def connect(self):
         self.connected = True
@@ -284,7 +345,7 @@ class ModbusTransport:
                 values = (2008, 2005)
             else:
                 assert (address, count) == (256, 8)
-                values = (0, 1024, 2, 100, 120, 35, 0, 20)
+                values = (0, self.position, 2, 100, 120, 35, 0, 20)
             payload = bytes((slave_id, function, count * 2)) + struct.pack(
                 f">{count}H", *values
             )
@@ -332,3 +393,26 @@ def test_modbus_protocol_uses_documented_control_and_feedback_registers():
     assert struct.unpack(">H", goal_write[7:9])[0] == 1024
     assert state.position_rad == pytest.approx(math.pi / 2.0)
     assert state.current_a == pytest.approx(0.13)
+
+
+def test_modbus_hold_reuses_last_command_instead_of_raw_position_outlier():
+    profile = feetech_modbus_profiles.require("SM29-24", context="test")
+    transport = ModbusTransport()
+    protocol = FeetechModbusBusProtocol(transport, {1: profile})
+    protocol.connect()
+    protocol.read_fast_state()
+    protocol.execute_safety("set_enabled", True)
+    target_rad = 0.25
+    protocol.write_motion((_modbus_motion(1, target_rad),))
+
+    transport.position = 12_000
+    protocol.read_fast_state()
+    protocol.execute_safety("hold", None)
+
+    hold_frame = next(
+        frame
+        for frame in reversed(transport.writes)
+        if frame[1] == 0x10 and struct.unpack(">H", frame[2:4])[0] == 128
+    )
+    raw_position = struct.unpack(">H", hold_frame[7:9])[0]
+    assert raw_position == round(target_rad * profile.counts_per_revolution / (2.0 * math.pi))

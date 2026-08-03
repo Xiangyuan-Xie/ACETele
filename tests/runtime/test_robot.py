@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from acetele.core import JointCommand, JointUnit, RobotCommand
+from acetele.hardware.devices import AutomaticFaultAction
 from acetele.hardware.devices.servos.fashionstar import FashionStarMonitorState
 from acetele.hardware.devices.servos.feetech import FeetechPacketFastState
 from acetele.runtime import RobotRuntime, RuntimeSafetyState
@@ -206,6 +207,77 @@ def test_mock_runtime_maps_direction_and_enforces_safety_state():
         assert runtime.diagnostics().safety.state == RuntimeSafetyState.ACTIVE
 
         runtime.hold()
+        assert runtime.diagnostics().safety.state == RuntimeSafetyState.HOLD
+    finally:
+        runtime.disconnect()
+
+
+def test_submission_deadline_rejection_drops_frame_without_latching_fault():
+    runtime = RobotRuntime(_spec())
+    runtime.connect()
+    try:
+        _read_until_available(runtime)
+        runtime.set_enabled(True)
+        current_ns = [time.monotonic_ns()]
+        runtime._clock_ns = lambda: current_ns[0]  # noqa: SLF001
+        actor = runtime._actors["arm"]  # noqa: SLF001
+        submit = actor.submit_motion
+
+        def delayed_submit(targets):
+            submit(targets)
+            current_ns[0] += 60_000_000
+
+        actor.submit_motion = delayed_submit
+        command = RobotCommand(
+            {
+                "single": JointCommand(
+                    ("joint_1",),
+                    (0.25,),
+                    current_ns[0],
+                    current_ns[0] + 50_000_000,
+                    runtime.generation,
+                )
+            }
+        )
+
+        with pytest.raises(RuntimeError, match="expired during submission"):
+            runtime.write(command)
+
+        assert runtime.diagnostics().safety.state == RuntimeSafetyState.READY
+    finally:
+        runtime.disconnect()
+
+
+def test_actor_generation_rejection_mirrors_hold_without_latching_fault():
+    runtime = RobotRuntime(_spec())
+    runtime.connect()
+    try:
+        _read_until_available(runtime)
+        runtime.set_enabled(True)
+        actor = runtime._actors["arm"]  # noqa: SLF001
+        submit = actor.submit_motion
+
+        def invalidate_before_submit(targets):
+            actor.discard_motion()
+            submit(targets)
+
+        actor.submit_motion = invalidate_before_submit
+        now_ns = time.monotonic_ns()
+        command = RobotCommand(
+            {
+                "single": JointCommand(
+                    ("joint_1",),
+                    (0.25,),
+                    now_ns,
+                    now_ns + 50_000_000,
+                    runtime.generation,
+                )
+            }
+        )
+
+        with pytest.raises(RuntimeError, match="motion admission closed"):
+            runtime.write(command)
+
         assert runtime.diagnostics().safety.state == RuntimeSafetyState.HOLD
     finally:
         runtime.disconnect()
@@ -478,8 +550,12 @@ def test_hardware_status_latches_fault_before_state_is_published():
     with pytest.raises(RuntimeError, match="hardware status 0x02"):
         runtime.read()
 
-    assert runtime._safety.snapshot().state == RuntimeSafetyState.FAULT  # noqa: SLF001
+    safety = runtime._safety.snapshot()  # noqa: SLF001
+    assert safety.state == RuntimeSafetyState.FAULT
+    assert safety.fault_reason is not None
+    assert "hardware status 0x02" in safety.fault_reason
     assert actor.calls == [("emergency_stop", None, False, True)]
+    assert runtime._fault_action == AutomaticFaultAction.DISABLE  # noqa: SLF001
 
 
 def test_stale_hardware_state_faults_without_returning_the_old_snapshot():
@@ -520,8 +596,10 @@ def test_stale_hardware_state_faults_without_returning_the_old_snapshot():
     with pytest.raises(RuntimeError, match="state is stale"):
         runtime.read()
 
-    assert runtime._safety.snapshot().state == RuntimeSafetyState.FAULT  # noqa: SLF001
-    assert actor.calls == [("emergency_stop", None, False, True)]
+    safety = runtime._safety.snapshot()  # noqa: SLF001
+    assert safety.state == RuntimeSafetyState.FAULT
+    assert safety.fault_reason == "hardware state is stale"
+    assert actor.calls == [("hold", None, False, True)]
 
 
 def test_gripper_normalized_motion_limits_are_converted_to_radians():
@@ -715,8 +793,8 @@ def test_motion_submission_failure_faults_all_buses_without_committing_control_h
 
     assert runtime._safety.snapshot().state == RuntimeSafetyState.FAULT  # noqa: SLF001
     assert first.motion[0][0].commit_gate.state is False
-    assert first.safety == [("emergency_stop", None, False, True)]
-    assert second.safety == [("emergency_stop", None, False, True)]
+    assert first.safety == [("hold", None, False, True)]
+    assert second.safety == [("hold", None, False, True)]
     assert runtime._pipelines["first_arm"]._last_output is None  # noqa: SLF001
     assert runtime._pipelines["second_arm"]._last_output is None  # noqa: SLF001
 
@@ -777,14 +855,16 @@ def test_runtime_rolls_back_all_buses_when_a_safety_transaction_fails():
     with pytest.raises(RuntimeError, match="enable failed"):
         runtime.set_enabled(True)
 
-    assert runtime._safety.snapshot().state == RuntimeSafetyState.FAULT  # noqa: SLF001
+    safety = runtime._safety.snapshot()  # noqa: SLF001
+    assert safety.state == RuntimeSafetyState.FAULT
+    assert safety.fault_reason is not None and "enable failed" in safety.fault_reason
     assert first.calls == [
         ("set_enabled", True, True, False),
-        ("emergency_stop", None, False, True),
+        ("hold", None, False, True),
     ]
     assert second.calls == [
         ("set_enabled", True, True, False),
-        ("emergency_stop", None, False, True),
+        ("hold", None, False, True),
     ]
 
 
@@ -873,7 +953,7 @@ def test_actor_fault_latches_runtime_fault_and_stops_healthy_buses():
     assert safety.state == RuntimeSafetyState.FAULT
     assert safety.fault_reason is not None and "failed" in safety.fault_reason
     assert failed.discard_count == 1
-    assert healthy.calls == [("emergency_stop", None, False, True)]
+    assert healthy.calls == [("hold", None, False, True)]
 
 
 def test_disconnect_skips_fifo_stop_for_an_actor_that_already_faulted():
@@ -901,6 +981,37 @@ def test_disconnect_skips_fifo_stop_for_an_actor_that_already_faulted():
     runtime.disconnect()
 
     assert actor.discard_count == 1
+    assert actor.disconnect_count == 1
+    assert runtime.diagnostics().safety.state == RuntimeSafetyState.DISCONNECTED
+
+
+def test_fault_cleanup_can_disconnect_transport_without_releasing_torque():
+    class RecordingActor:
+        connected = True
+
+        def __init__(self) -> None:
+            self.safety_labels: list[tuple[str, bool, bool]] = []
+            self.disconnect_count = 0
+
+        def submit_safety(self, label, _payload, *, wait, clear_motion=True):
+            self.safety_labels.append((label, wait, clear_motion))
+
+        def discard_motion(self):
+            raise AssertionError("a connected actor should receive the hold transaction")
+
+        def disconnect(self):
+            self.disconnect_count += 1
+            self.connected = False
+
+    runtime = RobotRuntime(_spec())
+    actor = RecordingActor()
+    runtime._actors = {"arm": actor}  # noqa: SLF001
+    runtime._safety.connected()  # noqa: SLF001
+    runtime._safety.fault("test fault")  # noqa: SLF001
+
+    runtime.disconnect(preserve_hold=True)
+
+    assert actor.safety_labels == [("hold", True, True)]
     assert actor.disconnect_count == 1
     assert runtime.diagnostics().safety.state == RuntimeSafetyState.DISCONNECTED
 

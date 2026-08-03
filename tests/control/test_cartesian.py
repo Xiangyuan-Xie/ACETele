@@ -52,22 +52,46 @@ def test_relative_mapping_scales_translation_but_not_rotation():
         positions,
         timestamp_ns=1,
     )
-    delta = np.eye(4)
-    delta[:3, :3] = kinematics.rotation_exp([0.0, 0.0, 0.1])
-    delta[:3, 3] = [0.05, 0.0, 0.0]
+    reachable = kinematics.forward_matrix(positions + [0.02, 0.02, 0.0, 0.0])
+    expected_delta = np.linalg.inv(anchor) @ reachable
+    source_delta = expected_delta.copy()
+    source_delta[:3, 3] *= 0.5
 
     result = controller.solve(
-        kinematics.pose_from_matrix(anchor @ delta, timestamp_ns=2),
+        kinematics.pose_from_matrix(anchor @ source_delta, timestamp_ns=2),
         positions,
         timestamp_ns=2,
     )
     target = kinematics.pose_matrix(result.diagnostics.target_pose)
     mapped = np.linalg.inv(anchor) @ target
 
-    assert mapped[:3, 3] == pytest.approx([0.10, 0.0, 0.0], abs=1e-9)
+    assert mapped[:3, 3] == pytest.approx(expected_delta[:3, 3], abs=1e-9)
     assert kinematics.rotation_log(mapped[:3, :3]) == pytest.approx(
-        [0.0, 0.0, 0.1], abs=1e-9
+        kinematics.rotation_log(expected_delta[:3, :3]), abs=1e-9
     )
+
+
+def test_cartesian_solver_rejects_an_unreachable_primary_task_without_progress():
+    kinematics = _kinematics()
+    controller = CartesianTeleopController(kinematics)
+    positions = np.array([0.0, 1.0, 0.0, 0.0])
+    anchor = kinematics.forward_matrix(positions)
+    controller.solve(
+        kinematics.pose_from_matrix(anchor, timestamp_ns=1),
+        positions,
+        timestamp_ns=1,
+    )
+    source = anchor.copy()
+    source[:3, 3] += anchor[:3, :3] @ np.array([0.05, 0.0, 0.0])
+
+    with pytest.raises(RuntimeError, match="no meaningful progress"):
+        controller.solve(
+            kinematics.pose_from_matrix(source, timestamp_ns=2),
+            positions,
+            timestamp_ns=2,
+        )
+
+    assert controller.diagnostics() is None
 
 
 def test_real_four_dof_model_returns_reachable_projection_within_limits():

@@ -279,7 +279,7 @@ def test_stale_generation_is_rejected_before_mailbox_update():
     actor.connect()
     try:
         actor.discard_motion()
-        with pytest.raises(ValueError, match="generation"):
+        with pytest.raises(BusError, match="generation"):
             actor.submit_motion((_target(1.0, 0),))
         assert actor.diagnostics().pending_motion_count == 0
     finally:
@@ -364,6 +364,41 @@ def test_motion_write_and_state_read_respect_period_deadline():
         actor.disconnect()
 
 
+def test_fast_read_gets_a_full_period_after_a_slow_motion_write():
+    class SlowMotionProtocol(FakeProtocol):
+        def __init__(self):
+            super().__init__()
+            self.read_gate.set()
+            self.read_after_motion = Event()
+            self.read_budget_after_motion_ns = None
+            self._motion_completed = False
+
+        def write_motion(self, targets):
+            super().write_motion(targets)
+            time.sleep(0.015)
+            self._motion_completed = True
+
+        def read_fast_state(self, *, deadline_ns=None):
+            if self._motion_completed:
+                self.read_budget_after_motion_ns = deadline_ns - time.monotonic_ns()
+                self.read_after_motion.set()
+                self._motion_completed = False
+            return super().read_fast_state(deadline_ns=deadline_ns)
+
+    protocol = SlowMotionProtocol()
+    actor = BusActor(protocol, cycle_hz=100.0)
+    actor.connect()
+    try:
+        actor.submit_motion((_target(1.0, actor.generation),))
+        assert protocol.read_after_motion.wait(0.5)
+
+        assert protocol.read_budget_after_motion_ns is not None
+        assert protocol.read_budget_after_motion_ns > 5_000_000
+        assert actor.connected
+    finally:
+        actor.disconnect()
+
+
 def test_actor_watchdog_holds_without_an_adapter_poll_loop():
     protocol = FakeProtocol()
     protocol.read_gate.set()
@@ -391,7 +426,7 @@ def test_actor_watchdog_holds_without_an_adapter_poll_loop():
         actor.disconnect()
 
 
-def test_consecutive_motion_write_failures_emergency_stop_and_fault_actor():
+def test_consecutive_motion_write_failures_hold_and_fault_actor():
     class FailingMotionProtocol(FakeProtocol):
         def __init__(self):
             super().__init__()
@@ -417,7 +452,8 @@ def test_consecutive_motion_write_failures_emergency_stop_and_fault_actor():
         diagnostics = actor.diagnostics()
         assert not diagnostics.connected
         assert diagnostics.consecutive_motion_error_count == 3
-        assert ("emergency_stop", None) in protocol.safety
+        assert ("hold", None) in protocol.safety
+        assert ("emergency_stop", None) not in protocol.safety
     finally:
         actor.disconnect()
 
@@ -470,7 +506,7 @@ def test_started_safety_timeout_is_fenced_before_later_work():
         _wait_until(lambda: actor.diagnostics().fault is not None)
         assert protocol.safety[:2] == [
             ("set_enabled", True),
-            ("emergency_stop", None),
+            ("hold", None),
         ]
     finally:
         protocol.release_safety.set()
@@ -524,7 +560,8 @@ def test_persistent_fast_state_loss_faults_inside_actor():
         actor.wait_for_snapshot(timeout=0.2)
         _wait_until(lambda: actor.diagnostics().fault is not None)
 
-        assert ("emergency_stop", None) in protocol.safety
+        assert ("hold", None) in protocol.safety
+        assert ("emergency_stop", None) not in protocol.safety
         fault = actor.diagnostics().fault
         assert fault is not None
         assert "fast bus state exceeded its timeout" in fault
@@ -535,7 +572,7 @@ def test_persistent_fast_state_loss_faults_inside_actor():
         actor.disconnect()
 
 
-def test_unexpected_worker_failure_attempts_emergency_stop_before_exit():
+def test_unexpected_worker_failure_attempts_hold_before_exit():
     class BrokenProtocol(FakeProtocol):
         def read_fast_state(self, *, deadline_ns=None):
             raise AssertionError("unexpected decoder failure")
@@ -546,7 +583,33 @@ def test_unexpected_worker_failure_attempts_emergency_stop_before_exit():
     try:
         _wait_until(lambda: actor.diagnostics().fault is not None)
 
-        assert protocol.safety == [("emergency_stop", None)]
+        assert protocol.safety == [("hold", None)]
         assert not actor.connected
+    finally:
+        actor.disconnect()
+
+
+def test_hold_failure_latches_fault_without_attempting_emergency_stop():
+    class BrokenProtocol(FakeProtocol):
+        def read_fast_state(self, *, deadline_ns=None):
+            raise AssertionError("unexpected decoder failure")
+
+        def execute_safety(self, label, payload):
+            self.safety.append((label, payload))
+            if label == "hold":
+                raise RuntimeError("hold unavailable")
+            return payload
+
+    protocol = BrokenProtocol()
+    actor = BusActor(protocol, cycle_hz=100.0)
+    actor.connect()
+    try:
+        _wait_until(lambda: actor.diagnostics().fault is not None)
+
+        assert protocol.safety == [("hold", None)]
+        fault = actor.diagnostics().fault
+        assert fault is not None
+        assert "unexpected decoder failure" in fault
+        assert "hold unavailable" in fault
     finally:
         actor.disconnect()

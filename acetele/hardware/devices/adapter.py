@@ -11,6 +11,7 @@ from __future__ import annotations
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from enum import Enum
 from functools import lru_cache
 from types import MappingProxyType
 from typing import Any, Callable, Mapping, Optional, Protocol, Sequence
@@ -64,6 +65,28 @@ class GroupDescription(Protocol):
 
 
 TransportFactory = Callable[[str, int, Any], Any]
+
+
+class AutomaticFaultAction(str, Enum):
+    """Strongest safe automatic action justified by one diagnosed fault."""
+
+    HOLD = "hold"
+    DISABLE = "disable"
+    EXTERNAL_ESTOP = "external_estop"
+
+
+@dataclass(frozen=True)
+class HardwareFault:
+    """Vendor-interpreted hardware fault and its required containment action."""
+
+    reason: str
+    action: AutomaticFaultAction
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.reason, str) or not self.reason.strip():
+            raise ValueError("hardware fault reason must be a non-empty string")
+        if not isinstance(self.action, AutomaticFaultAction):
+            raise ValueError("hardware fault action must be an AutomaticFaultAction")
 
 
 @dataclass(frozen=True)
@@ -186,22 +209,25 @@ class BusAdapter(ABC):
 
         return {}
 
-    def fault_reason(
+    def hardware_fault(
         self,
         plan: AdapterPlan,
         fast_snapshot: Any,
         slow_snapshot: Any,
-    ) -> Optional[str]:
-        """Translate protocol status into an actionable runtime fault."""
+    ) -> Optional[HardwareFault]:
+        """Translate protocol status into a fault and containment action."""
 
         if not isinstance(fast_snapshot, Mapping):
             return None
         for device_id, state in fast_snapshot.items():
             status = getattr(state, "status", None)
             if type(status) is int and status:
-                return (
-                    f"bus '{plan.spec.name}' device {device_id} reported "
-                    f"hardware status 0x{status:02x}"
+                return HardwareFault(
+                    (
+                        f"bus '{plan.spec.name}' device {device_id} reported "
+                        f"hardware status 0x{status:02x}"
+                    ),
+                    AutomaticFaultAction.DISABLE,
                 )
         return None
 
@@ -367,10 +393,12 @@ def motion_envelope(
 
 
 __all__ = [
+    "AutomaticFaultAction",
     "AdapterPlan",
     "AdapterRegistry",
     "BusAdapter",
     "DecodedJointSample",
+    "HardwareFault",
     "GroupDescription",
     "TransportFactory",
     "default_adapter_registry",

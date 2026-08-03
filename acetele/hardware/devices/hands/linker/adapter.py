@@ -14,9 +14,11 @@ from acetele.hardware.buses import (
 )
 from acetele.hardware.devices.adapter import (
     AdapterPlan,
+    AutomaticFaultAction,
     BusAdapter,
     DecodedJointSample,
     GroupDescription,
+    HardwareFault,
     TransportFactory,
     motion_envelope,
 )
@@ -168,21 +170,24 @@ class LinkerHandAdapter(BusAdapter):
             ),
         )
 
-    def fault_reason(
+    def hardware_fault(
         self,
         plan: AdapterPlan,
         fast_snapshot: Any,
         slow_snapshot: Any,
-    ) -> str | None:
+    ) -> HardwareFault | None:
         if not isinstance(slow_snapshot, Mapping):
             return None
         for device_id, state in slow_snapshot.items():
             errors = tuple(getattr(state, "errors", ()))
             failed = tuple(index for index, value in enumerate(errors) if value)
             if failed:
-                return (
-                    f"bus '{plan.spec.name}' device {device_id} reported Linker Hand "
-                    f"joint errors at indices {failed}"
+                return HardwareFault(
+                    (
+                        f"bus '{plan.spec.name}' device {device_id} reported Linker Hand "
+                        f"joint errors at indices {failed}"
+                    ),
+                    AutomaticFaultAction.EXTERNAL_ESTOP,
                 )
         return None
 

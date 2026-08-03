@@ -29,6 +29,10 @@ class FatalBusError(BusError):
     """The actor stopped because bus state can no longer be trusted."""
 
 
+class MotionRejectedError(BusError):
+    """Safe pre-dispatch rejection caused by a closed motion admission gate."""
+
+
 def _exception_chain_message(error: BaseException) -> str:
     """Flatten a local cause chain into one diagnostic string without losing context."""
 
@@ -432,7 +436,7 @@ class BusActor:
         self._require_healthy()
         with self._state_lock:
             if self._motion_watchdog_tripped:
-                raise BusError(
+                raise MotionRejectedError(
                     "motion watchdog is latched; execute a successful enable transition "
                     "before submitting new motion"
                 )
@@ -442,7 +446,7 @@ class BusActor:
             # One condition protects generation validation and the complete mailbox
             # replacement, so the worker can never observe half of a submitted batch.
             if any(target.generation != self._generation for target in targets):
-                raise ValueError("motion target generation is stale")
+                raise MotionRejectedError("motion target generation is stale")
             for target in targets:
                 if target.key in self._pending_motion:
                     self._replaced_motion_count += 1
@@ -695,13 +699,18 @@ class BusActor:
                 now_ns = self._clock_ns()
                 self._check_motion_watchdog(now_ns)
                 if now_ns >= next_fast_ns:
+                    scheduled_fast_ns = next_fast_ns
                     self._execute_latest_motion(now_ns)
-                    fast_deadline_ns = max(
-                        next_fast_ns + self._period_ns,
-                        now_ns + self._period_ns,
-                    )
+                    # Motion and feedback are separate bus transactions. Give the read
+                    # its own cycle budget after the write completes; otherwise normal
+                    # USB/RS485 write jitter consumes the response deadline and can turn
+                    # continuous teleoperation into a false state-loss fault.
+                    fast_deadline_ns = self._clock_ns() + self._period_ns
                     self._read_fast(fast_deadline_ns)
-                    next_fast_ns = fast_deadline_ns
+                    next_fast_ns = max(
+                        scheduled_fast_ns + self._period_ns,
+                        self._clock_ns(),
+                    )
                 now_ns = self._clock_ns()
                 if (
                     now_ns >= next_slow_ns
@@ -722,11 +731,16 @@ class BusActor:
         except BaseException as exc:
             terminal_error = exc
             if not isinstance(exc, FatalBusError):
+                # An automatic actor fault must not release actuator torque. Preserve
+                # the latest trustworthy pose when the protocol still responds; if it
+                # does not, leave the servo's previously admitted goal untouched.
                 try:
-                    self._protocol.execute_safety("emergency_stop", None)
-                except BaseException as stop_error:
+                    self._protocol.execute_safety("hold", None)
+                except BaseException as hold_error:
                     terminal_error = FatalBusError(
-                        f"bus worker failed and emergency stop also failed: {stop_error}"
+                        "bus worker failed: "
+                        f"{_exception_chain_message(exc)}; hold also failed: "
+                        f"{_exception_chain_message(hold_error)}"
                     )
             with self._condition:
                 self._generation += 1
@@ -767,7 +781,7 @@ class BusActor:
         if abandoned:
             with self._state_lock:
                 self._safety_task_fenced = True
-            self._emergency_stop_and_fault(
+            self._hold_and_fault(
                 f"safety task '{task.label}' completed after its caller timed out",
                 BusError(f"late safety task '{task.label}' completion"),
             )
@@ -825,7 +839,7 @@ class BusActor:
                 failure_count = self._consecutive_motion_error_count
                 self._last_motion_write_s = (completed_ns - write_started_ns) / 1e9
             if failure_count >= self._motion_failure_limit:
-                self._emergency_stop_and_fault(
+                self._hold_and_fault(
                     f"motion write failed {failure_count} consecutive times",
                     exc,
                 )
@@ -913,7 +927,9 @@ class BusActor:
         try:
             self._protocol.execute_safety("hold", None)
         except BaseException as exc:
-            self._emergency_stop_and_fault("motion watchdog hold failed", exc)
+            raise FatalBusError(
+                "motion watchdog hold failed: " + _exception_chain_message(exc)
+            ) from exc
         with self._state_lock:
             self._motion_watchdog_tripped = True
 
@@ -950,26 +966,23 @@ class BusActor:
             last_state_ns is not None
             and self._clock_ns() - last_state_ns > self._state_timeout_ns
         ):
-            self._emergency_stop_and_fault("fast bus state exceeded its timeout", cause)
+            self._hold_and_fault("fast bus state exceeded its timeout", cause)
 
-    def _emergency_stop_and_fault(
+    def _hold_and_fault(
         self,
         reason: str,
         cause: BaseException,
     ) -> None:
-        """Attempt the strongest local stop, then terminate the actor unconditionally."""
+        """Best-effort hold, then latch a fault without automatically releasing torque."""
 
-        stop_error: Optional[BaseException] = None
+        hold_error: Optional[BaseException] = None
         try:
-            self._protocol.execute_safety("emergency_stop", None)
+            self._protocol.execute_safety("hold", None)
         except BaseException as exc:
-            stop_error = exc
+            hold_error = exc
         detail = f"{reason}: {_exception_chain_message(cause)}"
-        if stop_error is not None:
-            detail += (
-                "; emergency stop also failed: "
-                + _exception_chain_message(stop_error)
-            )
+        if hold_error is not None:
+            detail += "; hold also failed: " + _exception_chain_message(hold_error)
         raise FatalBusError(detail) from cause
 
     def _read_slow(self, deadline_ns: int) -> None:
@@ -1042,6 +1055,7 @@ __all__ = [
     "FatalBusError",
     "MotionCommitGate",
     "MotionEnvelope",
+    "MotionRejectedError",
     "RecoverableBusError",
     "BusActor",
     "BusProtocol",

@@ -33,10 +33,15 @@ from acetele.hardware.buses import (
     DeviceEnableRequest,
     MotionCommitGate,
     MotionEnvelope,
+    MotionRejectedError,
     SerialDirectionControl,
     SerialTransport,
 )
-from acetele.hardware.devices.adapter import AdapterRegistry
+from acetele.hardware.devices.adapter import (
+    AdapterRegistry,
+    AutomaticFaultAction,
+    HardwareFault,
+)
 from acetele.model import unwrap_near, wrap_to_pi
 from acetele.runtime.preflight import (
     BusPreflight,
@@ -61,6 +66,7 @@ class RuntimeDiagnostics:
     buses: Mapping[str, BusActorDiagnostics]
     controls: Mapping[str, PositionControlDiagnostics]
     estimators: Mapping[str, Mapping[str, np.ndarray]]
+    fault_action: Optional[AutomaticFaultAction]
 
 
 @dataclass(frozen=True)
@@ -117,6 +123,7 @@ class RobotRuntime:
         self._actors: dict[str, BusActor] = {}
         self._sequence: dict[str, int] = {}
         self._last_state_ns: Optional[int] = None
+        self._fault_action: Optional[AutomaticFaultAction] = None
         plan = build_runtime_plan(spec, adapter_registry=adapter_registry)
         self.preflight = plan.preflight
         self._adapter_plans = dict(plan.adapters)
@@ -244,6 +251,7 @@ class RobotRuntime:
                 raise exc from cleanup_error
             raise
         self._actors = actors
+        self._fault_action = None
         self._safety.connected()
 
     def home_calibration_targets(self) -> Mapping[str, Mapping[int, int]]:
@@ -299,10 +307,22 @@ class RobotRuntime:
         }
         # Protocol health and freshness are evaluated before publishing any state to a
         # controller, so a bad sample cannot leak into a lower-level policy.
-        fault_reason = self._hardware_fault_reason(snapshots, slow_snapshots)
-        if fault_reason is not None:
-            self._latch_hardware_fault(fault_reason)
-            raise RuntimeError(fault_reason)
+        hardware_faults = self._hardware_faults(snapshots, slow_snapshots)
+        if hardware_faults:
+            actions = {fault.action for fault in hardware_faults}
+            action = (
+                AutomaticFaultAction.EXTERNAL_ESTOP
+                if AutomaticFaultAction.EXTERNAL_ESTOP in actions
+                else AutomaticFaultAction.DISABLE
+                if AutomaticFaultAction.DISABLE in actions
+                else AutomaticFaultAction.HOLD
+            )
+            reason = "; ".join(fault.reason for fault in hardware_faults)
+            self._latch_hardware_fault(
+                reason,
+                action=action,
+            )
+            raise RuntimeError(reason)
         joint_states: dict[str, JointState] = {}
         timestamps: list[int] = []
         safety_state = self._safety.snapshot().state
@@ -327,14 +347,32 @@ class RobotRuntime:
             self._rebase_position_pipelines()
             self._submit_all_safety("hold", None, wait=False)
         elif transition == SafetyTransition.FAULT:
-            self._submit_all_safety("emergency_stop", None, wait=False)
+            if self._fault_action is None:
+                self._fault_action = AutomaticFaultAction.HOLD
+            self._best_effort_fault_hold()
             raise RuntimeError("robot runtime hardware state is stale")
         sensor_states = self._sensor_states(slow_snapshots)
         return RobotState(joint_states, sensor_states)
 
     @_serialized_operation
     def write(self, command: RobotCommand) -> None:
-        """Validate, condition, stage, and publish one logical robot command."""
+        """Validate and publish one robot command that refreshes the motion lease."""
+
+        self._write(command, refresh_heartbeat=True)
+
+    @_serialized_operation
+    def write_auxiliary(self, command: RobotCommand) -> None:
+        """Publish end-effector motion without extending the arm heartbeat."""
+
+        self._write(command, refresh_heartbeat=False)
+
+    def _write(self, command: RobotCommand, *, refresh_heartbeat: bool) -> None:
+        """Condition, stage, and atomically expose one logical robot command.
+
+        ``refresh_heartbeat=False`` is reserved for end-effector updates admitted by an
+        already-live arm session. Such updates can move their addressed device but cannot
+        establish or extend the robot-wide motion lease.
+        """
 
         self._require_connected()
         if not isinstance(command, RobotCommand) or not command.joints:
@@ -349,7 +387,9 @@ class RobotRuntime:
                 self._rebase_position_pipelines()
                 self._submit_all_safety("hold", None, wait=False)
             else:
-                self._submit_all_safety("emergency_stop", None, wait=False)
+                if self._fault_action is None:
+                    self._fault_action = AutomaticFaultAction.HOLD
+                self._best_effort_fault_hold()
             raise RuntimeError(f"robot runtime rejected motion after {transition.value}")
         snapshot = self._safety.snapshot()
         if snapshot.state not in (
@@ -357,6 +397,8 @@ class RobotRuntime:
             RuntimeSafetyState.ACTIVE,
         ):
             raise RuntimeError(f"robot runtime cannot move while {snapshot.state.value}")
+        if not refresh_heartbeat and snapshot.state != RuntimeSafetyState.ACTIVE:
+            raise RuntimeError("auxiliary motion requires an active arm heartbeat")
 
         # Phase 1 is side-effect free: validate every group, prepare controller state,
         # and encode every vendor payload before any actor can observe the command.
@@ -411,29 +453,45 @@ class RobotRuntime:
                         for target in targets
                     )
                 )
-            accepted_ns = self._clock_ns()
-            if minimum_deadline < accepted_ns:
-                raise RuntimeError("robot command expired during submission")
-            if snapshot.state == RuntimeSafetyState.READY:
-                self._safety.activate(accepted_ns)
-            if not self._safety.accept_command(
-                accepted_ns,
-                generation=snapshot.generation,
-                deadline_ns=minimum_deadline,
-            ):
-                raise RuntimeError("robot command is stale or belongs to another generation")
-            # Refresh every physical bus only after the complete robot command has passed
-            # validation and safety admission. The actor thread can then enforce loss of
-            # this heartbeat even if ROS/ZMQ callback scheduling stops temporarily.
-            for actor in self._actors.values():
-                if isinstance(actor, BusActor):
-                    actor.refresh_motion_watchdog(accepted_ns)
+        except MotionRejectedError as exc:
+            commit_gate.abort()
+            # A watchdog/generation rejection proves that no staged target became
+            # visible. Mirror the actor's conservative HOLD instead of converting a
+            # routine stale frame into a restart-only hardware fault.
+            self._safety.hold()
+            self._rebase_position_pipelines()
+            self._submit_all_safety("hold", None, wait=False)
+            raise RuntimeError(f"robot motion admission closed: {exc}") from exc
+        except BaseException:
+            commit_gate.abort()
+            self._latch_hardware_fault("motion staging failed")
+            raise
+        accepted_ns = self._clock_ns()
+        if minimum_deadline < accepted_ns:
+            # Nothing behind an uncommitted gate can reach hardware. Timing rejection is
+            # a dropped frame, not evidence of a bus fault.
+            commit_gate.abort()
+            raise RuntimeError("robot command expired during submission")
+        if refresh_heartbeat and not self._safety.accept_command(
+            accepted_ns,
+            generation=snapshot.generation,
+            deadline_ns=minimum_deadline,
+        ):
+            commit_gate.abort()
+            raise RuntimeError("robot command is stale or belongs to another generation")
+        try:
+            if refresh_heartbeat:
+                # Arm frames refresh every physical bus so a separately wired end
+                # effector also holds when the arm heartbeat disappears.
+                for actor in self._actors.values():
+                    if isinstance(actor, BusActor):
+                        actor.refresh_motion_watchdog(accepted_ns)
             for pipeline, prepared in prepared_controls:
                 pipeline.commit(prepared)
             commit_gate.commit()
         except BaseException:
             commit_gate.abort()
-            self._latch_hardware_fault("motion submission failed")
+            self._latch_hardware_fault("motion commit failed")
             raise
 
     @_serialized_operation
@@ -533,6 +591,14 @@ class RobotRuntime:
 
         self._require_connected()
         self._safety.emergency_stop()
+        self._fault_action = (
+            AutomaticFaultAction.EXTERNAL_ESTOP
+            if any(
+                not bus.supports_software_disable
+                for bus in self.preflight.buses.values()
+            )
+            else AutomaticFaultAction.DISABLE
+        )
         self._submit_all_safety("emergency_stop", None, wait=True)
 
     @_serialized_operation
@@ -562,11 +628,14 @@ class RobotRuntime:
             else:
                 actor.discard_motion()
         self._safety.reset_fault()
+        self._fault_action = None
 
     @_serialized_operation
-    def disconnect(self) -> None:
-        """Best-effort stop and close all actors while preserving the first error."""
+    def disconnect(self, *, preserve_hold: bool = False) -> None:
+        """Close all actors after either holding or explicitly releasing torque."""
 
+        if type(preserve_hold) is not bool:
+            raise ValueError("preserve_hold must be a boolean")
         actors = self._actors
         if not actors:
             return
@@ -576,22 +645,24 @@ class RobotRuntime:
         for references in self._position_references.values():
             references.clear()
         first_error: Optional[BaseException] = None
-        # Request the strongest stop everywhere before closing any transport. Continue
-        # after errors so one broken bus cannot leak all remaining resources.
+        # Operator-requested shutdown releases torque. Automatic process faults may keep
+        # the last trustworthy goal active while transports are closed.
+        safety_label = "hold" if preserve_hold else "emergency_stop"
         for actor in actors.values():
             if not actor.connected:
-                # A faulted worker already attempted its protocol-level emergency stop
-                # before terminating. No worker remains to consume another FIFO task;
-                # proceed directly to bounded transport cancellation and disconnect.
+                # A faulted worker already attempted a hold before terminating. No
+                # worker remains to consume another FIFO task; preserve the last servo
+                # goal and proceed to bounded transport cancellation and disconnect.
                 actor.discard_motion()
                 continue
             try:
-                actor.submit_safety("emergency_stop", None, wait=True)
+                actor.submit_safety(safety_label, None, wait=True)
             except BaseException as exc:
                 if first_error is None:
                     first_error = exc
         cleanup_error = _disconnect_actors(actors)
         self._safety.disconnected()
+        self._fault_action = None
         if first_error is not None:
             raise first_error from cleanup_error
         if cleanup_error is not None:
@@ -614,6 +685,7 @@ class RobotRuntime:
                     for name, estimator in self._estimators.items()
                 }
             ),
+            self._fault_action,
         )
 
     def _read_group(
@@ -790,36 +862,85 @@ class RobotRuntime:
         for pipeline in self._pipelines.values():
             pipeline.rebase_to_feedback()
 
-    def _hardware_fault_reason(
+    def _hardware_faults(
         self,
         fast_snapshots: Mapping[str, Any],
         slow_snapshots: Mapping[str, Any],
-    ) -> Optional[str]:
-        """Ask each adapter to interpret its own status and telemetry fields."""
+    ) -> tuple[HardwareFault, ...]:
+        """Collect every adapter-interpreted status fault from one coherent read."""
 
+        faults: list[HardwareFault] = []
         for bus_name, plan in self._adapter_plans.items():
-            reason = plan.adapter.fault_reason(
+            fault = plan.adapter.hardware_fault(
                 plan,
                 fast_snapshots.get(bus_name),
                 slow_snapshots.get(bus_name),
             )
-            if reason is not None:
-                return reason
-        return None
+            if fault is not None:
+                faults.append(fault)
+        return tuple(faults)
 
-    def _latch_hardware_fault(self, reason: str) -> None:
-        """Latch software FAULT and best-effort stop every bus without masking reason."""
+    def _latch_hardware_fault(
+        self,
+        reason: str,
+        *,
+        action: AutomaticFaultAction = AutomaticFaultAction.HOLD,
+    ) -> None:
+        """Latch software FAULT and apply the diagnosed containment action."""
 
+        previous = self._fault_action
         if self._safety.snapshot().state != RuntimeSafetyState.FAULT:
             self._safety.fault(reason)
+            self._fault_action = action
+        elif previous is None or (
+            previous == AutomaticFaultAction.HOLD
+            and action != AutomaticFaultAction.HOLD
+        ):
+            self._fault_action = action
+        if self._fault_action in (
+            AutomaticFaultAction.DISABLE,
+            AutomaticFaultAction.EXTERNAL_ESTOP,
+        ):
+            self._best_effort_fault_disable()
+        else:
+            self._best_effort_fault_hold()
+
+    def _best_effort_fault_disable(self) -> None:
+        """Discard motion and request the strongest protocol-level stop on every bus."""
+
+        self._rebase_position_pipelines()
         for actor in self._actors.values():
             try:
-                actor.submit_safety(
-                    "emergency_stop",
-                    None,
-                    wait=False,
-                    clear_motion=True,
-                )
+                if actor.connected:
+                    actor.submit_safety(
+                        "emergency_stop",
+                        None,
+                        wait=False,
+                        clear_motion=True,
+                    )
+                else:
+                    actor.discard_motion()
+            except BaseException:
+                try:
+                    actor.discard_motion()
+                except BaseException:
+                    pass
+
+    def _best_effort_fault_hold(self) -> None:
+        """Invalidate motion and hold healthy buses without escalating to torque release.
+
+        Automatic faults and explicit emergency stops are intentionally different:
+        faults close the software motion gate while preserving support against gravity;
+        only ``emergency_stop()`` and orderly shutdown request actuator torque release.
+        """
+
+        self._rebase_position_pipelines()
+        for actor in self._actors.values():
+            try:
+                if actor.connected:
+                    actor.submit_safety("hold", None, wait=False, clear_motion=True)
+                else:
+                    actor.discard_motion()
             except BaseException:
                 try:
                     actor.discard_motion()
@@ -852,7 +973,14 @@ class RobotRuntime:
                 if first_error is None:
                     first_error = exc
         if first_error is not None:
-            self._latch_hardware_fault("safety task 'set_enabled' failed")
+            self._latch_hardware_fault(
+                f"safety task 'set_enabled' failed: {first_error}",
+                action=(
+                    AutomaticFaultAction.HOLD
+                    if enabled
+                    else AutomaticFaultAction.DISABLE
+                ),
+            )
             raise first_error
 
     def _submit_arm_enable(self, device_ids_by_bus: Mapping[str, list[int]]) -> None:
@@ -875,7 +1003,9 @@ class RobotRuntime:
                 if first_error is None:
                     first_error = exc
         if first_error is not None:
-            self._latch_hardware_fault("targeted joint-group enable failed")
+            self._latch_hardware_fault(
+                f"targeted joint-group enable failed: {first_error}"
+            )
             raise first_error
 
     def _submit_all_safety(
@@ -901,20 +1031,16 @@ class RobotRuntime:
                 if first_error is None:
                     first_error = exc
         if first_error is not None:
-            # Failure of a non-stop safety action escalates to emergency stop on every
-            # remaining actor; cleanup attempts never replace the originating error.
-            self._safety.fault(f"safety task '{label}' failed")
-            if label != "emergency_stop":
-                for actor in self._actors.values():
-                    try:
-                        actor.submit_safety(
-                            "emergency_stop",
-                            None,
-                            wait=False,
-                            clear_motion=True,
-                        )
-                    except BaseException:
-                        pass
+            # A failed safety transaction makes hardware state uncertain. Keep the
+            # software gate latched and retain the strongest action already requested.
+            self._safety.fault(f"safety task '{label}' failed: {first_error}")
+            if label == "emergency_stop":
+                if self._fault_action is None:
+                    self._fault_action = AutomaticFaultAction.DISABLE
+            else:
+                self._fault_action = AutomaticFaultAction.HOLD
+            if label not in ("emergency_stop", "hold"):
+                self._best_effort_fault_hold()
             raise first_error
 
     def _require_connected(self) -> None:
@@ -939,20 +1065,7 @@ class RobotRuntime:
             details.append(name if not fault else f"{name} ({fault})")
         reason = "robot runtime bus actor faulted: " + ", ".join(details)
         if self._safety.snapshot().state != RuntimeSafetyState.FAULT:
-            self._safety.fault(reason)
-            for actor in self._actors.values():
-                try:
-                    if actor.connected:
-                        actor.submit_safety(
-                            "emergency_stop",
-                            None,
-                            wait=False,
-                            clear_motion=True,
-                        )
-                    else:
-                        actor.discard_motion()
-                except BaseException:
-                    pass
+            self._latch_hardware_fault(reason)
         raise RuntimeError(reason)
 
     def _synchronize_actor_watchdogs(self) -> None:

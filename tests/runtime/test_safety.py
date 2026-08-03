@@ -9,7 +9,7 @@ def test_command_timeout_enters_hold_and_advances_generation():
     safety = RuntimeSafetyController()
     safety.connected()
     safety.ready()
-    safety.activate(1)
+    assert safety.accept_command(1, generation=0, deadline_ns=2)
 
     transition = safety.update(100_000_002, latest_state_ns=100_000_002)
 
@@ -22,21 +22,21 @@ def test_stale_state_faults_before_accepting_more_motion():
     safety = RuntimeSafetyController()
     safety.connected()
     safety.ready()
-    safety.activate(1)
+    assert safety.accept_command(1, generation=0, deadline_ns=2)
 
     transition = safety.update(60_000_001, latest_state_ns=1)
 
     assert transition == SafetyTransition.FAULT
-    assert not safety.accepts_motion
+    assert safety.snapshot().state == RuntimeSafetyState.FAULT
     assert not safety.accept_command(60_000_002, generation=1, deadline_ns=70_000_000)
 
 
-def test_command_requires_active_state_current_generation_and_deadline():
+def test_command_atomically_activates_ready_state_and_enforces_generation_and_deadline():
     safety = RuntimeSafetyController()
     safety.connected()
     safety.ready()
-    assert not safety.accept_command(1, generation=0, deadline_ns=2)
-    safety.activate(1)
+    assert safety.accept_command(1, generation=0, deadline_ns=2)
+    assert safety.snapshot().state == RuntimeSafetyState.ACTIVE
 
     assert not safety.accept_command(3, generation=1, deadline_ns=4)
     assert not safety.accept_command(5, generation=0, deadline_ns=4)
@@ -47,7 +47,7 @@ def test_manual_hold_and_disable_advance_generation():
     safety = RuntimeSafetyController()
     safety.connected()
     safety.ready()
-    safety.activate(1)
+    assert safety.accept_command(1, generation=0, deadline_ns=2)
 
     safety.hold()
     assert safety.snapshot().state == RuntimeSafetyState.HOLD

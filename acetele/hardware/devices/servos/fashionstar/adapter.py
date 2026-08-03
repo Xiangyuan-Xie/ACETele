@@ -17,9 +17,11 @@ from acetele.hardware.buses import (
 )
 from acetele.hardware.devices.adapter import (
     AdapterPlan,
+    AutomaticFaultAction,
     BusAdapter,
     DecodedJointSample,
     GroupDescription,
+    HardwareFault,
     TransportFactory,
     motion_envelope,
 )
@@ -180,20 +182,23 @@ class FashionStarAdapter(BusAdapter):
             velocity_consistency_rad_s=6.0 * velocity_step,
         )
 
-    def fault_reason(
+    def hardware_fault(
         self,
         plan: AdapterPlan,
         fast_snapshot: Any,
         slow_snapshot: Any,
-    ) -> Optional[str]:
+    ) -> Optional[HardwareFault]:
         if not isinstance(fast_snapshot, Mapping):
             return None
         for device_id, state in fast_snapshot.items():
             status = getattr(state, "status", None)
             if type(status) is int and status & 0xFE:
-                return (
-                    f"bus '{plan.spec.name}' device {device_id} reported "
-                    f"hardware status 0x{status & 0xFE:02x}"
+                return HardwareFault(
+                    (
+                        f"bus '{plan.spec.name}' device {device_id} reported "
+                        f"hardware status 0x{status & 0xFE:02x}"
+                    ),
+                    AutomaticFaultAction.DISABLE,
                 )
         return None
 

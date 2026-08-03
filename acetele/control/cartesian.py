@@ -20,6 +20,7 @@ class CartesianTeleopTuning:
     damping: float = 1e-3
     maximum_joint_step_rad: float = 0.08
     position_tolerance_m: float = 0.002
+    minimum_position_progress_m: float = 0.0001
     orientation_tolerance_rad: float = 0.03
     maximum_translation_m: float = 0.35
     maximum_rotation_rad: float = math.pi
@@ -31,6 +32,7 @@ class CartesianTeleopTuning:
             "damping",
             "maximum_joint_step_rad",
             "position_tolerance_m",
+            "minimum_position_progress_m",
             "orientation_tolerance_rad",
             "maximum_translation_m",
             "maximum_rotation_rad",
@@ -163,12 +165,18 @@ class CartesianTeleopController:
                 "Cartesian source frame changed during tracking; resynchronize first"
             )
         target, command_limited = self._map_target(source)
-        result = self._solve_ik(
-            target,
-            current.copy(),
-            timestamp_ns=timestamp_ns,
-            command_limited=command_limited,
-        )
+        try:
+            result = self._solve_ik(
+                target,
+                current.copy(),
+                timestamp_ns=timestamp_ns,
+                command_limited=command_limited,
+            )
+        except BaseException:
+            # Never expose diagnostics from an older accepted frame after the current
+            # source sample failed to produce a usable command.
+            self._diagnostics = None
+            raise
         self._diagnostics = result.diagnostics
         return result
 
@@ -218,6 +226,7 @@ class CartesianTeleopController:
         best_orientation_error = math.inf
         iterations = 0
         joint_limited = False
+        initial_position_error = math.inf
 
         for iteration in range(self.tuning.maximum_iterations + 1):
             current = self.kinematics.forward_matrix(positions)
@@ -227,6 +236,8 @@ class CartesianTeleopController:
             )
             position_norm = float(np.linalg.norm(position_error))
             orientation_norm = float(np.linalg.norm(orientation_error))
+            if iteration == 0:
+                initial_position_error = position_norm
             if self._better_solution(
                 position_norm,
                 orientation_norm,
@@ -263,6 +274,16 @@ class CartesianTeleopController:
             if np.max(np.abs(clipped - positions)) <= np.finfo(float).eps:
                 break
             positions = clipped
+
+        if (
+            initial_position_error > self.tuning.position_tolerance_m
+            and best_position_error > self.tuning.position_tolerance_m
+            and initial_position_error - best_position_error
+            < self.tuning.minimum_position_progress_m
+        ):
+            raise RuntimeError(
+                "Cartesian IK made no meaningful progress on the primary position task"
+            )
 
         achieved_matrix = self.kinematics.forward_matrix(best)
         linear, angular = self.kinematics.jacobian(best)

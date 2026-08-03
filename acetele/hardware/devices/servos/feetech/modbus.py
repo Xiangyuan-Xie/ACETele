@@ -104,11 +104,13 @@ class FeetechModbusBusProtocol:
         self._clock_ns = clock_ns
         self._enabled_ids: set[int] = set()
         self._last_fast: dict[int, FeetechModbusFastState] = {}
+        self._hold_positions_rad: dict[int, float] = {}
 
     def connect(self) -> None:
         """Verify firmware/profile identity and leave every servo disabled."""
 
         self._last_fast.clear()
+        self._hold_positions_rad.clear()
         self._enabled_ids.clear()
         self._transport.connect()
         try:
@@ -149,6 +151,7 @@ class FeetechModbusBusProtocol:
         """Release the serial transport."""
 
         self._enabled_ids.clear()
+        self._hold_positions_rad.clear()
         self._transport.disconnect()
 
     def execute_safety(self, label: str, payload) -> object:
@@ -178,6 +181,7 @@ class FeetechModbusBusProtocol:
                             FeetechModbusMotion(state.position_rad),
                         ),
                     )
+                    self._hold_positions_rad[slave_id] = state.position_rad
             try:
                 for slave_id in slave_ids:
                     self._write_registers(
@@ -202,13 +206,12 @@ class FeetechModbusBusProtocol:
             slave_ids = tuple(sorted(self._enabled_ids))
             if not slave_ids:
                 return True
-            if not set(slave_ids).issubset(self._last_fast):
-                raise RuntimeError("FEETECH Modbus cannot hold before state is available")
+            if not set(slave_ids).issubset(self._hold_positions_rad):
+                raise RuntimeError("FEETECH Modbus has no trustworthy hold target")
             for slave_id in slave_ids:
-                state = self._last_fast[slave_id]
                 values = self._encode_motion(
                     self._devices[slave_id],
-                    FeetechModbusMotion(state.position_rad),
+                    FeetechModbusMotion(self._hold_positions_rad[slave_id]),
                 )
                 self._write_registers(slave_id, self.goal_address, values)
             return True
@@ -220,7 +223,7 @@ class FeetechModbusBusProtocol:
         seen: set[int] = set()
         try:
             deadline_ns = min(target.deadline_ns for target in targets)
-            encoded: list[tuple[int, tuple[int, ...]]] = []
+            encoded: list[tuple[int, tuple[int, ...], float]] = []
             for target in targets:
                 if target.device_id not in self._enabled_ids:
                     raise ValueError(
@@ -237,17 +240,24 @@ class FeetechModbusBusProtocol:
                     raise ValueError("FEETECH Modbus payload must be FeetechModbusMotion")
                 seen.add(target.device_id)
                 encoded.append(
-                    (target.device_id, self._encode_motion(profile, target.payload))
+                    (
+                        target.device_id,
+                        self._encode_motion(profile, target.payload),
+                        target.payload.position_rad,
+                    )
                 )
             # Validation and encoding finish before the first request. Modbus cannot
             # make wire writes atomic, but argument errors cannot cause partial output.
-            for device_id, values in encoded:
+            for device_id, values, position_rad in encoded:
                 self._write_registers(
                     device_id,
                     self.goal_address,
                     values,
                     deadline_ns=deadline_ns,
                 )
+                # Modbus writes are per-device, so commit each cache entry only after
+                # its own response succeeds; a later failure cannot falsify earlier I/O.
+                self._hold_positions_rad[device_id] = position_rad
         except (TimeoutError, OSError, ValueError) as exc:
             raise RecoverableBusError("FEETECH Modbus motion write failed") from exc
 

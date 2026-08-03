@@ -64,13 +64,6 @@ class RuntimeSafetyController:
         self._last_command_ns: Optional[int] = None
         self._fault_reason: Optional[str] = None
 
-    @property
-    def accepts_motion(self) -> bool:
-        """Return whether streaming motion is currently admissible."""
-
-        with self._lock:
-            return self._state == RuntimeSafetyState.ACTIVE
-
     def snapshot(self) -> SafetySnapshot:
         """Read state, generation, heartbeat, and fault atomically."""
 
@@ -137,27 +130,18 @@ class RuntimeSafetyController:
             self._state = RuntimeSafetyState.HOLD
             self._last_command_ns = None
 
-    def activate(self, now_ns: int) -> None:
-        """Enter ACTIVE and establish the first command heartbeat."""
-
-        self._validate_time(now_ns)
-        with self._lock:
-            if self._state != RuntimeSafetyState.READY:
-                raise RuntimeError(f"cannot enter ACTIVE from {self._state.value}")
-            self._state = RuntimeSafetyState.ACTIVE
-            self._last_command_ns = now_ns
-
     def accept_command(self, now_ns: int, *, generation: int, deadline_ns: int) -> bool:
-        """Refresh heartbeat only for a live command in the active generation."""
+        """Atomically admit the first READY command or refresh an ACTIVE heartbeat."""
 
         self._validate_time(now_ns)
         with self._lock:
             if (
-                self._state != RuntimeSafetyState.ACTIVE
+                self._state not in (RuntimeSafetyState.READY, RuntimeSafetyState.ACTIVE)
                 or generation != self._generation
                 or now_ns > deadline_ns
             ):
                 return False
+            self._state = RuntimeSafetyState.ACTIVE
             self._last_command_ns = now_ns
             return True
 
@@ -183,8 +167,9 @@ class RuntimeSafetyController:
             if state_stale is not None:
                 stale = state_stale
             if stale:
-                # State loss is a hardware-trust failure and therefore latches FAULT;
-                # command loss is less severe and preserves holding torque in HOLD.
+                # State loss latches FAULT and closes command admission. Hardware
+                # policy remains a holding action; torque release is reserved for an
+                # explicit emergency stop.
                 self._enter_fault_locked("hardware state is stale")
                 return SafetyTransition.FAULT
             if (

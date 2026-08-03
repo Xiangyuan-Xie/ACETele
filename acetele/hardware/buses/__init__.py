@@ -9,6 +9,7 @@ from acetele.hardware.buses.actor import (
     FatalBusError,
     MotionCommitGate,
     MotionEnvelope,
+    MotionRejectedError,
     RecoverableBusError,
     resolve_device_enable_request,
 )
@@ -37,6 +38,7 @@ __all__ = [
     "ModbusProtocolError",
     "MotionCommitGate",
     "MotionEnvelope",
+    "MotionRejectedError",
     "RecoverableBusError",
     "SerialDirectionControl",
     "SerialTransport",
