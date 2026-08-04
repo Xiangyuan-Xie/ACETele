@@ -106,6 +106,12 @@ class FeetechModbusBusProtocol:
         self._last_fast: dict[int, FeetechModbusFastState] = {}
         self._hold_positions_rad: dict[int, float] = {}
 
+    @property
+    def operation_timeout_ns(self) -> int:
+        """Return the deadline budget for one complete Modbus transaction."""
+
+        return self._operation_timeout_ns
+
     def connect(self) -> None:
         """Verify firmware/profile identity and leave every servo disabled."""
 

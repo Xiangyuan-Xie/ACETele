@@ -165,6 +165,12 @@ class FeetechPacketBusProtocol:
         self._last_fast: dict[int, FeetechPacketFastState] = {}
         self._hold_positions_rad: dict[int, float] = {}
 
+    @property
+    def operation_timeout_ns(self) -> int:
+        """Return the deadline budget for one complete packet transaction."""
+
+        return self._operation_timeout_ns
+
     def connect(self) -> None:
         """Verify model identities, disable torque, and select position mode."""
 
@@ -525,6 +531,7 @@ class FeetechPacketBusProtocol:
         """Sync-read the contiguous fast-state block and convert it to SI."""
 
         servo_ids = tuple(self._devices)
+        packets: dict[int, FeetechStatusPacket] = {}
         try:
             # A timed-out sync read may leave a partial or delayed status packet in the
             # kernel buffer. Starting the next request from that suffix can mix samples
@@ -538,7 +545,6 @@ class FeetechPacketBusProtocol:
                 ),
                 deadline_ns=deadline_ns,
             )
-            packets: dict[int, FeetechStatusPacket] = {}
             # Sync-read responses can arrive in any ID order. Collect by ID and reject
             # duplicates so the returned mapping always represents one complete cycle.
             for _ in servo_ids:
@@ -562,7 +568,12 @@ class FeetechPacketBusProtocol:
                 for servo_id in servo_ids
             }
         except (FeetechPacketError, TimeoutError, OSError, ValueError) as exc:
-            raise RecoverableBusError("FEETECH packet state read failed") from exc
+            received = tuple(sorted(packets))
+            missing = tuple(servo_id for servo_id in servo_ids if servo_id not in packets)
+            raise RecoverableBusError(
+                "FEETECH packet state read failed; "
+                f"received IDs={received}, missing IDs={missing}"
+            ) from exc
         self._last_fast = states
         return states
 

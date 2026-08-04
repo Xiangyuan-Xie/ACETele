@@ -86,6 +86,12 @@ class LinkerHandModbusProtocol:
         self._last_fast: dict[int, LinkerHandFastState] = {}
         self._versions: dict[int, tuple[int, ...]] = {}
 
+    @property
+    def operation_timeout_ns(self) -> int:
+        """Return the deadline budget for one complete Modbus transaction."""
+
+        return self._operation_timeout_ns
+
     def connect(self) -> None:
         """Open the bus and verify each hand's reported joint count."""
 

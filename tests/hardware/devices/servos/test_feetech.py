@@ -179,6 +179,17 @@ class PacketTransport:
         return result
 
 
+class MissingLastStateTransport(PacketTransport):
+    """Drop the final sync-read response to model one disconnected servo."""
+
+    def write(self, frame, *, deadline_ns):
+        super().write(frame, deadline_ns=deadline_ns)
+        if FeetechInstruction(frame[4]) == FeetechInstruction.SYNC_READ:
+            # One state status frame is header(2), id/length/error(3), payload(15),
+            # and checksum(1). Leave earlier replies intact for missing-ID diagnostics.
+            del self.responses[-21:]
+
+
 def _packet_motion(servo_id: int, position_rad: float) -> MotionEnvelope:
     now = time.monotonic_ns()
     return MotionEnvelope(
@@ -201,6 +212,16 @@ def _packet_effort(servo_id: int, current_raw: int) -> MotionEnvelope:
         now + 50_000_000,
         0,
     )
+
+
+def test_packet_state_timeout_reports_received_and_missing_servo_ids():
+    profile = feetech_packet_profiles.require("HL3915", context="test")
+    transport = MissingLastStateTransport({1: 100, 2: 100})
+    protocol = FeetechPacketBusProtocol(transport, {1: profile, 2: profile})
+    protocol.connect()
+
+    with pytest.raises(RecoverableBusError, match=r"received IDs=\(1,\), missing IDs=\(2,\)"):
+        protocol.read_fast_state()
 
 
 def test_hls_effort_mode_switch_and_signed_current_golden_frames():

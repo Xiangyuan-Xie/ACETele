@@ -153,6 +153,12 @@ class MotionEnvelope:
 class BusProtocol(Protocol):
     """Vendor protocol executed exclusively by a :class:`BusActor`."""
 
+    @property
+    def operation_timeout_ns(self) -> int:
+        """Return the maximum duration of one complete protocol transaction."""
+
+        ...
+
     def connect(self) -> None:
         """Acquire the protocol transport and verify configured identities."""
 
@@ -179,7 +185,7 @@ class BusProtocol(Protocol):
         ...
 
     def read_fast_state(self, *, deadline_ns: Optional[int] = None) -> Any:
-        """Read motion-critical state within the cycle deadline."""
+        """Read motion-critical state within one protocol-operation deadline."""
 
         ...
 
@@ -323,6 +329,10 @@ class BusActor:
         self._protocol = protocol
         self._period_ns = max(1, round(1e9 / cycle_hz))
         self._slow_period_ns = max(1, round(1e9 / slow_state_hz))
+        operation_timeout_ns = protocol.operation_timeout_ns
+        if type(operation_timeout_ns) is not int or operation_timeout_ns <= 0:
+            raise ValueError("bus protocol operation timeout must be a positive integer")
+        self._operation_timeout_ns = operation_timeout_ns
         self._motion_watchdog_ns = motion_watchdog_ns
         self._state_timeout_ns = state_timeout_ns
         self._motion_failure_limit = motion_failure_limit
@@ -701,11 +711,11 @@ class BusActor:
                 if now_ns >= next_fast_ns:
                     scheduled_fast_ns = next_fast_ns
                     self._execute_latest_motion(now_ns)
-                    # Motion and feedback are separate bus transactions. Give the read
-                    # its own cycle budget after the write completes; otherwise normal
-                    # USB/RS485 write jitter consumes the response deadline and can turn
-                    # continuous teleoperation into a false state-loss fault.
-                    fast_deadline_ns = self._clock_ns() + self._period_ns
+                    # The control period schedules when a read starts; it is not an I/O
+                    # timeout. A complete multi-device transaction gets the protocol's
+                    # bounded operation budget so host scheduling jitter cannot create an
+                    # already-expired serial deadline.
+                    fast_deadline_ns = self._clock_ns() + self._operation_timeout_ns
                     self._read_fast(fast_deadline_ns)
                     next_fast_ns = max(
                         scheduled_fast_ns + self._period_ns,

@@ -27,6 +27,10 @@ class FakeProtocol:
         self.fast_deadlines: list[int | None] = []
         self.slow_deadlines: list[int | None] = []
 
+    @property
+    def operation_timeout_ns(self) -> int:
+        return 50_000_000
+
     def connect(self) -> None:
         self.connected = True
 
@@ -286,7 +290,7 @@ def test_stale_generation_is_rejected_before_mailbox_update():
         actor.disconnect()
 
 
-def test_fast_state_read_retries_once_with_the_same_cycle_deadline():
+def test_fast_state_read_retries_once_with_the_same_operation_deadline():
     class RetryProtocol(FakeProtocol):
         def read_fast_state(self, *, deadline_ns=None):
             self.fast_deadlines.append(deadline_ns)
@@ -393,8 +397,37 @@ def test_fast_read_gets_a_full_period_after_a_slow_motion_write():
         assert protocol.read_after_motion.wait(0.5)
 
         assert protocol.read_budget_after_motion_ns is not None
-        assert protocol.read_budget_after_motion_ns > 5_000_000
+        assert protocol.read_budget_after_motion_ns > 40_000_000
         assert actor.connected
+    finally:
+        actor.disconnect()
+
+
+def test_transient_scheduler_stall_does_not_latch_state_loss_fault():
+    class StalledReadProtocol(FakeProtocol):
+        def read_fast_state(self, *, deadline_ns=None):
+            self.fast_deadlines.append(deadline_ns)
+            self.sequence += 1
+            if self.sequence == 2:
+                # Reproduce a host scheduling pause that is longer than a 100 Hz cycle.
+                time.sleep(0.06)
+                raise RecoverableBusError("host resumed after the read deadline")
+            return {"sequence": self.sequence}
+
+    protocol = StalledReadProtocol()
+    actor = BusActor(
+        protocol,
+        cycle_hz=100.0,
+        state_timeout_ns=250_000_000,
+    )
+    actor.connect()
+    try:
+        _wait_until(lambda: protocol.sequence >= 3)
+
+        assert actor.connected
+        assert actor.get_snapshot()["sequence"] >= 3
+        assert actor.diagnostics().recoverable_error_count == 1
+        assert ("hold", None) not in protocol.safety
     finally:
         actor.disconnect()
 

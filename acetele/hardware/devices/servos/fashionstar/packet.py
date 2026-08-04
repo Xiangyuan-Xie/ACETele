@@ -89,6 +89,12 @@ class FashionStarBusProtocol:
         self._last_states: dict[int, FashionStarMonitorState] = {}
 
     @property
+    def operation_timeout_ns(self) -> int:
+        """Return the deadline budget for one complete packet transaction."""
+
+        return self._operation_timeout_ns
+
+    @property
     def synchronized(self) -> bool:
         """Return whether every device passed firmware and sync-monitor probing."""
 

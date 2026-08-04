@@ -153,10 +153,6 @@ class RobotRuntime:
                         len(group.joint_names),
                         tuning,
                     )
-        self._state_timeout_ns = {
-            name: max(50_000_000, round(2.5e9 / bus.spec.cycle_hz))
-            for name, bus in self.preflight.buses.items()
-        }
 
     @property
     def connected(self) -> bool:
@@ -263,7 +259,13 @@ class RobotRuntime:
                     protocol,
                     cycle_hz=bus.cycle_hz,
                     motion_watchdog_ns=self._command_timeout_ns,
-                    state_timeout_ns=self._state_timeout_ns[bus.name],
+                    # A protocol transaction may legitimately span several scheduling
+                    # periods. Confirm persistent loss across five full I/O budgets (and
+                    # at least six nominal cycles) before latching an unrecoverable fault.
+                    state_timeout_ns=max(
+                        5 * protocol.operation_timeout_ns,
+                        round(6e9 / bus.cycle_hz),
+                    ),
                 )
                 actor.connect()
                 actors[bus.name] = actor

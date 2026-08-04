@@ -88,6 +88,12 @@ class MockBusProtocol:
         self._effort_mode_ids: set[int] = set()
         self._efforts = {device_id: 0.0 for device_id in devices}
 
+    @property
+    def operation_timeout_ns(self) -> int:
+        """Return a bounded transaction budget matching physical protocol defaults."""
+
+        return 50_000_000
+
     def connect(self) -> None:
         """Reset the in-memory bus to a connected, disabled state."""
 
