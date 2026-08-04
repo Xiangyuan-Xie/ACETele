@@ -12,7 +12,7 @@
 <h1 align="center">ACETele</h1>
 
 <p align="center">
-  From teleoperation to autonomous robots.
+  Let intent cross distance and become motion.
   <br />
   <a href="README.md">简体中文</a>
 </p>
@@ -22,482 +22,197 @@
 <details>
   <summary>Table of Contents</summary>
   <ol>
-    <li>
-      <a href="#project-introduction">Project Introduction</a>
-      <ul>
-        <li><a href="#tech-stack">Tech Stack</a></li>
-      </ul>
-    </li>
-    <li>
-      <a href="#getting-started">Getting Started</a>
-      <ul>
-        <li><a href="#prerequisites">Prerequisites</a></li>
-        <li><a href="#installation">Installation</a></li>
-        <li><a href="#hardware-check">Hardware Check</a></li>
-      </ul>
-    </li>
-    <li>
-      <a href="#usage">Usage</a>
-      <ul>
-        <li><a href="#python-api">Python API</a></li>
-        <li><a href="#configuration-system">Configuration System</a></li>
-        <li><a href="#ros-2-deployment">ROS 2 Deployment</a></li>
-        <li><a href="#zeromq-deployment">ZeroMQ Deployment</a></li>
-      </ul>
-    </li>
-    <li><a href="#contributing">Contributing</a></li>
+    <li><a href="#overview">Overview</a></li>
+    <li><a href="#installation">Installation</a></li>
+    <li><a href="#recommended-entry-point">Recommended Entry Point</a></li>
+    <li><a href="#hardware-setup-and-calibration">Hardware Setup And Calibration</a></li>
+    <li><a href="#teleoperation">Teleoperation</a></li>
+    <li><a href="#zeromq-and-px4">ZeroMQ And PX4</a></li>
+    <li><a href="#custom-configuration">Custom Configuration</a></li>
+    <li><a href="#python-api">Python API</a></li>
+    <li><a href="#development-checks">Development Checks</a></li>
     <li><a href="#license">License</a></li>
     <li><a href="#contact">Contact</a></li>
     <li><a href="#acknowledgments">Acknowledgments</a></li>
   </ol>
 </details>
 
-## Project Introduction
+## Overview
 
-ACETele is a Python engineering framework for robot teleoperation and data collection. Parallel ROS 2
-and ZeroMQ adapters provide one workflow from local validation to real-hardware deployment.
+ACETele brings robot specifications, kinematics, control, safety state, and hardware buses under one `RobotRuntime`. Supported devices include FEETECH HLS TTL, FEETECH SMS/SM RS485, FEETECH Modbus-RTU, FashionStar RS485, and Linker Hand RS485.
 
-```text
-ACETele/
-├── acetele/
-│   ├── core/         Vendor-neutral state and command contracts
-│   ├── specification/ Static bus, control, and robot specifications
-│   ├── config/       TOML loading, presets, and resource catalog
-│   ├── model/        URDF assets and Pinocchio models
-│   ├── control/      Thread-free position and Cartesian algorithms
-│   ├── estimation/   Robust joint-state estimation
-│   ├── hardware/     Buses, device adapters, inputs, and simulators
-│   ├── runtime/      Preflight, lifecycle, safety, and teleop sessions
-│   └── tools/        Checks, calibration, and the unified TUI
-├── ros2/             First-party ROS 2 packages
-├── zeromq/           Direct-TCP adapter and its native PX4 XRCE component
-├── third_party/      PX4, RealSense, and pinned XRCE submodules
-├── tests/
-├── pyproject.toml
-├── setup.py
-├── LICENSE
-└── README.md
-```
+> [!WARNING]
+> Real hardware requires an independent emergency stop. Software timeouts, torque
+> disable commands, and bus diagnostics do not replace a power-disconnect circuit.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
-### Tech Stack
+## Installation
 
-- [Python 3](https://docs.python.org/3/)
-- [ROS2 Humble](https://docs.ros.org/en/humble/)
-- [Pinocchio](https://stack-of-tasks.github.io/pinocchio/)
-- [ZeroMQ](https://zeromq.org/) (optional teleoperation transport)
-
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
-
-## Getting Started
-
-### Prerequisites
-
-- [Python 3.10 or newer](https://www.python.org/downloads/)
-- [ROS2 Humble](https://docs.ros.org/en/humble/Installation.html) (optional)
-
-### Installation
-
-The commands below use Ubuntu/Linux as the example environment. Windows and macOS users can reuse
-the Python virtual environment steps, but ROS2, serial-port permissions, and hardware drivers need
-platform-specific setup.
-
-1. Install base tools:
+Python 3.10 or newer is required. ROS 2 Humble is required only for the ROS 2 adapter.
 
 ```bash
-sudo apt update
-sudo apt install -y git python3 python3-venv python3-pip
-python3 --version
-```
-
-Confirm that Python is 3.10 or newer.
-
-2. Choose HTTPS or SSH to clone the repository and initialize submodules:
-
-```bash
-# HTTPS
 git clone --recursive https://github.com/Xiangyuan-Xie/ACETele.git
-
-# SSH
-git clone --recursive git@github.com:Xiangyuan-Xie/ACETele.git
-
 cd ACETele
-git submodule update --init --recursive
-```
 
-Run only one of the two `git clone` commands. Relative submodule URLs automatically follow the
-HTTPS or SSH transport selected for the parent repository.
-
-If the repository has already been cloned, run this from the project root to fill in or update
-submodules:
-
-```bash
-git submodule update --init --recursive
-```
-
-3. Create an isolated Python environment and install the project:
-
-```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install --upgrade pip setuptools wheel
+python -m pip install --upgrade pip
 python -m pip install -e .
 ```
 
-After opening a new terminal inside the project, run `source .venv/bin/activate` first.
+For SSH, replace the clone URL with:
 
-Install the independent adapter as well for two-host ZeroMQ teleoperation without ROS 2:
+```text
+git@github.com:Xiangyuan-Xie/ACETele.git
+```
+
+Submodules use relative URLs and follow the HTTPS or SSH transport of the parent clone.
+
+### Optional ZeroMQ Components
 
 ```bash
 python -m pip install -e apps/ace_operator_ui
-# Follower image transport
+python -m pip install -e zeromq/ace_robot_zmq
+
+# Dual-RealSense image transport on the Follower
 python -m pip install -e "zeromq/ace_robot_zmq[camera]"
-# Leader visualization
+
+# Image viewer on the Leader
 python -m pip install -e "zeromq/ace_robot_zmq[visualization]"
 ```
 
-On platforms such as Jetson where `pyrealsense2` is not available from PyPI, install the matching
-Intel librealsense Python binding separately. The ZMQ package checks this before opening cameras.
+### ROS 2 Workspace
 
-4. Install development tools:
-
-```bash
-python -m pip install pytest pre-commit
-pre-commit install
-```
-
-5. If real servos will be connected, confirm that the current user has serial-port permissions:
-
-```bash
-sudo usermod -aG dialout "$USER"
-```
-
-This usually requires logging out and back in. Before connecting hardware, re-check the serial port,
-servo IDs, mechanical limits, power supply, and emergency stop.
-
-6. To build ROS2 packages, install and source ROS2 Humble first, then prepare a workspace:
+Run `sudo rosdep init` once before using `rosdep` for the first time.
 
 ```bash
 source /opt/ros/humble/setup.bash
 sudo apt install -y python3-colcon-common-extensions python3-rosdep
-
-# If rosdep has not been initialized on this machine, run sudo rosdep init first.
-# If it reports that rosdep already exists, skip that step.
 rosdep update
-
 rosdep install --from-paths ros2 third_party/px4_msgs \
   third_party/realsense_ros --ignore-src -r -y
+
 colcon build --symlink-install \
   --base-paths ros2 third_party/px4_msgs third_party/realsense_ros
 source install/setup.bash
 ```
 
-### Hardware Check
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
-The project ships physical HLS TTL configurations for both Leader and Follower, and the generic ROS 2
-launch defaults to the Leader spec. Before first use, verify ports, servo IDs, models, and mechanical
-state, then run hardware-free static preflight through the unified TUI:
+## Recommended Entry Point
 
 ```bash
 python -m acetele.tools.tui
 ```
 
-Packaged specs are checked before the main menu opens, and custom specs are checked when selected.
-Passing preflight confirms configuration, URDF, capability, and bus-budget consistency only; it is
-not a physical safety qualification. Without hardware, set `basic.backend` to `mock` in your own
-configuration or run the test suite.
+The TUI runs hardware-free preflight first, then executes the confirmed action:
 
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
-
-## Usage
-
-### Python API
-
-`RobotRuntime` is the only Python robot entry point. Construction performs static preflight only;
-`connect()` creates serial ports and Actor threads, and `disconnect()` performs bounded cleanup.
-
-```python
-from acetele.config import load_robot_spec
-from acetele.runtime import RobotRuntime
-
-spec = load_robot_spec("acetele/config/presets/ace_follower/feetech_sms_rs485.toml")
-runtime = RobotRuntime(spec)
-runtime.connect()
-try:
-    state = runtime.read()
-    print(state.joints["single"].positions)
-finally:
-    runtime.disconnect()
-```
-
-`RobotState` stores immutable `JointState` values by assembly name. Physical servo positions and
-velocities pass through the low-latency estimator with NIS and physical innovation gates.
-`runtime.diagnostics()` exposes bus cycles, state age, command replacement, and estimator data
-without exposing vendor registers or bus IDs to control code.
-
-#### Multi-vendor RS485 Runtime
-
-The new hardware runtime uses one Actor per physical port. It keeps the strict safety FIFO, latest
-motion mailbox, periodic state reads, and slow telemetry under one serial owner. Protocol-level
-adapters currently cover:
-
-- FEETECH HLS packet TTL;
-- FEETECH SMS/SM packet RS485;
-- FEETECH Modbus-RTU RS485;
-- FashionStar UART/RS485 packet;
-- Generic Linker Hand RS485, with current profiles for O6, L6, L7, and L10 rather than one model-specific adapter.
-
-New configurations explicitly declare buses, joints, and model profiles. The unified TUI validates
-URDF mappings, profiles, firmware capabilities, and bus utilization without opening a serial port,
-then displays the result while selecting a spec.
-
-Each `port` may define only one bus. Arms and end effectors on the same serial port must share that
-bus so the port always has exactly one Actor owner. Unknown TOML fields fail validation instead of
-silently falling back to defaults.
-
-The ROS 2 entry point accepts only the `buses + joints` schema and uses composed Leader/Follower
-nodes that own a `RobotRuntime`. Without `config_path`, it starts the HLS TTL Leader spec:
-
-```bash
-ros2 launch ace_robot_ros2 ace_robot.launch.py \
-  config_path:="$PWD/acetele/config/presets/ace_follower/feetech_sms_rs485.toml"
-```
-
-The HLS TTL configurations are `ace_leader/feetech_hls_ttl.toml` and
-`ace_follower/feetech_hls_ttl.toml`. The generic launch defaults to the Leader configuration;
-Follower and other hardware assemblies must be selected explicitly through `config_path`.
-
-After receiving a complete state sample, the Follower always seeds the measured positions as goals,
-enables torque, and enters `HOLD`, so it can hold position without a Leader online. This safety
-policy has no runtime bypass; automatic holding still does not replace an independent hardware
-emergency stop.
-
-During synchronization, the parallel gripper remains torque-free and acts as the safety trigger.
-Healthy Follower feedback automatically powers the Leader arm and starts alignment. Once aligned,
-release the gripper below normalized position `0.25` and close it beyond `0.75` to enter
-`TRACKING`. The built-in HLS Leader then switches from Position mode to Torque mode and continuously
-applies RNEA gravity/Coriolis compensation from measured joint state. The configured rest posture is
-projected only into the null space of the complete `6xN` TCP Jacobian. The current 4-DOF Leader has
-full column rank, so this posture term is exactly zero and cannot pull the arm toward Home. Tracking
-loss enters `HOLD`, stops remote commands, and retains local gravity assistance. One complete gesture
-authorizes a fresh synchronization cycle after recovery. Trigger state is never reused across
-cycles. Explicit STOP, model failure, or stale local state sends zero current before disabling torque
-and leaving Torque mode.
-Leaders without a parallel gripper never power alignment or start tracking automatically. They
-require explicit calls to the `/ace_leader/authorize_alignment` and
-`/ace_leader/start_tracking` `std_srvs/Trigger` services. Explicit emergency-stop services are
-`/ace_leader/emergency_stop` and `/ace_follower/emergency_stop`.
-
-High-rate arm/gripper command and state topics use finite-lifespan
-`BEST_EFFORT + KEEP_LAST(1)`, while sync topics use `RELIABLE + KEEP_LAST(1)`. Valid commands enter
-the latest-value mailbox in the subscription callback without waiting for another control timer.
-Parallel grippers retain
-`/ace_leader/gripper/command` and `/ace_follower/gripper/state`; dexterous hands use the separate
-`/ace_leader/end_effector/command` and `/ace_follower/end_effector/state` topics and are not treated
-as the gripper synchronization trigger.
-
-Each bus actor enforces its own command watchdog: an expired valid-motion heartbeat clears the old
-generation and enters `HOLD`; consecutive motion-write failures or sustained fast-state loss clear
-pending motion, attempt to hold the latest successfully commanded pose, and latch a bus fault.
-Communication and state-trust failures retain that holding target. Explicit device alarms such as
-thermal or overload faults request the strongest protocol-supported disable action; devices without
-software disable explicitly require the external emergency stop. Explicit `STOP` always requests
-the strongest stop action.
-The bus diagnostic fields
-`p95_motion_end_to_end_s` and `p99_motion_end_to_end_s` measure from command reception until the
-protocol write returns successfully, unlike the Runtime-stage metric that only confirms mailbox
-admission. The actor still shares the main process lifetime and cannot cover forced process
-termination, host power loss, or kernel failure, so a physical emergency stop remains mandatory in
-production.
-
-FashionStar and Linker Hand currently have official-frame and test-double verification. Production
-use still requires model-specific hardware identity, disconnect HOLD, emergency-stop, and sustained
-load tests. FEETECH packet, FashionStar, and Linker Hand paths cannot verify torque disable per
-device, so their physical configurations must set `external_estop = true` and actually provide an
-independent hardware emergency stop. This field declares a safety prerequisite; it does not replace
-the hardware circuit.
-
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
-
-### Configuration System
-
-The multi-vendor RS485 runtime uses the `buses + joints` schema. `joint.name` is the URDF/ROS 2
-kinematic name, while `servo_id` is only a bus address; neither is derived from the other. Example:
-
-```toml
-[basic]
-model = "ace_follower"
-backend = "physical"
-urdf_path = "../model/robots/ace_follower/description/ace_follower.urdf"
-
-[buses.arm]
-type = "feetech_packet"
-port = "/dev/ttyUSB0"
-baudrate = 1000000
-cycle_hz = 100
-physical_layer = "rs485"
-family = "sms"
-external_estop = true
-
-[arms.single]
-bus = "arm"
-tool_frame = "link_5"
-
-[[arms.single.joints]]
-name = "joint_1"
-servo_id = 1
-servo_model = "SM8512BL"
-direction = 1
-home_position_rad = 0.0
-```
-
-Before startup, the runtime estimates line speed, frame length, responses, and turnaround intervals
-for the worst case. It refuses utilization above 70%. HLS profiles do not have trustworthy public
-model-register mappings, so configurations must select an exact model profile. The reported register
-is read and recorded at connection time, but it is not compared with a guessed value. Add the
-optional `expected_model_number` when a trustworthy value is available to enable strict identity
-verification. A physical bus whose protocol cannot expose model identity must also set
-`allow_unverified_identity = true`; preflight continues to report `verified_identity=false`. This is
-an explicit acknowledgement of the protocol limitation, not software verification of the model.
-FashionStar firmware is read separately and strictly compared with `firmware_version`.
-Known HLS profiles estimate output torque using model-specific KT and no-load current values.
-RS485 models without official parameters do not inherit constants from a similar model.
-
-Key fields:
-
-| Field | Purpose |
+| Workflow | Purpose |
 | --- | --- |
-| `basic.model` | Robot model and packaged URDF name |
-| `basic.backend` | `physical` or `mock` |
-| `basic.urdf_path` | Optional explicit URDF path; packaged model fallback when omitted |
-| `buses.<name>.type` | Vendor protocol and physical bus type |
-| `buses.<name>.port` | Serial port owned by one Actor |
-| `buses.<name>.cycle_hz` | Target bus cycle rate |
-| `buses.<name>.external_estop` | Declares a real independent hardware stop; required for physical buses without verified disable |
-| `buses.<name>.allow_unverified_identity` | Explicitly accepts a protocol without readable product identity after manual hardware verification |
-| `arms.<name>.bus` | Bus used by the arm |
-| `arms.<name>.tool_frame` | URDF TCP link used by Cartesian control; required by `ee_pose` mode |
-| `arms.<name>.control.gravity_compensation` | Send RNEA gravity/Coriolis torque in Torque mode |
-| `arms.<name>.control.redundancy_posture` | Apply rest-posture PD in the full 6D TCP Jacobian null space |
-| `arms.<name>.control.rest_posture_rad` | Explicit rest posture, independent of mechanical Home calibration |
-| `arms.<name>.joints` | Joints declared in URDF order |
-| `joint.name` | URDF/ROS 2 kinematic name |
-| `joint.servo_id` | Vendor bus address |
-| `joint.servo_model` | Model requiring an official profile |
-| `joint.direction` | Joint direction, restricted to `-1` or `1` |
-| `joint.home_position_rad` | Joint angle written when the servo is at its mechanical home pose |
-| `joint.expected_model_number` | Optional uint16 model register value for strict connection-time verification |
-| `joint.firmware_version` | Expected FashionStar firmware version, read and checked at connection time |
+| `Launch ROS 2 Robot` | Start a ROS 2 Leader or Follower |
+| `Launch ZMQ Robot` | Start direct peer-to-peer ZeroMQ teleoperation |
+| `Calibrate FEETECH Home` | Write the complete FEETECH Home offsets |
 
-`mock` and `physical` use the same typed schema. Unknown fields, duplicate ports, unsupported models,
-incorrect joint order, invalid limits, or bus utilization above 70% fail before hardware is opened.
-After placing every FEETECH packet joint at its mechanical home pose and confirming that the robot
-can remain still safely, open the unified terminal tool:
+Packaged specifications are under `acetele/config/presets/`:
 
-```bash
-python -m acetele.tools.tui
-```
-
-Select `Calibrate FEETECH Home` to review every servo ID, mechanical Home, direction, and raw Home
-target. Calibration starts only after reviewing the complete write plan and pressing Enter.
-The workflow accepts only physical FEETECH packet specs and never permits an arm or gripper joint to
-be omitted individually.
-
-The TUI uses the same immutable spec shown on the confirmation page for full preflight and execution,
-and writes nonvolatile offsets only while the runtime is `SAFE_DISABLED`. It does not apply this
-procedure to FashionStar, FEETECH Modbus, or Linker Hand devices.
+| Specification | Hardware |
+| --- | --- |
+| `ace_leader/feetech_hls_ttl.toml` | HLS TTL Leader |
+| `ace_follower/feetech_hls_ttl.toml` | HLS TTL Follower |
+| `ace_follower/feetech_sms_rs485.toml` | SMS/SM RS485 Follower |
+| `ace_follower/fashionstar_rs485.toml` | FashionStar RS485 Follower |
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
-### ROS 2 Deployment
+## Hardware Setup And Calibration
 
-First-party ROS 2 packages live in `ros2/`; external dependencies live in `third_party/`:
+1. Verify power, emergency stop, serial port, servo IDs, models, directions, and
+   mechanical limits.
+2. Add the current user to the serial-port group, then log in again:
 
-| Package | Purpose |
+   ```bash
+   sudo usermod -aG dialout "$USER"
+   ```
+
+3. Move every joint to the mechanical Home pose declared by the RobotSpec.
+4. Open the TUI, choose `Calibrate FEETECH Home`, inspect the complete write plan,
+   and confirm it.
+
+Calibration writes nonvolatile offsets for every FEETECH arm and end-effector joint.
+It does not apply to FashionStar, FEETECH Modbus, or Linker Hand devices.
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+## Teleoperation
+
+Open the TUI on both Leader and Follower hosts. Select the corresponding RobotSpec and
+the same teleoperation mode on both sides.
+
+Startup sequence:
+
+1. The Follower reads its current position, powers the arm, and enters hold.
+2. The Leader automatically aligns after receiving healthy Follower state.
+3. After alignment, release the Leader gripper below `0.25`, then close it above `0.75`.
+4. The session enters `TRACKING`, and the Leader arm switches to local effort assistance.
+
+Brief network jitter replaces old targets with the latest one. A sustained disconnect
+stops remote commands and enters `HOLD`; reconnection requires synchronization again.
+Follower holding, Leader gravity assistance, and communication timeouts do not replace
+the hardware emergency stop.
+
+### Teleoperation Modes
+
+| Mode | Behavior |
 | --- | --- |
-| `ace_robot_ros2` | Starts a leader or follower robot node according to `config_path` |
-| `data_collector_ros2` | Triggers rosbag data recording according to remote-control channel status |
-| `visualization_ros2` | Displays RGB-D images, joint states, and topic runtime status |
-| `third_party/px4_msgs` | PX4 message definition submodule |
-| `third_party/realsense_ros` | RealSense camera ROS 2 driver submodule |
+| `joint` | Default direct joint-position mapping |
+| `ee_pose` | Leader FK, relative pose mapping, and Follower IK |
 
-Build example:
+`ee_pose` uses a default translation scale of `2.0` and rotation scale of `1.0`.
+The current 4-DOF arm can only follow the reachable projection of a full SE(3) target;
+position takes priority over unreachable orientation.
 
-```bash
-colcon build --symlink-install \
-  --base-paths ros2 third_party/px4_msgs third_party/realsense_ros
-source install/setup.bash
-```
+### Manual ROS 2 Launch
 
-Common launch commands:
+The TUI is preferred. For scripted deployment, invoke the launch file directly:
 
 ```bash
-python -m acetele.tools.tui
-```
-
-Select `Launch ROS 2 Robot` to choose a packaged or custom RobotSpec, joint/pose mode, and Cartesian
-scales. After confirmation with Enter, the TUI leaves curses and directly starts the preflighted
-`ros2 launch` process. Terminal output, signals, and the process exit status are preserved. Recent
-launch and calibration selections are stored in the XDG state directory.
-
-The commands can also be entered directly:
-
-```bash
-ros2 launch ace_robot_ros2 ace_robot.launch.py \
-  config_path:="$PWD/acetele/config/presets/ace_follower/feetech_hls_ttl.toml"
-ros2 launch data_collector_ros2 data_collector.launch.py
-ros2 launch visualization_ros2 visualization.launch.py
-```
-
-The default `teleop_mode:=joint` preserves joint-space teleoperation. Start both Leader and Follower
-with the same mode to use end-effector pose teleoperation:
-
-```bash
+# Follower
 ros2 launch ace_robot_ros2 ace_robot.launch.py \
   config_path:="$PWD/acetele/config/presets/ace_follower/feetech_hls_ttl.toml" \
-  teleop_mode:=ee_pose translation_scale:=2.0 rotation_scale:=1.0
+  teleop_mode:=joint
+
+# Leader
+ros2 launch ace_robot_ros2 ace_robot.launch.py \
+  config_path:="$PWD/acetele/config/presets/ace_leader/feetech_hls_ttl.toml" \
+  teleop_mode:=joint
 ```
 
-Synchronization remains joint-based. Once `TRACKING` begins, the first `PoseStamped` captures the
-Leader/Follower relative tool anchors without causing a command jump. Subsequent Leader translation
-is mapped by `2.0`, while rotation is mapped by `1.0`. A four-DOF arm cannot reproduce an arbitrary
-six-dimensional SE(3) pose, so inverse kinematics tracks reachable translation first and reduces
-orientation error in the remaining nullspace. URDF limits, command deadlines, synchronization
-heartbeats, and the bus safety state machine remain active.
+For pose control, add the same arguments on both hosts:
 
-The generic `/ace_teleop/arm/ee_pose/command` input uses `geometry_msgs/PoseStamped` with
-`BEST_EFFORT + KEEP_LAST(1)`. The Follower publishes its measured TCP pose on
-`/ace_follower/arm/ee_pose/state`. A future VR source only needs to become the sole active publisher
-of the command topic and provide a stable, non-empty reference frame; Follower mapping and IK do not
-change.
+```text
+teleop_mode:=ee_pose translation_scale:=2.0 rotation_scale:=1.0
+```
 
-Common topics:
+Explicit emergency-stop services:
 
-- `/ace_leader/arm/command`
-- `/ace_teleop/arm/ee_pose/command`
-- `/ace_follower/arm/state`
-- `/ace_follower/arm/ee_pose/state`
-- `/ace_leader/gripper/command`
-- `/ace_follower/gripper/state`
-- `/ace_leader/arm/sync_mode`
-- `/ace_follower/arm/sync_status`
-- `/fmu/in/arm_joint_state`
+```text
+/ace_leader/emergency_stop
+/ace_follower/emergency_stop
+```
+
+The Follower publishes 4 to 14 filtered measured arm positions and velocities to
+`/fmu/in/arm_joint_state`. Grippers and dexterous hands are excluded from this message.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
-### ZeroMQ Deployment
+## ZeroMQ And PX4
 
-`ace-robot-zmq` is an independent adapter parallel to ROS 2. It reuses the same `RobotRuntime`,
-synchronization state machine, inverse kinematics, command deadlines, and disconnect `HOLD`. It does
-not start ROS 2 or `rclpy`, but the ZMQ Follower always starts an isolated Micro XRCE-DDS Agent 2.4.2
-and native sidecar to publish measured arm state to PX4 `/fmu/in/arm_joint_state`. The teleoperation
-link uses two latest-value TCP streams: the Leader publishes commands on port `5555`, and the
-Follower publishes state on port `5556`.
-Sending `SIGUSR1` to a running ZMQ process requests explicit STOP; ordinary `SIGINT/SIGTERM` retains
-the bounded shutdown path.
+ZeroMQ uses Leader command port `5555` and Follower state port `5556`. The Follower
+also starts the pinned XRCE Agent and native sidecar, which publish `ArmJointState` to
+PX4 over UDP port `8888`.
 
-Build the pinned native stack before first use:
+Build the XRCE component before first use:
 
 ```bash
 git submodule update --init --recursive
@@ -506,183 +221,125 @@ cmake -S zeromq/ace_robot_zmq/xrce -B build/ace_robot_zmq-xrce \
 cmake --build build/ace_robot_zmq-xrce --parallel
 ```
 
-This build neither reads nor overwrites an Agent 3.x installation under `/usr/local`. Before opening
-robot serial ports, the Follower verifies the Agent, Client, and `ArmJointState` schema. A version
-mismatch, occupied UDP port `8888`, or entity-creation failure aborts startup.
-
-The TUI's `Launch ZMQ Robot` workflow starts control only. Image transport runs in separate processes,
-so a camera or UI failure cannot refresh or interrupt the robot heartbeat. List devices and publish
-two compressed RGB-D streams on the Follower, then display them on the Leader:
-
-```bash
-python -m ace_robot_zmq cameras
-python -m ace_robot_zmq camera \
-  --front-serial FRONT_REALSENSE_SERIAL \
-  --wrist-serial WRIST_REALSENSE_SERIAL
-
-# Leader host: replace FOLLOWER_IP with the Follower's wired-network address
-python -m ace_robot_zmq visualize --follower-host FOLLOWER_IP
-```
-
-The ZMQ Follower also holds its measured pose unconditionally after hardware connection and exposes
-no option that bypasses this startup safety policy.
-
-Control uses only ports `5555/5556`; image transport uses only `5562`. It sends JPEG color, Zstd
-depth, and camera calibration metadata. It does not store MCAP, publish joint telemetry, or subscribe
-to PX4 output. The existing XRCE `ArmJointState` publisher remains safety-critical and still forces
-Follower `HOLD` on failure.
-
-PX4 connects over Ethernet to the Agent on the Follower host:
+PX4 parameters:
 
 ```text
 UXRCE_DDS_CFG=Ethernet
-UXRCE_DDS_AG_IP=<Follower Ethernet IP>
+UXRCE_DDS_AG_IP=<Follower wired-network IP>
 UXRCE_DDS_PRT=8888
 UXRCE_DDS_DOM_ID=0
 ```
 
-Keep PX4's default `UXRCE_DDS_KEY=1`; the sidecar uses the distinct default `0xACED0001`. Both keys
-must remain nonzero and different. Firewalls must permit ZMQ TCP `5555/5556/5562` and PX4-to-Follower
-UDP `8888`. The Follower publishes only RobotSpec arm joints in
-assembly order: 4 to 14 filtered measured positions and velocities. Grippers and dexterous hands are
-excluded.
+Plaintext ZeroMQ is for trusted wired networks only. On untrusted networks, generate
+CURVE certificates with `ace-robot-zmq keygen` and configure each host with its local
+secret key and the peer public key in the TUI.
 
-Both sides must use the same `--teleop-mode joint|ee_pose`. The Follower applies
-`--translation-scale` and `--rotation-scale` in pose mode. Every process start creates a new session
-ID; disconnects, out-of-order frames, and peer restarts clear old commands and require synchronization
-again. Only a valid arm command refreshes the 500 ms remote-session lease, so malformed or forged
-frames cannot prevent `HOLD`. Within that lease, the Follower's local 100 Hz loop continuously submits
-the last valid target, allowing brief network jitter to settle without a servo-mode transition. The
-independent 100 ms bus watchdog monitors only whether that local control loop is still alive.
+### Optional Image Transport
 
-Plaintext mode is only for a trusted wired LAN. On an untrusted network, generate certificates on
-the two hosts and configure each side with its local secret key and the peer's public key:
+Image transport is isolated from control. A camera or UI failure does not refresh the
+robot heartbeat.
 
 ```bash
-ace-robot-zmq keygen --output keys --name leader
-ace-robot-zmq keygen --output keys --name follower
+# Follower
+python -m ace_robot_zmq cameras
+python -m ace_robot_zmq camera \
+  --front-serial FRONT_SERIAL --wrist-serial WRIST_SERIAL
 
-# Leader arguments
---curve-secret-key keys/leader.key_secret --curve-peer-key keys/follower.key
-
-# Follower arguments
---curve-secret-key keys/follower.key_secret --curve-peer-key keys/leader.key
+# Leader
+python -m ace_robot_zmq visualize --follower-host FOLLOWER_IP
 ```
 
-CURVE encrypts the connection and admits only the configured peer public key. Secret-key permissions
-must deny group and other access. VR and other pose producers can use
-`ace_robot_zmq.PoseLeaderClient` to publish the latest `EndEffectorPose`. The caller owns the sampling
-loop and stable reference frame; the client owns session, sequence, and synchronization handshakes,
-while the Follower keeps the same relative anchors, IK, and hardware safety path.
-
-If the Agent, sidecar, IPC acknowledgement, or DDS session fails at runtime, the Follower clears old
-commands, enters `HOLD`, and exits nonzero. XRCE write success confirms only the local publication
-path; it does not replace PX4 application-level health monitoring.
+Image transport uses TCP `5562` for JPEG color, Zstd depth, and camera calibration.
+It does not record data.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
-## Contributing
+## Custom Configuration
 
-Issues, feature suggestions, and pull requests are welcome. To make maintenance and code review
-easier, each contribution should focus on one clearly bounded change, such as hardware drivers, robot
-wrappers, ROS 2 nodes, data collection workflows, configuration files, test fixes, or documentation
-updates. Please avoid mixing multiple unrelated changes in the same branch or PR.
+RobotSpec TOML files describe buses, arms, and joints. Joint names belong to URDF and
+control; `servo_id` is only a bus address and is never used to infer kinematics.
 
-### Branches And Commits
+```toml
+[basic]
+model = "ace_follower"
+backend = "physical"
 
-Create a feature branch from the latest main branch:
+[buses.arm]
+type = "feetech_packet"
+port = "/dev/ttyUSB0"
+baudrate = 1000000
+cycle_hz = 100
+physical_layer = "ttl"
+family = "hls"
+external_estop = true
+allow_unverified_identity = true # Only after manually verifying the servo model
 
-```bash
-git checkout main
-git pull
-git checkout -b feat/your-feature-name
+[arms.single]
+bus = "arm"
+tool_frame = "link_5"
+
+[[arms.single.joints]]
+name = "joint_1"
+servo_id = 0
+servo_model = "HL3915"
+direction = 1
+home_position_rad = 0.0
 ```
 
-Use concise and clear commit messages, for example:
+The example expands one joint only. A real specification must list the complete arm in
+URDF order. Start by copying the closest packaged preset instead of an empty file.
 
-```text
-feat(robot): add follower ros2 backend
-fix(gripper): correct home pose calibration
-docs: update teleoperation guide
-test: add mock robot tests
+Before opening a serial port, preflight validates TOML fields, URDF mappings, model
+profiles, joint limits, and bus utilization.
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+## Python API
+
+```python
+from acetele.config import load_robot_spec
+from acetele.runtime import RobotRuntime
+
+runtime = RobotRuntime(load_robot_spec("robot.toml"))
+runtime.connect()
+try:
+    state = runtime.read()
+    print(state.joints)
+finally:
+    runtime.disconnect()
 ```
 
-### Local Checks
+Constructing `RobotRuntime` performs static preflight only. `connect()` opens serial
+ports and starts bus actors.
 
-Before submitting a PR, run at least the following checks:
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+## Development Checks
 
 ```bash
 python -m pytest
+python -m compileall acetele
 pre-commit run --all-files
 ```
 
-If the change touches ROS 2 packages, launch files, or message interfaces, also build and test the
-workspace:
-
-```bash
-colcon build --symlink-install
-colcon test
-```
-
-If the change depends on real hardware, such as FEETECH servos, grippers, joysticks, RealSense, PX4,
-or external odometry, please provide the corresponding verification notes. If it cannot be reproduced
-without hardware, describe which mocks, logs, or minimal examples were used for validation.
-
-### Submodule Changes
-
-If you need to modify `third_party/px4_msgs/`, `third_party/realsense_ros/`, or another submodule, make and commit the change
-inside the corresponding submodule first:
-
-```bash
-cd third_party/px4_msgs
-git checkout -b feat/your-change
-git add .
-git commit -m "feat: your change"
-```
-
-Then return to the ACETele parent repository and update and commit the corresponding gitlink:
-
-```bash
-cd ..
-git add third_party/px4_msgs
-git commit -m "chore: update px4_msgs submodule"
-```
-
-Do not commit only the uncommitted working-tree state of a submodule from the parent repository;
-otherwise other users cannot reproduce the change.
-
-### Pull Request
-
-When submitting a PR, briefly describe:
-
-* The purpose and background of the change;
-* The main files, packages, or modules touched;
-* The test, build, or verification commands that were run;
-* Whether it depends on real hardware, external ROS 2 packages, or specific configuration;
-* Whether it changes submodules, topic interfaces, or data formats.
-
-This helps maintainers understand, reproduce, and merge your contribution more quickly.
+For ROS 2 changes, also run `colcon build` and `colcon test`. Real-hardware changes
+should report the hardware model, configuration, test duration, and emergency-stop test.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 ## License
 
-This project uses the Apache 2.0 open-source license. See [LICENCE](LICENSE) for details. Submodules
-and third-party components used by the project follow the licenses declared in their own repositories.
-
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
+ACETele is licensed under the [Apache License 2.0](LICENSE). Third-party submodules
+retain their own licenses.
 
 ## Contact
 
-Project maintainer: Xiangyuan Xie
-
-Project link: <https://github.com/Xiangyuan-Xie/ACETele>
-
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
+- Maintainer: Xiangyuan Xie
+- Repository: <https://github.com/Xiangyuan-Xie/ACETele>
 
 ## Acknowledgments
 
-- [ROS2 Humble](https://docs.ros.org/)
+- [ROS 2](https://docs.ros.org/)
 - [Pinocchio](https://stack-of-tasks.github.io/pinocchio/)
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
