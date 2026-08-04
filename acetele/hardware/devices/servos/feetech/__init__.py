@@ -12,6 +12,7 @@ from acetele.hardware.devices.servos.feetech.modbus import (
 )
 from acetele.hardware.devices.servos.feetech.packet import (
     FeetechPacketBusProtocol,
+    FeetechPacketEffort,
     FeetechPacketFastState,
     FeetechPacketMotion,
     FeetechPacketSlowState,
@@ -38,6 +39,7 @@ __all__ = [
     "FeetechPacketBusProtocol",
     "FeetechPacketCodec",
     "FeetechPacketError",
+    "FeetechPacketEffort",
     "FeetechPacketFamily",
     "FeetechPacketFastState",
     "FeetechPacketMotion",

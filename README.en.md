@@ -276,9 +276,14 @@ emergency stop.
 During synchronization, the parallel gripper remains torque-free and acts as the safety trigger.
 Healthy Follower feedback automatically powers the Leader arm and starts alignment. Once aligned,
 release the gripper below normalized position `0.25` and close it beyond `0.75` to enter
-`TRACKING`; Leader arm torque is then released immediately. Tracking loss or an automatic control
-error enters `HOLD` without automatically relocking the Leader. One complete gesture authorizes a
-fresh synchronization cycle after recovery. Trigger state is never reused across cycles.
+`TRACKING`. The built-in HLS Leader then switches from Position mode to Torque mode and continuously
+applies RNEA gravity/Coriolis compensation from measured joint state. The configured rest posture is
+projected only into the null space of the complete `6xN` TCP Jacobian. The current 4-DOF Leader has
+full column rank, so this posture term is exactly zero and cannot pull the arm toward Home. Tracking
+loss enters `HOLD`, stops remote commands, and retains local gravity assistance. One complete gesture
+authorizes a fresh synchronization cycle after recovery. Trigger state is never reused across
+cycles. Explicit STOP, model failure, or stale local state sends zero current before disabling torque
+and leaving Torque mode.
 Leaders without a parallel gripper never power alignment or start tracking automatically. They
 require explicit calls to the `/ace_leader/authorize_alignment` and
 `/ace_leader/start_tracking` `std_srvs/Trigger` services. Explicit emergency-stop services are
@@ -373,6 +378,9 @@ Key fields:
 | `buses.<name>.allow_unverified_identity` | Explicitly accepts a protocol without readable product identity after manual hardware verification |
 | `arms.<name>.bus` | Bus used by the arm |
 | `arms.<name>.tool_frame` | URDF TCP link used by Cartesian control; required by `ee_pose` mode |
+| `arms.<name>.control.gravity_compensation` | Send RNEA gravity/Coriolis torque in Torque mode |
+| `arms.<name>.control.redundancy_posture` | Apply rest-posture PD in the full 6D TCP Jacobian null space |
+| `arms.<name>.control.rest_posture_rad` | Explicit rest posture, independent of mechanical Home calibration |
 | `arms.<name>.joints` | Joints declared in URDF order |
 | `joint.name` | URDF/ROS 2 kinematic name |
 | `joint.servo_id` | Vendor bus address |
@@ -542,8 +550,10 @@ excluded.
 Both sides must use the same `--teleop-mode joint|ee_pose`. The Follower applies
 `--translation-scale` and `--rotation-scale` in pose mode. Every process start creates a new session
 ID; disconnects, out-of-order frames, and peer restarts clear old commands and require synchronization
-again. Only a valid arm command refreshes the local 100 ms heartbeat, so malformed or forged frames
-cannot prevent `HOLD`.
+again. Only a valid arm command refreshes the 500 ms remote-session lease, so malformed or forged
+frames cannot prevent `HOLD`. Within that lease, the Follower's local 100 Hz loop continuously submits
+the last valid target, allowing brief network jitter to settle without a servo-mode transition. The
+independent 100 ms bus watchdog monitors only whether that local control loop is still alive.
 
 Plaintext mode is only for a trusted wired LAN. On an untrusted network, generate certificates on
 the two hosts and configure each side with its local secret key and the peer's public key:

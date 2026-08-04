@@ -7,7 +7,15 @@ from typing import Optional, Sequence
 
 import numpy as np
 
-from acetele.core import EndEffectorPose, JointCommand, RobotCommand, RobotState
+from acetele.control import EffortControlDiagnostics, LeaderEffortController
+from acetele.core import (
+    EndEffectorPose,
+    JointCommand,
+    JointEffortCommand,
+    RobotCommand,
+    RobotEffortCommand,
+    RobotState,
+)
 from acetele.model import ArmKinematics, wrap_to_pi
 from acetele.runtime.robot import RobotRuntime
 from acetele.runtime.safety import RuntimeSafetyState
@@ -102,6 +110,7 @@ class LeaderTeleopSession:
         )
         self._start_trigger_armed = False
         self._kinematics = self._resolve_kinematics(kinematics)
+        self._effort_controllers = self._build_effort_controllers()
         # A slow bus may need a command lifetime longer than the network default;
         # derive it once from the runtime's validated bus schedule.
         self._command_lifetimes_ns = {
@@ -118,6 +127,7 @@ class LeaderTeleopSession:
         self._stable_since_ns: Optional[int] = None
         self._alignment_authorized = False
         self._last_step_ns: Optional[int] = None
+        self._latest_state: Optional[RobotState] = None
 
     @property
     def arm_names(self) -> tuple[str, ...]:
@@ -150,13 +160,18 @@ class LeaderTeleopSession:
         return self._alignment_authorized
 
     @property
-    def torque_released(self) -> bool:
-        """Return whether the runtime confirms that leader torque is disabled."""
+    def effort_assist_active(self) -> bool:
+        """Return whether configured Leader arms are currently in Torque mode."""
 
-        return (
-            self.runtime.diagnostics().safety.state
-            == RuntimeSafetyState.SAFE_DISABLED
-        )
+        return self.runtime.effort_control_active
+
+    def effort_diagnostics(self) -> dict[str, EffortControlDiagnostics]:
+        """Return detached local assistance diagnostics for operator tooling."""
+
+        return {
+            name: controller.diagnostics()
+            for name, controller in self._effort_controllers.items()
+        }
 
     def end_effector_pose(
         self,
@@ -192,9 +207,7 @@ class LeaderTeleopSession:
             RuntimeSafetyState.ACTIVE,
             RuntimeSafetyState.HOLD,
         ):
-            # A peer reset must release the complete leader, including a gripper used
-            # as the next synchronization cycle's physical start trigger.
-            self.runtime.set_enabled(False)
+            self._leave_effort_or_disable()
         self.mode = LeaderSyncMode.IDLE
         self._follower_positions = None
         self._last_follower_state_ns = None
@@ -203,6 +216,9 @@ class LeaderTeleopSession:
         self._stable_since_ns = None
         self._alignment_authorized = False
         self._start_trigger_armed = False
+        self._latest_state = None
+        for controller in self._effort_controllers.values():
+            controller.reset()
 
     def observe_follower_state(
         self,
@@ -243,7 +259,11 @@ class LeaderTeleopSession:
         now_ns = self._time(now_ns)
         self._last_step_ns = now_ns
         state = self.runtime.read()
-        if self.mode in (LeaderSyncMode.HOLD, LeaderSyncMode.STOP):
+        self._latest_state = state
+        if self.mode == LeaderSyncMode.STOP:
+            return state
+        if self.mode == LeaderSyncMode.HOLD:
+            self._write_local_efforts(state, now_ns)
             return state
         if self.mode == LeaderSyncMode.TRACKING and (
             self._follower_status == FollowerSyncStatus.IDLE
@@ -271,6 +291,8 @@ class LeaderTeleopSession:
             self.mode == LeaderSyncMode.SYNC_REQUEST and self._alignment_authorized
         ):
             self._align(state, now_ns)
+        if self.mode in (LeaderSyncMode.TRACKING, LeaderSyncMode.HOLD):
+            self._write_local_efforts(state, now_ns)
         return state
 
     def request_sync(self) -> None:
@@ -278,6 +300,10 @@ class LeaderTeleopSession:
 
         if self.mode == LeaderSyncMode.STOP:
             raise RuntimeError("cannot synchronize a stopped leader")
+        if self.effort_assist_active:
+            self.runtime.deactivate_effort_control()
+            for controller in self._effort_controllers.values():
+                controller.reset()
         self.mode = LeaderSyncMode.SYNC_REQUEST
         self._sync_target = None
         self._stable_since_ns = None
@@ -336,11 +362,24 @@ class LeaderTeleopSession:
 
         if self.mode != LeaderSyncMode.READY:
             raise RuntimeError("leader must be READY before tracking starts")
-        safety_state = self.runtime.diagnostics().safety.state
-        # The leader becomes passive once aligned: tracking publishes encoder state and
-        # must not leave its own servos actively holding the synchronization target.
-        if safety_state != RuntimeSafetyState.SAFE_DISABLED:
-            self.runtime.set_enabled(False)
+        if self._latest_state is None:
+            raise RuntimeError("leader state is unavailable for effort-mode activation")
+        if self._effort_controllers:
+            command = self._effort_command(self._latest_state, self._last_step_ns or 0)
+            try:
+                self.runtime.activate_effort_control(command)
+                self.runtime.write_efforts(command)
+            except BaseException as exc:
+                if self.runtime.effort_control_active:
+                    try:
+                        self.runtime.deactivate_effort_control()
+                    except BaseException as cleanup_exc:
+                        raise exc from cleanup_exc
+                raise
+        else:
+            safety_state = self.runtime.diagnostics().safety.state
+            if safety_state != RuntimeSafetyState.SAFE_DISABLED:
+                self.runtime.set_enabled(False)
         self.mode = LeaderSyncMode.TRACKING
 
     def stop(self) -> None:
@@ -359,19 +398,83 @@ class LeaderTeleopSession:
         self._stable_since_ns = None
         self._alignment_authorized = False
         self._start_trigger_armed = False
-        safety_state = self.runtime.diagnostics().safety.state
-        if safety_state in (
-            RuntimeSafetyState.READY,
-            RuntimeSafetyState.ACTIVE,
-            RuntimeSafetyState.HOLD,
-        ):
-            # The leader must remain physically backdrivable while the follower holds.
-            self.runtime.set_enabled(False)
+        if not self._effort_controllers:
+            safety_state = self.runtime.diagnostics().safety.state
+            if safety_state in (
+                RuntimeSafetyState.READY,
+                RuntimeSafetyState.ACTIVE,
+                RuntimeSafetyState.HOLD,
+            ):
+                self.runtime.set_enabled(False)
 
     def close(self) -> None:
         """Disconnect the owned leader runtime."""
 
         self.runtime.disconnect()
+
+    def _write_local_efforts(self, state: RobotState, now_ns: int) -> None:
+        """Keep local assistance alive independently of the follower heartbeat."""
+
+        if not self._effort_controllers or not self.effort_assist_active:
+            return
+        try:
+            self.runtime.write_efforts(self._effort_command(state, now_ns))
+        except BaseException as primary_error:
+            # A model or command failure must not leave the last nonzero current latched.
+            # Deactivation is strict and performs zero-current, torque-off, mode reset.
+            cleanup_error = None
+            try:
+                self.runtime.deactivate_effort_control()
+            except BaseException as exc:
+                cleanup_error = exc
+            finally:
+                for controller in self._effort_controllers.values():
+                    controller.reset()
+            if cleanup_error is not None:
+                raise primary_error from cleanup_error
+            raise
+
+    def _effort_command(self, state: RobotState, now_ns: int) -> RobotEffortCommand:
+        """Evaluate all configured arms against one coherent local state snapshot."""
+
+        generation = self.runtime.generation
+        commands = {}
+        for group_name, controller in self._effort_controllers.items():
+            result = controller.compute(state.joints[group_name], now_ns=now_ns)
+            commands[group_name] = JointEffortCommand(
+                self._arm_names[group_name],
+                result.efforts_nm,
+                now_ns,
+                now_ns + self._command_lifetimes_ns[group_name],
+                generation,
+            )
+        return RobotEffortCommand(commands)
+
+    def _leave_effort_or_disable(self) -> None:
+        """Return every Leader arm to disabled Position mode before a new cycle."""
+
+        if self.effort_assist_active:
+            self.runtime.deactivate_effort_control()
+            return
+        if self.runtime.diagnostics().safety.state != RuntimeSafetyState.SAFE_DISABLED:
+            self.runtime.set_enabled(False)
+
+    def _build_effort_controllers(self) -> dict[str, LeaderEffortController]:
+        """Construct only the local controllers explicitly enabled by RobotSpec."""
+
+        controllers = {}
+        for arm in self.runtime.spec.arms:
+            control = arm.control
+            if not (control.gravity_compensation or control.redundancy_posture):
+                continue
+            controllers[arm.name] = LeaderEffortController(
+                self.runtime.arm_dynamics(arm.name),
+                gravity_compensation=control.gravity_compensation,
+                redundancy_posture=control.redundancy_posture,
+                rest_posture_rad=control.rest_posture_rad,
+                effort_limits_nm=self.runtime.arm_effort_limits(arm.name),
+            )
+        return controllers
 
     def _align(self, state: RobotState, now_ns: int) -> None:
         """Move the leader to one captured follower pose and require stable convergence."""

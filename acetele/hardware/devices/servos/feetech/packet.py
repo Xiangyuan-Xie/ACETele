@@ -73,6 +73,17 @@ class FeetechPacketMotion:
 
 
 @dataclass(frozen=True)
+class FeetechPacketEffort:
+    """One prevalidated signed HLS current-register target."""
+
+    current_raw: int
+
+    def __post_init__(self) -> None:
+        if type(self.current_raw) is not int or not -0x7FFF <= self.current_raw <= 0x7FFF:
+            raise ValueError("FEETECH effort current must be a signed-15-bit integer")
+
+
+@dataclass(frozen=True)
 class FeetechPacketFastState:
     """Fast HLS/SMS telemetry converted to SI units."""
 
@@ -105,6 +116,7 @@ class FeetechPacketBusProtocol:
     mode_address = 33
     torque_enable_address = 40
     goal_start_address = 41
+    goal_torque_address = 44
     # Addresses 56..70 contain position, speed, load, voltage, temperature,
     # reserved bytes, moving, and current. Fault bits come from the packet error byte;
     # address 65 is reserved and must never be interpreted as hardware status.
@@ -149,6 +161,7 @@ class FeetechPacketBusProtocol:
         self._operation_timeout_ns = round(operation_timeout_s * 1e9)
         self._clock_ns = clock_ns
         self._enabled_ids: set[int] = set()
+        self._effort_mode_ids: set[int] = set()
         self._last_fast: dict[int, FeetechPacketFastState] = {}
         self._hold_positions_rad: dict[int, float] = {}
 
@@ -159,6 +172,7 @@ class FeetechPacketBusProtocol:
         self._hold_positions_rad.clear()
         self._observed_model_numbers.clear()
         self._enabled_ids.clear()
+        self._effort_mode_ids.clear()
         self._transport.connect()
         try:
             # Read identity before changing actuator state. Exact model checks prevent
@@ -185,8 +199,10 @@ class FeetechPacketBusProtocol:
                 {servo_id: b"\x00" for servo_id in self._devices},
             )
             self._enabled_ids.clear()
+            self._effort_mode_ids.clear()
         except BaseException:
             self._enabled_ids.clear()
+            self._effort_mode_ids.clear()
             self._observed_model_numbers.clear()
             self._transport.disconnect()
             raise
@@ -200,6 +216,7 @@ class FeetechPacketBusProtocol:
         """Release transport and clear cached feedback."""
 
         self._enabled_ids.clear()
+        self._effort_mode_ids.clear()
         self._hold_positions_rad.clear()
         self._transport.disconnect()
 
@@ -213,6 +230,10 @@ class FeetechPacketBusProtocol:
                 context="FEETECH packet",
             )
             if enabled:
+                if set(servo_ids) & self._effort_mode_ids:
+                    raise RuntimeError(
+                        "FEETECH effort-mode servos must be enabled by activate_effort"
+                    )
                 # Seed selected goals with measured position before enabling torque. This
                 # avoids a jump toward a stale power-on goal register.
                 if not set(servo_ids).issubset(self._last_fast):
@@ -249,32 +270,154 @@ class FeetechPacketBusProtocol:
             else:
                 self._enabled_ids.difference_update(servo_ids)
             return True
-        if label == "emergency_stop":
-            self._enabled_ids.clear()
-            self._sync_write(
-                self.torque_enable_address,
-                {servo_id: b"\x00" for servo_id in self._devices},
+        if label == "activate_effort":
+            targets = tuple(payload)
+            if not targets:
+                raise ValueError("FEETECH effort activation requires preload targets")
+            effort_values: dict[int, bytes] = {}
+            for target in targets:
+                profile = self._devices.get(target.device_id)
+                if profile is None:
+                    raise ValueError(f"unknown FEETECH servo ID {target.device_id}")
+                if profile.family != FeetechPacketFamily.HLS:
+                    raise ValueError("FEETECH Torque mode is supported only by HLS profiles")
+                if target.device_id in effort_values or not isinstance(
+                    target.payload, FeetechPacketEffort
+                ):
+                    raise ValueError("invalid FEETECH effort activation payload")
+                effort_values[target.device_id] = self._encode_effort(target.payload)
+            servo_ids = tuple(effort_values)
+            try:
+                # Mode changes are one strict transaction: torque-off, mode select,
+                # preload, then enable. Any failure triggers best-effort zero current
+                # and torque-off before the error is allowed to escape the worker.
+                self._sync_write(
+                    self.torque_enable_address,
+                    {servo_id: b"\x00" for servo_id in servo_ids},
+                )
+                self._enabled_ids.difference_update(servo_ids)
+                self._sync_write(
+                    self.mode_address,
+                    {servo_id: b"\x02" for servo_id in servo_ids},
+                )
+                self._sync_write(self.goal_torque_address, effort_values)
+                self._sync_write(
+                    self.torque_enable_address,
+                    {servo_id: b"\x01" for servo_id in servo_ids},
+                )
+            except BaseException:
+                self._best_effort_zero_and_disable(servo_ids)
+                try:
+                    self._sync_write(
+                        self.mode_address,
+                        {servo_id: b"\x00" for servo_id in servo_ids},
+                    )
+                except BaseException:
+                    pass
+                self._effort_mode_ids.difference_update(servo_ids)
+                raise
+            self._effort_mode_ids.update(servo_ids)
+            self._enabled_ids.update(servo_ids)
+            return True
+        if label == "deactivate_effort":
+            servo_ids = tuple(payload)
+            if not servo_ids or any(
+                type(servo_id) is not int or servo_id not in self._devices
+                for servo_id in servo_ids
+            ):
+                raise ValueError("invalid FEETECH effort deactivation IDs")
+            first_error = self._attempt_safety_writes(
+                (
+                    (
+                        self.goal_torque_address,
+                        {servo_id: b"\x00\x00" for servo_id in servo_ids},
+                    ),
+                    (
+                        self.torque_enable_address,
+                        {servo_id: b"\x00" for servo_id in servo_ids},
+                    ),
+                    (
+                        self.mode_address,
+                        {servo_id: b"\x00" for servo_id in servo_ids},
+                    ),
+                )
             )
+            # Never retain an optimistic enabled cache after an unload attempt. Keep
+            # Torque-mode ownership on failure so a later position enable cannot cross
+            # an uncertain mode transition.
+            self._enabled_ids.difference_update(servo_ids)
+            if first_error is not None:
+                raise first_error
+            self._effort_mode_ids.difference_update(servo_ids)
+            return True
+        if label == "emergency_stop":
+            effort_ids = tuple(self._effort_mode_ids)
+            operations = []
+            if effort_ids:
+                operations.append(
+                    (
+                        self.goal_torque_address,
+                        {servo_id: b"\x00\x00" for servo_id in effort_ids},
+                    )
+                )
+            operations.append(
+                (
+                    self.torque_enable_address,
+                    {servo_id: b"\x00" for servo_id in self._devices},
+                )
+            )
+            if effort_ids:
+                operations.append(
+                    (
+                        self.mode_address,
+                        {servo_id: b"\x00" for servo_id in effort_ids},
+                    )
+                )
+            first_error = self._attempt_safety_writes(tuple(operations))
+            self._enabled_ids.clear()
+            if first_error is not None:
+                raise first_error
+            self._effort_mode_ids.difference_update(effort_ids)
             return True
         if label == "hold":
-            servo_ids = tuple(sorted(self._enabled_ids))
-            if not servo_ids:
-                return True
-            if not set(servo_ids).issubset(self._hold_positions_rad):
-                raise RuntimeError("FEETECH bus has no trustworthy hold target")
-            hold_values = {
-                servo_id: self._encode_motion(
-                    self._devices[servo_id],
-                    FeetechPacketMotion(self._hold_positions_rad[servo_id]),
-                    reference_position_rad=self._hold_positions_rad[servo_id],
+            effort_ids = tuple(sorted(self._enabled_ids & self._effort_mode_ids))
+            first_error = None
+            if effort_ids:
+                first_error = self._attempt_safety_writes(
+                    (
+                        (
+                            self.goal_torque_address,
+                            {servo_id: b"\x00\x00" for servo_id in effort_ids},
+                        ),
+                        (
+                            self.torque_enable_address,
+                            {servo_id: b"\x00" for servo_id in effort_ids},
+                        ),
+                    )
                 )
-                for servo_id in servo_ids
-            }
-            self._sync_write(self.goal_start_address, hold_values)
-            self._sync_write(
-                self.torque_enable_address,
-                {servo_id: b"\x01" for servo_id in servo_ids},
-            )
+                self._enabled_ids.difference_update(effort_ids)
+            position_ids = tuple(sorted(self._enabled_ids - self._effort_mode_ids))
+            try:
+                if position_ids:
+                    if not set(position_ids).issubset(self._hold_positions_rad):
+                        raise RuntimeError("FEETECH bus has no trustworthy hold target")
+                    hold_values = {
+                        servo_id: self._encode_motion(
+                            self._devices[servo_id],
+                            FeetechPacketMotion(self._hold_positions_rad[servo_id]),
+                            reference_position_rad=self._hold_positions_rad[servo_id],
+                        )
+                        for servo_id in position_ids
+                    }
+                    self._sync_write(self.goal_start_address, hold_values)
+                    self._sync_write(
+                        self.torque_enable_address,
+                        {servo_id: b"\x01" for servo_id in position_ids},
+                    )
+            except BaseException as exc:
+                first_error = first_error or exc
+            if first_error is not None:
+                raise first_error
             return True
         if label == "calibrate_offset":
             if self._enabled_ids:
@@ -319,7 +462,8 @@ class FeetechPacketBusProtocol:
                 "FEETECH motion is blocked for software-disabled servo IDs: "
                 + ", ".join(str(servo_id) for servo_id in disabled_ids)
             )
-        values: dict[int, bytes] = {}
+        position_values: dict[int, bytes] = {}
+        effort_values: dict[int, bytes] = {}
         try:
             # Validate and encode the entire actor snapshot before emitting its single
             # broadcast frame; parameter errors cannot cause a partial bus update.
@@ -327,32 +471,47 @@ class FeetechPacketBusProtocol:
                 profile = self._devices.get(target.device_id)
                 if profile is None:
                     raise ValueError(f"unknown FEETECH servo ID {target.device_id}")
-                if target.device_id in values:
+                if target.device_id in position_values or target.device_id in effort_values:
                     raise ValueError("FEETECH motion contains duplicate servo IDs")
-                if not isinstance(target.payload, FeetechPacketMotion):
-                    raise ValueError("FEETECH payload must be FeetechPacketMotion")
-                current_state = self._last_fast.get(target.device_id)
-                if current_state is None:
-                    raise ValueError(
-                        f"FEETECH servo ID {target.device_id} has no current position"
+                if isinstance(target.payload, FeetechPacketEffort):
+                    if target.device_id not in self._effort_mode_ids:
+                        raise ValueError("FEETECH effort target requires Torque mode")
+                    effort_values[target.device_id] = self._encode_effort(target.payload)
+                elif isinstance(target.payload, FeetechPacketMotion):
+                    if target.device_id in self._effort_mode_ids:
+                        raise ValueError("FEETECH position target requires Position mode")
+                    current_state = self._last_fast.get(target.device_id)
+                    if current_state is None:
+                        raise ValueError(
+                            f"FEETECH servo ID {target.device_id} has no current position"
+                        )
+                    position_values[target.device_id] = self._encode_motion(
+                        profile,
+                        target.payload,
+                        reference_position_rad=current_state.position_rad,
                     )
-                values[target.device_id] = self._encode_motion(
-                    profile,
-                    target.payload,
-                    reference_position_rad=current_state.position_rad,
-                )
+                else:
+                    raise ValueError("unsupported FEETECH motion payload")
             deadline_ns = min(target.deadline_ns for target in targets)
-            self._sync_write(
-                self.goal_start_address,
-                values,
-                deadline_ns=deadline_ns,
-            )
+            if position_values:
+                self._sync_write(
+                    self.goal_start_address,
+                    position_values,
+                    deadline_ns=deadline_ns,
+                )
+            if effort_values:
+                self._sync_write(
+                    self.goal_torque_address,
+                    effort_values,
+                    deadline_ns=deadline_ns,
+                )
             # Only a successfully transmitted target is eligible for a later HOLD.
             # Raw telemetry remains diagnostic input and can never overwrite this cache.
             self._hold_positions_rad.update(
                 {
                     target.device_id: target.payload.position_rad
                     for target in targets
+                    if isinstance(target.payload, FeetechPacketMotion)
                 }
             )
         except (FeetechPacketError, TimeoutError, OSError, ValueError) as exc:
@@ -483,6 +642,50 @@ class FeetechPacketBusProtocol:
             + auxiliary
             + FeetechPacketCodec.word(velocity)
         )
+
+    @staticmethod
+    def _encode_effort(effort: FeetechPacketEffort) -> bytes:
+        """Encode an HLS signed-magnitude current target for GOAL_TORQUE."""
+
+        return FeetechPacketCodec.word(
+            FeetechPacketCodec.encode_signed_magnitude(effort.current_raw)
+        )
+
+    def _best_effort_zero_and_disable(self, servo_ids: Sequence[int]) -> None:
+        """Attempt the strongest Torque-mode containment without masking its caller."""
+
+        servo_ids = tuple(servo_ids)
+        if not servo_ids:
+            return
+        try:
+            self._sync_write(
+                self.goal_torque_address,
+                {servo_id: b"\x00\x00" for servo_id in servo_ids},
+            )
+        except BaseException:
+            pass
+        try:
+            self._sync_write(
+                self.torque_enable_address,
+                {servo_id: b"\x00" for servo_id in servo_ids},
+            )
+        except BaseException:
+            pass
+        self._enabled_ids.difference_update(servo_ids)
+
+    def _attempt_safety_writes(
+        self,
+        operations: Sequence[tuple[int, Mapping[int, bytes]]],
+    ) -> BaseException | None:
+        """Attempt every containment write and return the first transport failure."""
+
+        first_error = None
+        for address, values in operations:
+            try:
+                self._sync_write(address, values)
+            except BaseException as exc:
+                first_error = first_error or exc
+        return first_error
 
     @staticmethod
     def _nearest_multiturn_position_target(
@@ -625,6 +828,7 @@ class FeetechPacketBusProtocol:
 __all__ = [
     "FeetechPacketBusProtocol",
     "FeetechPacketFastState",
+    "FeetechPacketEffort",
     "FeetechPacketMotion",
     "FeetechPacketSlowState",
     "nearest_multiturn_position_target",

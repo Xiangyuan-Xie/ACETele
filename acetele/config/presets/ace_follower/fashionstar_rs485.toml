@@ -47,6 +47,3 @@ servo_model = "HX8-R50W-M"
 firmware_version = 316
 direction = -1
 home_position_rad = 0.0
-
-[arms.single.control]
-adaptive_position = true

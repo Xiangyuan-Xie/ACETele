@@ -130,6 +130,23 @@ def test_zmq_follower_holds_position_before_a_leader_connects():
         follower.close()
 
 
+def test_zmq_follower_separates_network_lease_from_local_motion_watchdog():
+    options = ZmqTeleopOptions(
+        PeerRole.FOLLOWER,
+        "127.0.0.1",
+        "127.0.0.1",
+    )
+    follower = FollowerApplication(
+        _spec("ace_follower"),
+        options,
+        peer=RecordingPeer(),
+        xrce_bridge=RecordingXrceBridge(),
+    )
+
+    assert options.heartbeat_timeout_ns == 500_000_000
+    assert follower.session.runtime.command_timeout_ns == 100_000_000
+
+
 def test_zmq_leader_stop_sends_stop_without_another_hardware_sample():
     peer = RecordingPeer()
     leader = LeaderApplication(
@@ -198,9 +215,11 @@ def test_applications_reuse_sessions_through_tracking(teleop_mode):
         assert tuple(sequence for _, sequence in xrce.published) == tuple(
             range(len(xrce.published))
         )
-        expired = follower.publish_once(
-            now_ns=time.monotonic_ns() + follower.options.heartbeat_timeout_ns + 1
+        expired_at_ns = (
+            time.monotonic_ns() + follower.options.heartbeat_timeout_ns + 1
         )
+        follower.session.update(now_ns=expired_at_ns)
+        expired = follower.publish_once(now_ns=expired_at_ns)
         assert expired.status == FollowerSyncStatus.LOST
     finally:
         leader.close()

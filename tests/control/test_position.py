@@ -3,10 +3,9 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from acetele.control import PositionControlPipeline
+from acetele.control import PositionControlPipeline, StreamingPositionTuning
 from acetele.core import JointCommand, JointState
 from acetele.model import ArmModelMetadata
-from acetele.specification import ControlSpec, PositionControlTuning
 
 
 def _metadata() -> ArmModelMetadata:
@@ -21,8 +20,15 @@ def _command(position: float, now_ns: int) -> JointCommand:
     return JointCommand(("joint",), [position], now_ns, now_ns + 50_000_000, 0)
 
 
+def test_streaming_position_tuning_rejects_nonpositive_or_nonfinite_limits():
+    with pytest.raises(ValueError, match="finite and positive"):
+        StreamingPositionTuning(velocity_limit_rad_s=0.0)
+    with pytest.raises(ValueError, match="finite and positive"):
+        StreamingPositionTuning(acceleration_limit_rad_s2=float("nan"))
+
+
 def test_pipeline_rate_limits_against_urdf_velocity():
-    pipeline = PositionControlPipeline(_metadata(), ControlSpec())
+    pipeline = PositionControlPipeline(_metadata())
     pipeline.update_feedback(_state(0.0))
 
     result = pipeline.apply(_command(1.0, 10_000_000), now_ns=10_000_000)
@@ -31,53 +37,69 @@ def test_pipeline_rate_limits_against_urdf_velocity():
     assert pipeline.diagnostics().command_limited.tolist() == [True]
 
 
-def test_adaptive_residual_learns_only_after_static_gate():
-    pipeline = PositionControlPipeline(
-        _metadata(),
-        ControlSpec(adaptive_position=True),
-    )
+def test_pipeline_enforces_acceleration_in_software():
+    pipeline = PositionControlPipeline(_metadata())
     pipeline.update_feedback(_state(0.0))
-    pipeline.apply(_command(0.05, 0), now_ns=0)
-    pipeline.apply(_command(0.05, 210_000_000), now_ns=210_000_000)
-
-    diagnostics = pipeline.diagnostics()
-    assert diagnostics.adaptive_active.tolist() == [True]
-    assert diagnostics.adaptive_estimate_rad[0] > 0.0
-    assert diagnostics.adaptive_offset_rad[0] > 0.0
-
-
-def test_adaptive_diagnostics_expose_error_and_saturation():
-    pipeline = PositionControlPipeline(
-        _metadata(),
-        ControlSpec(adaptive_position=True),
+    initial = JointCommand(
+        ("joint",),
+        [0.0],
+        0,
+        50_000_000,
+        0,
+        velocity_limits=[2.0],
+        acceleration_limits=[1.5],
     )
+    pipeline.apply(initial, now_ns=0)
+    positions = [0.0]
+    for index in range(1, 31):
+        now_ns = index * 10_000_000
+        command = JointCommand(
+            ("joint",),
+            [1.0],
+            now_ns,
+            now_ns + 50_000_000,
+            0,
+            velocity_limits=[2.0],
+            acceleration_limits=[1.5],
+        )
+        positions.append(float(pipeline.apply(command, now_ns=now_ns).positions[0]))
+
+    interval_velocities = np.diff(positions) / 0.01
+    interval_accelerations = np.diff(
+        np.concatenate(([0.0], interval_velocities))
+    ) / 0.01
+
+    assert np.max(np.abs(interval_velocities)) <= 2.0 + 1e-9
+    assert np.max(np.abs(interval_accelerations)) <= 1.5 + 1e-9
+
+
+def test_pipeline_decelerates_before_reversing_direction():
+    pipeline = PositionControlPipeline(_metadata())
     pipeline.update_feedback(_state(0.0))
-    pipeline.apply(_command(0.5, 0), now_ns=0)
-    pipeline.apply(_command(0.5, 210_000_000), now_ns=210_000_000)
+    positions = []
+    for index in range(50):
+        now_ns = index * 10_000_000
+        command = JointCommand(
+            ("joint",),
+            [1.0 if index < 20 else -1.0],
+            now_ns,
+            now_ns + 50_000_000,
+            0,
+            velocity_limits=[2.0],
+            acceleration_limits=[2.0],
+        )
+        positions.append(float(pipeline.apply(command, now_ns=now_ns).positions[0]))
 
-    diagnostics = pipeline.diagnostics()
-    assert diagnostics.target_rad.tolist() == [0.5]
-    assert diagnostics.position_error_rad.tolist() == [0.5]
-    assert diagnostics.adaptive_saturated.tolist() == [True]
+    velocities = np.diff(positions) / 0.01
+    accelerations = np.diff(velocities) / 0.01
 
-
-def test_pipeline_uses_the_tuning_owned_by_control_spec():
-    pipeline = PositionControlPipeline(
-        _metadata(),
-        ControlSpec(
-            adaptive_position=True,
-            position_tuning=PositionControlTuning(stable_time_s=0.01),
-        ),
-    )
-    pipeline.update_feedback(_state(0.0))
-    pipeline.apply(_command(0.05, 0), now_ns=0)
-    pipeline.apply(_command(0.05, 20_000_000), now_ns=20_000_000)
-
-    assert pipeline.diagnostics().adaptive_active.tolist() == [True]
+    assert velocities[19] > 0.0
+    assert velocities[20] > 0.0
+    assert np.max(np.abs(accelerations)) <= 2.0 + 1e-9
 
 
 def test_pipeline_diagnostics_are_independent_snapshots():
-    pipeline = PositionControlPipeline(_metadata(), ControlSpec())
+    pipeline = PositionControlPipeline(_metadata())
     diagnostics = pipeline.diagnostics()
 
     with pytest.raises(ValueError):
@@ -89,7 +111,7 @@ def test_pipeline_diagnostics_are_independent_snapshots():
 
 
 def test_prepared_command_does_not_change_history_until_committed():
-    pipeline = PositionControlPipeline(_metadata(), ControlSpec())
+    pipeline = PositionControlPipeline(_metadata())
     pipeline.update_feedback(_state(0.0))
 
     prepared = pipeline.prepare(_command(1.0, 10_000_000), now_ns=10_000_000)
@@ -102,21 +124,13 @@ def test_prepared_command_does_not_change_history_until_committed():
     assert pipeline.diagnostics().command_limited.tolist() == [True]
 
 
-def test_rebase_uses_latest_feedback_and_clears_adaptive_history():
-    pipeline = PositionControlPipeline(
-        _metadata(),
-        ControlSpec(adaptive_position=True),
-    )
+def test_rebase_uses_latest_feedback_as_rate_limit_origin():
+    pipeline = PositionControlPipeline(_metadata())
     pipeline.update_feedback(_state(0.0))
     pipeline.apply(_command(0.05, 0), now_ns=0)
-    pipeline.apply(_command(0.05, 210_000_000), now_ns=210_000_000)
-    assert pipeline.diagnostics().adaptive_estimate_rad[0] > 0.0
 
     pipeline.update_feedback(_state(0.6))
     pipeline.rebase_to_feedback()
     result = pipeline.apply(_command(1.0, 220_000_000), now_ns=220_000_000)
 
     assert result.positions[0] == pytest.approx(0.602)
-    diagnostics = pipeline.diagnostics()
-    assert diagnostics.adaptive_estimate_rad.tolist() == [0.0]
-    assert diagnostics.adaptive_offset_rad.tolist() == [0.0]

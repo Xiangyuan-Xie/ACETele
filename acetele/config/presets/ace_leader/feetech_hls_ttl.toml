@@ -18,6 +18,11 @@ allow_unverified_identity = true
 bus = "arm"
 tool_frame = "link_5"
 
+[arms.single.control]
+gravity_compensation = true
+redundancy_posture = true
+rest_posture_rad = [0.0, 0.0, 0.0, 0.0]
+
 [[arms.single.joints]]
 name = "joint_1"
 servo_id = 0
@@ -45,10 +50,6 @@ servo_id = 3
 servo_model = "HL3915"
 direction = -1
 home_position_rad = 0.0
-
-[arms.single.control]
-adaptive_position = true
-gravity_position = false
 
 [arms.single.end_effector]
 kind = "parallel_gripper"

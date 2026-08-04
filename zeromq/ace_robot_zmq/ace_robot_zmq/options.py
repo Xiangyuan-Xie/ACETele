@@ -43,7 +43,7 @@ class ZmqTeleopOptions:
     command_port: int = 5555
     state_port: int = 5556
     cycle_hz: float = 100.0
-    heartbeat_timeout_ns: int = 100_000_000
+    heartbeat_timeout_ns: int = 500_000_000
     maximum_frame_bytes: int = 65_536
     curve: Optional[CurveCredentials] = None
 

@@ -2,7 +2,6 @@ ace_robot_node:
   ros__parameters:
     control_rate: 100.0
     publish_rate: 100.0
-    adaptive_diagnostic_period: 2.0
     motion_timeout: 0.1
     session_timeout: 0.5
     command_lifespan: 0.05

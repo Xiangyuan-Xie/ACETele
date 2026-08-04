@@ -20,9 +20,11 @@ import numpy as np
 from acetele.control import PositionControlDiagnostics, PositionControlPipeline
 from acetele.core import (
     JointCommand,
+    JointEffortCommand,
     JointState,
     JointUnit,
     RobotCommand,
+    RobotEffortCommand,
     RobotState,
     SensorState,
 )
@@ -125,25 +127,23 @@ class RobotRuntime:
         self._actors: dict[str, BusActor] = {}
         self._sequence: dict[str, int] = {}
         self._fault_action: Optional[AutomaticFaultAction] = None
+        self._effort_groups: set[str] = set()
         plan = build_runtime_plan(spec, adapter_registry=adapter_registry)
         self.preflight = plan.preflight
         self._adapter_plans = dict(plan.adapters)
         self._groups = dict(plan.groups)
-        self._pin_models = dict(plan.pin_models)
+        self._dynamics = dict(plan.dynamics)
         self._pipelines: dict[str, PositionControlPipeline] = {}
         self._estimators: dict[str, RobustJointStateEstimator] = {}
         self._position_references: dict[str, dict[int, float]] = {
             bus.name: {} for bus in spec.buses
         }
-        controls = {arm.name: arm.control for arm in spec.arms}
         for name, group in self._groups.items():
             if group.is_arm:
                 if group.metadata is None:
                     raise RuntimeError(f"arm group '{name}' has no model metadata")
                 self._pipelines[name] = PositionControlPipeline(
                     group.metadata,
-                    controls[name],
-                    pin_model=self._pin_models.get(name),
                 )
             if spec.backend == Backend.PHYSICAL and group.hand is None:
                 adapter_plan = self._adapter_plans[group.bus]
@@ -177,6 +177,12 @@ class RobotRuntime:
         return self._command_timeout_ns
 
     @property
+    def effort_control_active(self) -> bool:
+        """Return whether any joint group is currently owned by Torque mode."""
+
+        return bool(self._effort_groups)
+
+    @property
     def joint_groups(self) -> Mapping[str, JointGroupInfo]:
         """Return immutable public routing metadata for all joint groups."""
 
@@ -186,6 +192,35 @@ class RobotRuntime:
                 for name, group in self._groups.items()
             }
         )
+
+    def arm_dynamics(self, group_name: str):
+        """Return the preflighted dynamics model for one effort-assisted arm."""
+
+        try:
+            return self._dynamics[group_name]
+        except KeyError as exc:
+            raise ValueError(
+                f"joint group '{group_name}' has no configured effort controller"
+            ) from exc
+
+    def arm_effort_limits(self, group_name: str) -> np.ndarray:
+        """Return the conservative intersection of URDF and adapter effort limits."""
+
+        group = self._groups.get(group_name)
+        if group is None or not group.is_arm or group.metadata is None:
+            raise ValueError(f"joint group '{group_name}' is not an arm")
+        plan = self._adapter_plans[group.bus]
+        profile_limits = np.asarray(
+            [plan.effort_limits_nm.get(joint.servo_id, math.inf) for joint in group.joints],
+            dtype=float,
+        )
+        limits = np.minimum(np.asarray(group.metadata.effort_limits), profile_limits)
+        if not np.all(np.isfinite(limits)) or np.any(limits <= 0.0):
+            raise ValueError(
+                f"joint group '{group_name}' has no finite calibrated effort limit"
+            )
+        limits.setflags(write=False)
+        return limits
 
     def command_lifetime_ns(
         self,
@@ -252,6 +287,7 @@ class RobotRuntime:
                 raise exc from cleanup_error
             raise
         self._actors = actors
+        self._effort_groups.clear()
         self._fault_action = None
         self._safety.connected()
 
@@ -343,41 +379,192 @@ class RobotRuntime:
     def write(self, command: RobotCommand) -> None:
         """Validate and publish one robot command that refreshes the motion lease."""
 
-        self._write(command, refresh_heartbeat=True)
+        self._write(command)
 
     @_serialized_operation
-    def write_auxiliary(self, command: RobotCommand) -> None:
-        """Publish end-effector motion without extending the arm heartbeat."""
-
-        self._write(command, refresh_heartbeat=False)
-
-    @_serialized_operation
-    def ensure_motion_ready(self) -> None:
-        """Recover an automatic HOLD without weakening FAULT or disabled boundaries.
-
-        The bus actor may hold after a short command gap before the transport session is
-        considered lost. A later valid frame calls this method after input validation;
-        it clears that watchdog latch and enters READY without admitting motion itself.
-        """
+    def activate_effort_control(self, command: RobotEffortCommand) -> None:
+        """Atomically switch selected arm groups from Position to Torque mode."""
 
         self._require_connected()
-        state = self._safety.snapshot().state
-        if state in (RuntimeSafetyState.READY, RuntimeSafetyState.ACTIVE):
+        if not isinstance(command, RobotEffortCommand) or not command.joints:
+            raise ValueError("effort activation requires a non-empty RobotEffortCommand")
+        if self._effort_groups:
+            raise RuntimeError("robot effort control is already active")
+        safety = self._safety.snapshot()
+        if safety.state not in (RuntimeSafetyState.READY, RuntimeSafetyState.ACTIVE):
+            raise RuntimeError("effort control can be activated only from READY/ACTIVE")
+        now_ns = self._clock_ns()
+        targets_by_bus: dict[str, list[MotionEnvelope]] = {}
+        for group_name, group_command in command.joints.items():
+            group = self._groups.get(group_name)
+            if group is None:
+                raise ValueError(f"unknown effort-control group '{group_name}'")
+            self._validate_effort_group_command(
+                group,
+                group_command,
+                safety.generation,
+                now_ns,
+            )
+            targets_by_bus.setdefault(group.bus, []).extend(
+                self._encode_effort_group(group, group_command)
+            )
+
+        activated_buses: list[str] = []
+        try:
+            for bus_name, targets in targets_by_bus.items():
+                self._actors[bus_name].submit_safety(
+                    "activate_effort",
+                    tuple(targets),
+                    wait=True,
+                    clear_motion=True,
+                )
+                activated_buses.append(bus_name)
+        except BaseException as exc:
+            # A later bus failure must still unload every bus switched earlier. Preserve
+            # the activation error as primary because it explains why tracking failed.
+            cleanup_error: Optional[BaseException] = None
+            for bus_name in activated_buses:
+                ids = tuple(
+                    joint.servo_id
+                    for group_name in command.joints
+                    if self._groups[group_name].bus == bus_name
+                    for joint in self._groups[group_name].joints
+                )
+                try:
+                    self._actors[bus_name].submit_safety(
+                        "deactivate_effort", ids, wait=True, clear_motion=True
+                    )
+                except BaseException as cleanup_exc:
+                    cleanup_error = cleanup_error or cleanup_exc
+            self._latch_hardware_fault(
+                f"effort activation failed: {exc}",
+                action=AutomaticFaultAction.DISABLE,
+            )
+            if cleanup_error is not None:
+                raise exc from cleanup_error
+            raise
+        self._effort_groups.update(command.joints)
+
+    @_serialized_operation
+    def write_efforts(self, command: RobotEffortCommand) -> None:
+        """Publish one latest-value effort batch and refresh the local control lease."""
+
+        self._require_connected()
+        if not isinstance(command, RobotEffortCommand) or not command.joints:
+            raise ValueError("effort write requires a non-empty RobotEffortCommand")
+        safety = self._safety.snapshot()
+        if safety.state not in (RuntimeSafetyState.READY, RuntimeSafetyState.ACTIVE):
+            raise RuntimeError(
+                f"robot runtime cannot write efforts while {safety.state.value}"
+            )
+        if set(command.joints) != self._effort_groups:
+            raise ValueError(
+                "effort write groups must exactly match the active effort-control groups"
+            )
+        now_ns = self._clock_ns()
+        targets_by_bus: dict[str, list[MotionEnvelope]] = {}
+        minimum_deadline: Optional[int] = None
+        for group_name, group_command in command.joints.items():
+            group = self._groups[group_name]
+            self._validate_effort_group_command(
+                group,
+                group_command,
+                safety.generation,
+                now_ns,
+            )
+            minimum_deadline = (
+                group_command.deadline_ns
+                if minimum_deadline is None
+                else min(minimum_deadline, group_command.deadline_ns)
+            )
+            targets_by_bus.setdefault(group.bus, []).extend(
+                self._encode_effort_group(group, group_command)
+            )
+        if minimum_deadline is None or minimum_deadline < self._clock_ns():
+            raise RuntimeError("effort command expired during validation")
+
+        gate = MotionCommitGate()
+        try:
+            for bus_name, targets in targets_by_bus.items():
+                actor = self._actors[bus_name]
+                actor.submit_motion(
+                    tuple(
+                        MotionEnvelope(
+                            target.key,
+                            target.device_id,
+                            target.payload,
+                            target.submitted_at_ns,
+                            target.deadline_ns,
+                            actor.generation,
+                            gate,
+                        )
+                        for target in targets
+                    )
+                )
+        except MotionRejectedError as exc:
+            gate.abort()
+            self._safety.hold()
+            self._submit_all_safety("hold", None, wait=False)
+            raise RuntimeError(f"effort motion admission closed: {exc}") from exc
+        except BaseException:
+            gate.abort()
+            self._latch_hardware_fault("effort motion staging failed")
+            raise
+        accepted_ns = self._clock_ns()
+        if minimum_deadline < accepted_ns or not self._safety.accept_command(
+            accepted_ns,
+            generation=safety.generation,
+            deadline_ns=minimum_deadline,
+        ):
+            gate.abort()
+            raise RuntimeError("effort command is stale or belongs to another generation")
+        try:
+            for actor in self._actors.values():
+                if isinstance(actor, BusActor):
+                    actor.refresh_motion_watchdog(accepted_ns)
+            gate.commit()
+        except BaseException:
+            gate.abort()
+            self._latch_hardware_fault("effort motion commit failed")
+            raise
+
+    @_serialized_operation
+    def deactivate_effort_control(self) -> None:
+        """Send zero current, disable Torque mode, and return arms to Position mode."""
+
+        self._require_connected()
+        if not self._effort_groups:
             return
-        if state != RuntimeSafetyState.HOLD:
-            raise RuntimeError(f"cannot resume motion from {state.value}")
-        self._refresh_position_pipeline_feedback()
+        ids_by_bus: dict[str, list[int]] = {}
+        for group_name in self._effort_groups:
+            group = self._groups[group_name]
+            ids_by_bus.setdefault(group.bus, []).extend(
+                joint.servo_id for joint in group.joints
+            )
+        first_error: Optional[BaseException] = None
+        for bus_name, ids in ids_by_bus.items():
+            try:
+                self._actors[bus_name].submit_safety(
+                    "deactivate_effort",
+                    tuple(ids),
+                    wait=True,
+                    clear_motion=True,
+                )
+            except BaseException as exc:
+                first_error = first_error or exc
+        self._effort_groups.clear()
         self._rebase_position_pipelines()
-        self._submit_set_enabled(True)
-        self._safety.ready()
+        if first_error is not None:
+            self._latch_hardware_fault(
+                f"effort deactivation failed: {first_error}",
+                action=AutomaticFaultAction.DISABLE,
+            )
+            raise first_error
+        if self._safety.snapshot().state != RuntimeSafetyState.FAULT:
+            self._safety.disabled()
 
-    def _write(self, command: RobotCommand, *, refresh_heartbeat: bool) -> None:
-        """Condition, stage, and atomically expose one logical robot command.
-
-        ``refresh_heartbeat=False`` is reserved for end-effector updates admitted by an
-        already-live arm session. Such updates can move their addressed device but cannot
-        establish or extend the robot-wide motion lease.
-        """
+    def _write(self, command: RobotCommand) -> None:
+        """Condition, stage, and atomically expose one logical robot command."""
 
         self._require_connected()
         if not isinstance(command, RobotCommand) or not command.joints:
@@ -389,9 +576,6 @@ class RobotRuntime:
             RuntimeSafetyState.ACTIVE,
         ):
             raise RuntimeError(f"robot runtime cannot move while {snapshot.state.value}")
-        if not refresh_heartbeat and snapshot.state != RuntimeSafetyState.ACTIVE:
-            raise RuntimeError("auxiliary motion requires an active arm heartbeat")
-
         # Phase 1 is side-effect free: validate every group, prepare controller state,
         # and encode every vendor payload before any actor can observe the command.
         envelopes: dict[str, list[MotionEnvelope]] = {}
@@ -401,6 +585,10 @@ class RobotRuntime:
             group = self._groups.get(group_name)
             if group is None:
                 raise ValueError(f"robot command references unknown joint group '{group_name}'")
+            if group_name in self._effort_groups:
+                raise RuntimeError(
+                    f"joint group '{group_name}' is active in effort-control mode"
+                )
             self._validate_group_command(group, group_command, snapshot.generation, now_ns)
             pipeline = self._pipelines.get(group_name)
             if pipeline is not None:
@@ -464,7 +652,7 @@ class RobotRuntime:
             # a dropped frame, not evidence of a bus fault.
             commit_gate.abort()
             raise RuntimeError("robot command expired during submission")
-        if refresh_heartbeat and not self._safety.accept_command(
+        if not self._safety.accept_command(
             accepted_ns,
             generation=snapshot.generation,
             deadline_ns=minimum_deadline,
@@ -472,12 +660,12 @@ class RobotRuntime:
             commit_gate.abort()
             raise RuntimeError("robot command is stale or belongs to another generation")
         try:
-            if refresh_heartbeat:
-                # Arm frames refresh every physical bus so a separately wired end
-                # effector also holds when the arm heartbeat disappears.
-                for actor in self._actors.values():
-                    if isinstance(actor, BusActor):
-                        actor.refresh_motion_watchdog(accepted_ns)
+            # The follower-local arm frame refreshes every physical bus, including a
+            # separately wired end effector. Network-only auxiliary updates are merged
+            # into that frame by the teleoperation session before reaching the runtime.
+            for actor in self._actors.values():
+                if isinstance(actor, BusActor):
+                    actor.refresh_motion_watchdog(accepted_ns)
             for pipeline, prepared in prepared_controls:
                 pipeline.commit(prepared)
             commit_gate.commit()
@@ -511,6 +699,11 @@ class RobotRuntime:
         if type(enabled) is not bool:
             raise ValueError("enabled must be a boolean")
         self._require_connected()
+        if self._effort_groups:
+            raise RuntimeError(
+                "set_enabled is unavailable while effort control is active; "
+                "deactivate effort control first"
+            )
         state = self._safety.snapshot().state
         if state == RuntimeSafetyState.FAULT:
             raise RuntimeError("robot runtime fault is latched; reset it explicitly")
@@ -634,6 +827,7 @@ class RobotRuntime:
         # Detach actors first so concurrent diagnostics cannot treat a partially closed
         # set as a connected robot. The operation lock excludes command/read callers.
         self._actors = {}
+        self._effort_groups.clear()
         for references in self._position_references.values():
             references.clear()
         first_error: Optional[BaseException] = None
@@ -813,6 +1007,47 @@ class RobotRuntime:
             command,
             self._position_references[group.bus],
         )
+
+    def _validate_effort_group_command(
+        self,
+        group: JointGroupPlan,
+        command: JointEffortCommand,
+        generation: int,
+        now_ns: int,
+    ) -> None:
+        """Validate one canonical Nm vector before any bus mode or mailbox change."""
+
+        if not isinstance(command, JointEffortCommand):
+            raise ValueError("effort group command must be a JointEffortCommand")
+        if not group.is_arm or group.metadata is None:
+            raise ValueError(f"joint group '{group.name}' is not an effort-controlled arm")
+        if command.names != group.joint_names:
+            raise ValueError(
+                f"joint group '{group.name}' expects names {group.joint_names}, "
+                f"got {command.names}"
+            )
+        if command.generation != generation or command.deadline_ns < now_ns:
+            raise ValueError(f"joint group '{group.name}' effort command is stale")
+        # A public effort command is bounded by both the robot model and the actuator
+        # profile.  Checking only the URDF would allow direct Runtime callers to bypass
+        # the same conservative current limit used by LeaderEffortController.
+        limits = self.arm_effort_limits(group.name)
+        if np.any(np.abs(command.efforts_nm) > limits):
+            raise ValueError(
+                f"joint group '{group.name}' exceeds calibrated effort limits"
+            )
+        plan = self._adapter_plans[group.bus]
+        plan.adapter.validate_effort_command(plan, group, command)
+
+    def _encode_effort_group(
+        self,
+        group: JointGroupPlan,
+        command: JointEffortCommand,
+    ) -> tuple[MotionEnvelope, ...]:
+        """Delegate calibrated Nm encoding to the planned adapter."""
+
+        plan = self._adapter_plans[group.bus]
+        return plan.adapter.encode_effort_group(plan, group, command)
 
     def _refresh_position_pipeline_feedback(self) -> None:
         """Seed controller memory from current hardware before enabling motion."""

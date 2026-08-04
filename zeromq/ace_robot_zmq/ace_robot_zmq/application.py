@@ -331,11 +331,16 @@ class FollowerApplication:
             raise ValueError("FollowerApplication requires follower ZMQ options")
         if spec.model != "ace_follower":
             raise ValueError("ZMQ follower requires an ace_follower RobotSpec")
-        runtime = runtime_factory(spec, command_timeout_ns=options.heartbeat_timeout_ns)
+        # The actor watchdog protects the local periodic loop, not the network lease.
+        # Five missed local cycles are enough to detect a stalled process without making
+        # ordinary packet jitter perform a hardware HOLD/re-enable transition.
+        local_motion_timeout_ns = max(
+            100_000_000,
+            round(5e9 / options.cycle_hz),
+        )
+        runtime = runtime_factory(spec, command_timeout_ns=local_motion_timeout_ns)
         self.session = FollowerTeleopSession(
             runtime,
-            # ZMQ already owns peer admission and reset at this deadline, so preserve
-            # its existing single-timeout behavior while ROS uses a longer session grace.
             session_timeout_ns=options.heartbeat_timeout_ns,
             teleop_mode=teleop_mode,
             translation_scale=translation_scale,

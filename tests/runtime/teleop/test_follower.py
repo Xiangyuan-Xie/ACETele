@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from acetele.core import JointState, RobotState
 from acetele.model import ArmKinematics
 from acetele.runtime import (
     FollowerTeleopSession,
@@ -38,6 +39,8 @@ def _session(
     *,
     motion_timeout_ns: int = 100_000_000,
     session_timeout_ns: int = 500_000_000,
+    backend: Backend = Backend.MOCK,
+    motion_cycle_hz: float | None = None,
 ) -> FollowerTeleopSession:
     spec = RobotSpec(
         "ace_follower",
@@ -50,6 +53,7 @@ def _session(
                 100.0,
                 physical_layer="ttl",
                 family="hls",
+                external_estop=backend == Backend.PHYSICAL,
             ),
         ),
         (
@@ -68,13 +72,14 @@ def _session(
                 ),
             ),
         ),
-        backend=Backend.MOCK,
+        backend=backend,
         urdf_path=str(urdf_path),
     )
     runtime = RobotRuntime(spec, command_timeout_ns=motion_timeout_ns)
     return FollowerTeleopSession(
         runtime,
         session_timeout_ns=session_timeout_ns,
+        motion_cycle_hz=motion_cycle_hz,
     )
 
 
@@ -115,6 +120,7 @@ def _cartesian_session() -> FollowerTeleopSession:
     return FollowerTeleopSession(
         RobotRuntime(spec),
         teleop_mode=TeleopMode.EE_POSE,
+        motion_cycle_hz=None,
     )
 
 
@@ -147,7 +153,7 @@ def _gripper_session() -> FollowerTeleopSession:
             urdf_path=str(urdf_path),
         )
     )
-    return FollowerTeleopSession(runtime)
+    return FollowerTeleopSession(runtime, motion_cycle_hz=None)
 
 
 def test_follower_can_hold_its_measured_pose_without_a_leader():
@@ -215,6 +221,9 @@ def test_follower_session_requires_current_sync_cycle_arm_heartbeat():
             (0.1,),
             now_ns=time.monotonic_ns(),
         )
+        target = session._motion_targets["single"]  # noqa: SLF001
+        assert target.velocity_limits.tolist() == [4.0]
+        assert target.acceleration_limits.tolist() == [12.0]
         assert session.status == FollowerSyncStatus.TRACKING
     finally:
         session.close()
@@ -248,13 +257,57 @@ def test_follower_session_loss_timeout_holds_runtime():
 
         accepted_ns = session._sync.last_command_ns  # noqa: SLF001
         assert accepted_ns is not None
-        assert session.update(now_ns=accepted_ns + 500_000_001) == FollowerSyncStatus.LOST
+        timeout_ns = accepted_ns + 500_000_001
+        assert session.update(now_ns=timeout_ns) == FollowerSyncStatus.LOST
+        assert session.runtime.diagnostics().safety.state == RuntimeSafetyState.READY
+
+        assert session.step_motion(now_ns=timeout_ns)
+        assert session.runtime.diagnostics().safety.state == RuntimeSafetyState.ACTIVE
+        assert session.step_motion(now_ns=timeout_ns + 100_000_001)
         assert session.runtime.diagnostics().safety.state == RuntimeSafetyState.HOLD
     finally:
         session.close()
 
 
-def test_follower_recovers_a_brief_motion_hold_from_the_next_valid_arm_frame():
+def test_follower_session_loss_generates_a_measured_braking_target():
+    session = _session()
+    session.connect()
+    try:
+        _read_until_available(session)
+        session.set_mode(LeaderSyncMode.SYNC_REQUEST)
+        session.set_mode(LeaderSyncMode.TRACKING)
+        assert session.write_arm(
+            ("joint_1",),
+            (1.0,),
+            now_ns=time.monotonic_ns(),
+        )
+        session._latest_state = RobotState(  # noqa: SLF001
+            {
+                "single": JointState(
+                    ("joint_1",),
+                    (0.2,),
+                    (0.6,),
+                    (0.0,),
+                    1,
+                    1,
+                )
+            },
+            {},
+        )
+        accepted_ns = session._sync.last_command_ns  # noqa: SLF001
+        assert accepted_ns is not None
+
+        session.update(now_ns=accepted_ns + 500_000_001)
+
+        braking_target = session._motion_targets["single"]  # noqa: SLF001
+        expected_distance = 0.6**2 / (2.0 * 12.0)
+        assert braking_target.positions[0] == pytest.approx(0.2 + expected_distance)
+        assert session.runtime.diagnostics().safety.state != RuntimeSafetyState.HOLD
+    finally:
+        session.close()
+
+
+def test_follower_local_cycle_bridges_a_brief_network_gap_without_hardware_hold():
     session = _session(motion_timeout_ns=30_000_000)
     session.connect()
     try:
@@ -268,24 +321,122 @@ def test_follower_recovers_a_brief_motion_hold_from_the_next_valid_arm_frame():
         )
 
         actor = session.runtime._actors["arm"]  # noqa: SLF001
-        deadline = time.monotonic() + 1.0
-        while not actor.motion_watchdog_tripped:
-            if time.monotonic() >= deadline:
-                pytest.fail("actor motion watchdog did not hold before session loss")
-            time.sleep(0.001)
+        # No additional network command arrives for more than the 30 ms actuator
+        # watchdog, but the follower-local 100 Hz loop keeps converging to the latest
+        # target and therefore remains continuously ACTIVE.
+        deadline = time.monotonic() + 0.12
+        while time.monotonic() < deadline:
+            session.read(now_ns=time.monotonic_ns())
+            time.sleep(0.005)
 
-        # The actor has already held hardware, while RobotRuntime has not necessarily
-        # observed that asynchronous transition. The next valid frame performs both
-        # synchronization and recovery before publishing its new generation.
+        assert not actor.motion_watchdog_tripped
+        assert session.runtime.diagnostics().safety.state == RuntimeSafetyState.ACTIVE
         assert session.status == FollowerSyncStatus.TRACKING
         assert session.write_arm(
             ("joint_1",),
             (0.2,),
             now_ns=time.monotonic_ns(),
         )
+        session.read(now_ns=time.monotonic_ns())
         assert session.runtime.diagnostics().safety.state == RuntimeSafetyState.ACTIVE
         assert not actor.motion_watchdog_tripped
         assert session.status == FollowerSyncStatus.TRACKING
+    finally:
+        session.close()
+
+
+def test_late_network_frame_cannot_recover_a_stalled_local_motion_cycle():
+    session = _session(motion_timeout_ns=30_000_000)
+    session.connect()
+    try:
+        _read_until_available(session)
+        session.set_mode(LeaderSyncMode.SYNC_REQUEST)
+        session.set_mode(LeaderSyncMode.TRACKING)
+        assert session.write_arm(
+            ("joint_1",),
+            (0.1,),
+            now_ns=time.monotonic_ns(),
+        )
+        session.read(now_ns=time.monotonic_ns())
+
+        actor = session.runtime._actors["arm"]  # noqa: SLF001
+        deadline = time.monotonic() + 1.0
+        while not actor.motion_watchdog_tripped:
+            if time.monotonic() >= deadline:
+                pytest.fail("actor motion watchdog did not detect the stalled local loop")
+            time.sleep(0.001)
+
+        # A late packet may replace the in-memory target, but the next local step sees
+        # the actor generation fence and closes the synchronization cycle instead of
+        # performing the old automatic HOLD-to-READY transition.
+        assert session.write_arm(
+            ("joint_1",),
+            (0.2,),
+            now_ns=time.monotonic_ns(),
+        )
+        with pytest.raises(RuntimeError, match="cannot move while hold"):
+            session.read(now_ns=time.monotonic_ns())
+
+        assert session.status == FollowerSyncStatus.HOLD
+        assert session.runtime.diagnostics().safety.state == RuntimeSafetyState.HOLD
+        assert actor.motion_watchdog_tripped
+    finally:
+        session.close()
+
+
+def test_independent_motion_loop_survives_state_publisher_stall():
+    session = _session(
+        motion_timeout_ns=30_000_000,
+        motion_cycle_hz=100.0,
+    )
+    session.connect()
+    try:
+        _read_until_available(session)
+        session.set_mode(LeaderSyncMode.SYNC_REQUEST)
+        session.set_mode(LeaderSyncMode.TRACKING)
+        assert session.write_arm(
+            ("joint_1",),
+            (0.1,),
+            now_ns=time.monotonic_ns(),
+        )
+        deadline = time.monotonic() + 1.0
+        while session.runtime.diagnostics().safety.state != RuntimeSafetyState.ACTIVE:
+            if time.monotonic() >= deadline:
+                pytest.fail("local motion loop did not submit the accepted target")
+            time.sleep(0.001)
+
+        # No transport-facing read or publish occurs for four watchdog periods.
+        time.sleep(0.12)
+
+        actor = session.runtime._actors["arm"]  # noqa: SLF001
+        assert not actor.motion_watchdog_tripped
+        assert session.runtime.diagnostics().safety.state == RuntimeSafetyState.ACTIVE
+    finally:
+        session.close()
+
+
+def test_local_motion_submission_failure_enters_hold_immediately(monkeypatch):
+    session = _session()
+    session.connect()
+    try:
+        _read_until_available(session)
+        session.set_mode(LeaderSyncMode.SYNC_REQUEST)
+        session.set_mode(LeaderSyncMode.TRACKING)
+        assert session.write_arm(
+            ("joint_1",),
+            (0.1,),
+            now_ns=time.monotonic_ns(),
+        )
+
+        def reject_motion(_command):
+            raise ValueError("test local command failure")
+
+        monkeypatch.setattr(session.runtime, "write", reject_motion)
+        with pytest.raises(ValueError, match="test local command failure"):
+            session.step_motion(now_ns=time.monotonic_ns())
+
+        assert session.status == FollowerSyncStatus.HOLD
+        assert session.runtime.diagnostics().safety.state == RuntimeSafetyState.HOLD
     finally:
         session.close()
 
@@ -360,10 +511,9 @@ def test_end_effector_commands_cannot_extend_the_arm_heartbeat():
             group_name,
             ("joint_5",),
             (0.6,),
-            now_ns=accepted_ns + 100_000_001,
+            now_ns=accepted_ns + 500_000_001,
         )
-        assert session.status == FollowerSyncStatus.TRACKING
-        assert session.update(now_ns=accepted_ns + 500_000_001) == FollowerSyncStatus.LOST
+        assert session.status == FollowerSyncStatus.LOST
     finally:
         session.close()
 
@@ -402,6 +552,20 @@ def test_follower_session_uses_actor_motion_timeout_and_separate_session_timeout
     )
 
     assert session.runtime.command_timeout_ns == 100_000_000
+
+
+def test_physical_follower_arm_targets_carry_bounded_streaming_profiles():
+    session = _session(backend=Backend.PHYSICAL)
+
+    commands = session._commands_for_groups(  # noqa: SLF001
+        session._arm_names,  # noqa: SLF001
+        session.arm_names,
+        (0.0,),
+        now_ns=1,
+    )
+
+    assert commands["single"].velocity_limits.tolist() == [4.0]
+    assert commands["single"].acceleration_limits.tolist() == [12.0]
 
 
 def test_follower_session_reports_latched_runtime_fault():

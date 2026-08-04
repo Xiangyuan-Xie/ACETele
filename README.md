@@ -266,9 +266,12 @@ Follower 完成完整状态读取后，会无条件以实测位置作为目标�
 
 同步时平行夹爪保持无扭矩并作为安全扳机。收到健康的 Follower 状态后，Leader 机械臂自动
 带电并对齐 Follower；达到同步姿态后，将夹爪释放到归一化位置 `0.25` 以下再夹到 `0.75`
-以上，即进入 `TRACKING`，Leader 机械臂扭矩随即释放。跟踪失联或自动控制异常只进入
-`HOLD`，不会自动重新锁住 Leader；恢复时仍需一次完整夹爪手势授权新的同步周期。旧触发
-状态不会跨同步周期复用。
+以上，即进入 `TRACKING`。内置 HLS Leader 随后从位置模式切换到 Torque 模式，并根据实测关节状态持续
+发送 RNEA 重力/科里奥利补偿。配置的冗余 Rest 姿态只投影到完整 `6xN` TCP Jacobian 的
+零空间；当前 4-DOF Leader 的 Jacobian 列满秩，因此该项严格为零，不会把机械臂拉回 Home。
+跟踪失联进入 `HOLD` 后停止远端命令，但继续本地重力辅助；恢复时仍需一次完整夹爪手势授权
+新的同步周期。旧触发状态不会跨同步周期复用。显式 STOP、模型故障或本地状态失效会先发送
+零电流，再禁用扭矩并退出 Torque 模式。
 没有平行夹爪的 Leader 不会自动带电或开始跟踪，必须显式调用
 `/ace_leader/authorize_alignment` 和 `/ace_leader/start_tracking` 两个 `std_srvs/Trigger`
 service。显式急停入口为 `/ace_leader/emergency_stop` 和 `/ace_follower/emergency_stop`。
@@ -352,6 +355,9 @@ RS485 型号不会套用近似型号常数。
 | `buses.<name>.allow_unverified_identity` | 明确接受协议无法读取产品型号；仅在人工核对硬件后设置 |
 | `arms.<name>.bus` | 机械臂所属总线 |
 | `arms.<name>.tool_frame` | 末端位姿控制使用的 URDF TCP link；`ee_pose` 模式必须配置 |
+| `arms.<name>.control.gravity_compensation` | 使用 Torque 模式发送 RNEA 重力/科里奥利补偿 |
+| `arms.<name>.control.redundancy_posture` | 在完整 6D TCP Jacobian 零空间内启用 Rest 姿态 PD |
+| `arms.<name>.control.rest_posture_rad` | 显式 Rest 姿态；与机械 Home/标定值无关 |
 | `arms.<name>.joints` | 按 URDF 顺序声明的关节列表 |
 | `joint.name` | URDF/ROS 2 运动学名称 |
 | `joint.servo_id` | 厂商总线地址 |
@@ -509,7 +515,9 @@ Follower UDP `8888`。Follower 只聚合 RobotSpec 中的
 两侧必须使用相同的 `--teleop-mode joint|ee_pose`。位姿模式的
 `--translation-scale` 和 `--rotation-scale` 由 Follower 应用。每次进程启动都会生成新的
 session ID；断线、乱序帧或对端重启都会清除旧命令并要求重新同步。只有合法 arm 命令会刷新
-本机 100 ms 心跳，因此损坏或伪造帧不能阻止进入 `HOLD`。
+500 ms 远端会话租约，因此损坏或伪造帧不能阻止进入 `HOLD`。Follower 的本地 100 Hz
+循环会在租约内持续提交最后一个合法目标，让短时网络抖动自然收敛而不切换舵机模式；独立的
+100 ms 总线看门狗只监控本地控制循环是否仍在运行。
 
 明文模式仅适用于可信有线局域网。非可信网络应在两台主机分别生成证书，并为每一侧配置
 “本机私钥 + 对端公钥”：

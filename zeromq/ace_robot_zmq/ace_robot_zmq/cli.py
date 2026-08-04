@@ -54,7 +54,7 @@ def _parser() -> argparse.ArgumentParser:
         role_parser.add_argument("--command-port", type=int, default=5555)
         role_parser.add_argument("--state-port", type=int, default=5556)
         role_parser.add_argument("--rate", type=float, default=100.0)
-        role_parser.add_argument("--heartbeat-timeout", type=float, default=0.1)
+        role_parser.add_argument("--heartbeat-timeout", type=float, default=0.5)
         role_parser.add_argument(
             "--teleop-mode",
             choices=tuple(mode.value for mode in TeleopMode),

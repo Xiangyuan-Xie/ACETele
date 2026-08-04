@@ -135,8 +135,8 @@ class FashionStarAdapter(BusAdapter):
             self.validate_mock_command(group, command)
             return
         if (
-            command.acceleration_limits is not None
-            or command.effort_limits is not None
+            command.effort_limits is not None
+            or (command.acceleration_limits is not None and not group.is_arm)
             or (command.velocity_limits is not None and not group.is_arm)
         ):
             raise ValueError(

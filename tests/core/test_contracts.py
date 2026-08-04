@@ -3,7 +3,14 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from acetele.core import EndEffectorPose, JointCommand, JointState, JointUnit, SensorState
+from acetele.core import (
+    EndEffectorPose,
+    JointCommand,
+    JointEffortCommand,
+    JointState,
+    JointUnit,
+    SensorState,
+)
 from acetele.specification import Backend
 
 
@@ -53,6 +60,18 @@ def test_joint_command_rejects_invalid_deadline_and_limits():
             0,
             effort_limits=[-0.1],
         )
+
+
+def test_joint_effort_command_owns_nm_vector_and_rejects_nonfinite_values():
+    source = np.array([0.1, -0.2])
+    command = JointEffortCommand(("joint_1", "joint_2"), source, 1, 2, 0)
+    source[0] = 9.0
+
+    assert command.efforts_nm.tolist() == [0.1, -0.2]
+    with pytest.raises(ValueError):
+        command.efforts_nm[0] = 0.0
+    with pytest.raises(ValueError, match="finite"):
+        JointEffortCommand(("joint_1",), [float("nan")], 1, 2, 0)
 
 
 def test_joint_contract_rejects_duplicate_names_and_wrong_unit():

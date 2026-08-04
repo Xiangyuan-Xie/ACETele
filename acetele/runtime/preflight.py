@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Mapping, Optional
+from typing import Mapping, Optional
 
 from acetele.core import JointUnit
 from acetele.hardware.buses import BusBudget
@@ -14,7 +15,7 @@ from acetele.hardware.devices.adapter import (
     AdapterRegistry,
     default_adapter_registry,
 )
-from acetele.model import ArmModelMetadata, build_reduced_pinocchio_model, load_urdf_model
+from acetele.model import ArmDynamics, ArmModelMetadata, load_urdf_model
 from acetele.specification import (
     Backend,
     BusSpec,
@@ -51,6 +52,7 @@ class BusPreflight:
     supports_verified_disable: bool
     supports_verified_identity: bool
     supports_acceleration_limits: bool
+    supports_effort_control: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -80,12 +82,12 @@ class RuntimePlan:
     preflight: RuntimePreflight
     groups: Mapping[str, JointGroupPlan]
     adapters: Mapping[str, AdapterPlan]
-    pin_models: Mapping[str, Any]
+    dynamics: Mapping[str, ArmDynamics]
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "groups", MappingProxyType(dict(self.groups)))
         object.__setattr__(self, "adapters", MappingProxyType(dict(self.adapters)))
-        object.__setattr__(self, "pin_models", MappingProxyType(dict(self.pin_models)))
+        object.__setattr__(self, "dynamics", MappingProxyType(dict(self.dynamics)))
 
 
 def build_runtime_plan(
@@ -101,7 +103,7 @@ def build_runtime_plan(
     bus_specs = {bus.name: bus for bus in spec.buses}
     groups: dict[str, JointGroupPlan] = {}
     arm_metadata: dict[str, ArmModelMetadata] = {}
-    pin_models: dict[str, Any] = {}
+    dynamics: dict[str, ArmDynamics] = {}
 
     for arm in spec.arms:
         arm_names = tuple(joint.name for joint in arm.joints)
@@ -120,8 +122,25 @@ def build_runtime_plan(
             require_limits=False,
             require_angular=False,
         )
-        if arm.control.gravity_position:
-            pin_models[arm.name] = build_reduced_pinocchio_model(urdf_path, arm_names)
+        effort_control = (
+            arm.control.gravity_compensation or arm.control.redundancy_posture
+        )
+        if effort_control:
+            if arm.tool_frame is None:
+                raise ValueError(
+                    f"arm '{arm.name}' requires tool_frame for effort control"
+                )
+            rest = arm.control.rest_posture_rad
+            if rest is not None and (
+                any(value < lower for value, lower in zip(rest, metadata.lower_limits))
+                or any(value > upper for value, upper in zip(rest, metadata.upper_limits))
+            ):
+                raise ValueError(f"arm '{arm.name}' rest posture exceeds URDF limits")
+            if any(not math.isfinite(value) or value <= 0.0 for value in metadata.effort_limits):
+                raise ValueError(
+                    f"arm '{arm.name}' requires finite positive URDF effort limits"
+                )
+            dynamics[arm.name] = ArmDynamics(urdf_path, arm_names, arm.tool_frame)
         groups[arm.name] = JointGroupPlan(
             arm.name,
             arm.bus,
@@ -192,13 +211,26 @@ def build_runtime_plan(
             supports_verified_disable=plan.supports_verified_disable,
             supports_verified_identity=plan.supports_verified_identity,
             supports_acceleration_limits=plan.supports_acceleration_limits,
+            supports_effort_control=plan.supports_effort_control,
         )
+
+    for arm in spec.arms:
+        if not (
+            arm.control.gravity_compensation or arm.control.redundancy_posture
+        ):
+            continue
+        adapter_plan = adapter_plans[arm.bus]
+        if not adapter_plan.supports_effort_control:
+            raise ValueError(
+                f"arm '{arm.name}' enables effort control, but bus "
+                f"'{arm.bus}' does not support calibrated torque mode"
+            )
 
     return RuntimePlan(
         RuntimePreflight(urdf_path, arm_metadata, public_buses),
         groups,
         adapter_plans,
-        pin_models,
+        dynamics,
     )
 
 

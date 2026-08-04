@@ -15,6 +15,7 @@ from acetele.specification import (
     Backend,
     BusSpec,
     BusType,
+    ControlSpec,
     JointSpec,
     ParallelGripperSpec,
     RobotSpec,
@@ -110,6 +111,74 @@ def test_leader_session_aligns_then_releases_torque_for_tracking():
 
         session.start_tracking()
         assert session.mode == LeaderSyncMode.TRACKING
+        assert (
+            session.runtime.diagnostics().safety.state
+            == RuntimeSafetyState.SAFE_DISABLED
+        )
+    finally:
+        session.close()
+
+
+def test_effort_assisted_leader_keeps_local_control_in_network_hold():
+    joints = tuple(
+        JointSpec(f"joint_{index}", index - 1, "HL3915", 1, 0.0)
+        for index in range(1, 5)
+    )
+    spec = RobotSpec(
+        "ace_leader",
+        (
+            BusSpec(
+                "arm",
+                BusType.FEETECH_PACKET,
+                "mock://effort-leader",
+                1_000_000,
+                100.0,
+                physical_layer="ttl",
+                family="hls",
+            ),
+        ),
+        (
+            ArmSpec(
+                "single",
+                "arm",
+                joints,
+                control=ControlSpec(
+                    gravity_compensation=True,
+                    redundancy_posture=True,
+                    rest_posture_rad=(0.0, 0.0, 0.0, 0.0),
+                ),
+                tool_frame="link_5",
+            ),
+        ),
+        backend=Backend.MOCK,
+        urdf_path=str(urdf_path),
+    )
+    session = LeaderTeleopSession(RobotRuntime(spec))
+    session.connect()
+    try:
+        _wait_for_state(session)
+        now_ns = time.monotonic_ns()
+        session.observe_follower_state(session.arm_names, (0.0,) * 4, now_ns=now_ns)
+        session.observe_follower_status(FollowerSyncStatus.READY, now_ns=now_ns)
+        _explicitly_authorize_and_align(session, now_ns)
+        session.start_tracking()
+
+        assert session.effort_assist_active
+        assert session.effort_diagnostics()["single"].nullity == 0
+        protocol = session.runtime._actors["arm"]._protocol  # noqa: SLF001
+        assert protocol._effort_mode_ids == {0, 1, 2, 3}  # noqa: SLF001
+
+        session.observe_follower_status(
+            FollowerSyncStatus.LOST,
+            now_ns=now_ns + 300_000_000,
+        )
+        session.step(now_ns=now_ns + 300_000_000)
+        assert session.mode == LeaderSyncMode.HOLD
+        assert session.effort_assist_active
+
+        session.request_sync()
+        assert not session.effort_assist_active
+        assert protocol._effort_mode_ids == set()  # noqa: SLF001
         assert (
             session.runtime.diagnostics().safety.state
             == RuntimeSafetyState.SAFE_DISABLED
@@ -229,12 +298,12 @@ def test_triggerless_leader_never_powers_alignment_without_explicit_authorizatio
 
         assert session.mode == LeaderSyncMode.SYNC_REQUEST
         assert not session.alignment_authorized
-        assert session.torque_released
+        assert not session.effort_assist_active
     finally:
         session.close()
 
 
-def test_leader_hold_retries_an_unconfirmed_torque_release(monkeypatch):
+def test_passive_leader_hold_retries_an_unconfirmed_torque_release(monkeypatch):
     session = _session()
     session.connect()
     try:
@@ -251,7 +320,6 @@ def test_leader_hold_retries_an_unconfirmed_torque_release(monkeypatch):
         with pytest.raises(RuntimeError, match="disable failed"):
             session.hold()
         assert session.mode == LeaderSyncMode.HOLD
-        assert not session.torque_released
         with pytest.raises(RuntimeError, match="disable failed"):
             session.hold()
         assert attempts == [False, False]

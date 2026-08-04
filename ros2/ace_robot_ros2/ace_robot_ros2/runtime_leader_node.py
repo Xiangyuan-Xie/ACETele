@@ -297,13 +297,13 @@ class RuntimeLeaderNode(Node):
         if current_mode == LeaderSyncMode.SYNC_REQUEST:
             if self._session.follower_status == FollowerSyncStatus.FAULT:
                 self.get_logger().error(
-                    "Follower reported a hardware fault; leader torque remains released "
+                    "Follower reported a hardware fault; remote commands are stopped "
                     "while waiting for a healthy follower."
                 )
                 return
             if self._session.follower_status == FollowerSyncStatus.LOST:
                 self.get_logger().warn(
-                    "Follower command heartbeat was lost; leader torque remains released "
+                    "Follower command heartbeat was lost; remote commands remain stopped "
                     "until synchronization can restart."
                 )
                 return
@@ -324,23 +324,28 @@ class RuntimeLeaderNode(Node):
             else:
                 message = "Leader aligned; waiting for an explicit start command."
         elif current_mode == LeaderSyncMode.TRACKING:
-            message = "Teleoperation started; leader arm torque is released."
+            message = (
+                "Teleoperation started; local gravity and posture assistance is active."
+                if self._session.effort_assist_active
+                else "Teleoperation started; leader arm is passive."
+            )
         elif current_mode == LeaderSyncMode.HOLD:
-            if not self._session.torque_released:
-                self.get_logger().error(
-                    "Teleoperation entered HOLD, but leader torque release could not be "
-                    "confirmed. Use the hardware emergency stop before handling the arm."
-                )
-                return
             if self._session.follower_status == FollowerSyncStatus.LOST:
                 self.get_logger().warn(
                     "Follower reported a sustained arm-command timeout and is holding "
-                    "position; fresh synchronization is required."
+                    "position; Leader assistance remains local and fresh synchronization "
+                    "is required."
                 )
                 return
             message = (
-                "Teleoperation is holding the follower; leader torque is released. "
+                "Teleoperation is holding the follower; local Leader assistance remains "
+                "active. "
                 "Release then close the gripper to request a fresh synchronization."
+                if self._session.effort_assist_active
+                else (
+                    "Teleoperation is holding the follower; the Leader arm is passive. "
+                    "Release then close the gripper to request a fresh synchronization."
+                )
             )
         elif current_mode == LeaderSyncMode.STOP:
             self.get_logger().error("Teleoperation stopped by a safety fault.")

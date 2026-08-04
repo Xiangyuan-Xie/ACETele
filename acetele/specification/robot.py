@@ -128,10 +128,10 @@ class ArmSpec:
             raise ValueError(f"arm '{self.name}' servo IDs must be unique")
         if self.tool_frame is not None:
             _name(self.tool_frame, field_name=f"arm '{self.name}' tool_frame")
-        compliance = self.control.gravity_compliance_rad_per_nm
-        if compliance is not None and len(compliance) != len(joints):
+        rest_posture = self.control.rest_posture_rad
+        if rest_posture is not None and len(rest_posture) != len(joints):
             raise ValueError(
-                f"arm '{self.name}' gravity compliance must match its joint count"
+                f"arm '{self.name}' rest posture must match its joint count"
             )
         object.__setattr__(self, "joints", joints)
 

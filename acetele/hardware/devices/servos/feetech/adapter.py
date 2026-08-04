@@ -8,7 +8,7 @@ from typing import Any, Mapping, Optional, Sequence
 
 import numpy as np
 
-from acetele.core import JointCommand
+from acetele.core import JointCommand, JointEffortCommand
 from acetele.estimation import StateEstimatorTuning
 from acetele.hardware.buses import (
     BusBudget,
@@ -25,6 +25,7 @@ from acetele.hardware.devices.adapter import (
     GroupDescription,
     HardwareFault,
     TransportFactory,
+    effort_envelope,
     motion_envelope,
 )
 from acetele.hardware.devices.servos.feetech.modbus import (
@@ -34,6 +35,7 @@ from acetele.hardware.devices.servos.feetech.modbus import (
 )
 from acetele.hardware.devices.servos.feetech.packet import (
     FeetechPacketBusProtocol,
+    FeetechPacketEffort,
     FeetechPacketFastState,
     FeetechPacketMotion,
     nearest_multiturn_position_target,
@@ -42,6 +44,7 @@ from acetele.hardware.devices.servos.feetech.profile import (
     feetech_modbus_profiles,
     feetech_packet_profiles,
 )
+from acetele.hardware.simulators import MockEffort
 from acetele.specification import Backend, BusSpec, BusType
 
 
@@ -96,6 +99,22 @@ class FeetechAdapter(BusAdapter):
             or bus.type == BusType.FEETECH_MODBUS_RTU
             or len(expected) == len(profiles)
         )
+        effort_limits_nm = {
+            device_id: (
+                max(
+                    profile.default_goal_torque_raw * profile.current_unit_a
+                    - profile.no_load_current_a,
+                    0.0,
+                )
+                * profile.torque_constant_kgcm_per_a
+                * 0.0980665
+            )
+            for device_id, profile in profiles.items()
+            if profile.family.value == "hls"
+            and profile.default_goal_torque_raw is not None
+            and profile.torque_constant_kgcm_per_a is not None
+            and profile.no_load_current_a is not None
+        }
         budget = self._budget(bus, len(profiles))
         return AdapterPlan(
             spec=bus,
@@ -113,6 +132,11 @@ class FeetechAdapter(BusAdapter):
             supports_verified_disable=verified_disable,
             supports_verified_identity=verified_identity,
             supports_acceleration_limits=backend == Backend.PHYSICAL,
+            supports_effort_control=(
+                bus.type == BusType.FEETECH_PACKET
+                and len(effort_limits_nm) == len(profiles)
+            ),
+            effort_limits_nm=effort_limits_nm,
         )
 
     def create_protocol(
@@ -231,6 +255,59 @@ class FeetechAdapter(BusAdapter):
             targets.append(motion_envelope(joint.servo_id, payload, command))
         return tuple(targets)
 
+    def validate_effort_command(
+        self,
+        plan: AdapterPlan,
+        group: GroupDescription,
+        command: JointEffortCommand,
+    ) -> None:
+        """Validate a calibrated HLS Torque-mode command without touching hardware."""
+
+        if not plan.supports_effort_control or not group.is_arm:
+            raise ValueError(
+                f"joint group '{group.name}' does not support calibrated effort control"
+            )
+        if plan.backend == Backend.MOCK:
+            return
+        for index, joint in enumerate(group.joints):
+            self._effort_to_raw_current(
+                plan.profiles[joint.servo_id],
+                float(command.efforts_nm[index]),
+                joint.direction,
+            )
+
+    def encode_effort_group(
+        self,
+        plan: AdapterPlan,
+        group: GroupDescription,
+        command: JointEffortCommand,
+    ) -> tuple[MotionEnvelope, ...]:
+        """Convert canonical joint Nm into signed HLS current register targets."""
+
+        self.validate_effort_command(plan, group, command)
+        targets = []
+        for index, joint in enumerate(group.joints):
+            effort_nm = float(command.efforts_nm[index])
+            payload = (
+                MockEffort(effort_nm)
+                if plan.backend == Backend.MOCK
+                else FeetechPacketEffort(
+                    self._effort_to_raw_current(
+                        plan.profiles[joint.servo_id],
+                        effort_nm,
+                        joint.direction,
+                    )
+                )
+            )
+            targets.append(
+                effort_envelope(
+                    joint.servo_id,
+                    payload,
+                    command,
+                )
+            )
+        return tuple(targets)
+
     def estimator_tuning(
         self,
         plan: AdapterPlan,
@@ -327,6 +404,31 @@ class FeetechAdapter(BusAdapter):
                     )
                 targets[joint.servo_id] = raw
         return targets
+
+    @staticmethod
+    def _effort_to_raw_current(profile, effort_nm: float, direction: int) -> int:
+        """Invert the calibrated current-to-joint-torque estimate used in feedback."""
+
+        if not math.isfinite(effort_nm):
+            raise ValueError("FEETECH joint effort must be finite")
+        torque_constant = profile.torque_constant_kgcm_per_a
+        no_load_current = profile.no_load_current_a
+        if torque_constant is None or no_load_current is None:
+            raise ValueError(
+                f"FEETECH profile {profile.model} has no calibrated torque model"
+            )
+        if effort_nm == 0.0:
+            return 0
+        current_magnitude = (
+            abs(effort_nm) / (torque_constant * 0.0980665) + no_load_current
+        )
+        motor_current_a = -direction * math.copysign(current_magnitude, effort_nm)
+        raw = round(motor_current_a / profile.current_unit_a)
+        if not -0x7FFF <= raw <= 0x7FFF:
+            raise ValueError(
+                f"FEETECH effort for {profile.model} exceeds signed-15-bit current range"
+            )
+        return raw
 
     @staticmethod
     def _budget(bus: BusSpec, device_count: int) -> BusBudget:

@@ -10,7 +10,6 @@ from acetele.specification import (
     DexterousHandSpec,
     JointSpec,
     ParallelGripperSpec,
-    PositionControlTuning,
     RobotSpec,
 )
 
@@ -74,9 +73,9 @@ def test_robot_spec_freezes_sequences_and_validates_bus_references():
         RobotSpec("robot", (bus,), (ArmSpec("single", "other", (_joint(),)),))
 
 
-def test_gravity_position_requires_per_joint_compliance():
-    with pytest.raises(ValueError, match="compliance calibration"):
-        ControlSpec(gravity_position=True)
+def test_redundancy_posture_requires_explicit_rest_posture():
+    with pytest.raises(ValueError, match="requires rest_posture_rad"):
+        ControlSpec(redundancy_posture=True)
 
     with pytest.raises(ValueError, match="match its joint count"):
         ArmSpec(
@@ -84,25 +83,11 @@ def test_gravity_position_requires_per_joint_compliance():
             "arm",
             (_joint(),),
             ControlSpec(
-                gravity_position=True,
-                gravity_compliance_rad_per_nm=(0.01, 0.02),
+                gravity_compensation=True,
+                redundancy_posture=True,
+                rest_posture_rad=(0.0, 0.0),
             ),
         )
-
-
-def test_position_control_tuning_is_validated_as_one_specification():
-    with pytest.raises(ValueError, match="minimum_dt_s"):
-        PositionControlTuning(minimum_dt_s=0.1, maximum_dt_s=0.05)
-    with pytest.raises(ValueError, match="target_stable_threshold_rad"):
-        PositionControlTuning(
-            target_stable_threshold_rad=0.05,
-            target_reset_threshold_rad=0.05,
-        )
-    with pytest.raises(ValueError, match="position_tuning"):
-        ControlSpec(position_tuning={})
-
-    tuning = PositionControlTuning(adaptive_deadband_rad=0.01)
-    assert tuning.adaptive_deadband_rad == 0.01
 
 
 def test_robot_spec_rejects_multiple_actors_for_one_physical_port():

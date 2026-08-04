@@ -200,6 +200,42 @@ class JointCommand:
 
 
 @dataclass(frozen=True)
+class JointEffortCommand:
+    """A bounded-lifetime joint effort target expressed strictly in newton-metres."""
+
+    names: tuple[str, ...]
+    efforts_nm: np.ndarray
+    submitted_at_ns: int
+    deadline_ns: int
+    generation: int
+
+    def __post_init__(self) -> None:
+        names = _names(self.names, field_name="joint effort command names")
+        object.__setattr__(self, "names", names)
+        object.__setattr__(
+            self,
+            "efforts_nm",
+            _readonly_vector(
+                self.efforts_nm,
+                field_name="joint effort command efforts_nm",
+                length=len(names),
+            ),
+        )
+        if type(self.submitted_at_ns) is not int or self.submitted_at_ns < 0:
+            raise ValueError(
+                "joint effort command submitted_at_ns must be a non-negative integer"
+            )
+        if type(self.deadline_ns) is not int or self.deadline_ns < self.submitted_at_ns:
+            raise ValueError(
+                "joint effort command deadline_ns must not precede submitted_at_ns"
+            )
+        if type(self.generation) is not int or self.generation < 0:
+            raise ValueError(
+                "joint effort command generation must be a non-negative integer"
+            )
+
+
+@dataclass(frozen=True)
 class SensorState:
     """Immutable vendor-neutral snapshot of non-joint telemetry."""
 
@@ -258,12 +294,31 @@ class RobotCommand:
         )
 
 
+@dataclass(frozen=True)
+class RobotEffortCommand:
+    """Joint-effort groups staged as one logical robot update."""
+
+    joints: Mapping[str, JointEffortCommand]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "joints",
+            _immutable_mapping(
+                self.joints,
+                field_name="robot effort command joints",
+            ),
+        )
+
+
 __all__ = [
     "EndEffectorPose",
     "JointCommand",
+    "JointEffortCommand",
     "JointState",
     "JointUnit",
     "RobotCommand",
+    "RobotEffortCommand",
     "RobotState",
     "SensorState",
 ]

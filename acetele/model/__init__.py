@@ -1,3 +1,4 @@
+from acetele.model.dynamics import ArmDynamics
 from acetele.model.joint_angle import unwrap_near, wrap_to_pi
 from acetele.model.kinematics import ArmKinematics
 from acetele.model.urdf import (
@@ -10,6 +11,7 @@ from acetele.model.urdf import (
 
 __all__ = [
     "ArmKinematics",
+    "ArmDynamics",
     "ArmModelMetadata",
     "UrdfJoint",
     "UrdfModel",

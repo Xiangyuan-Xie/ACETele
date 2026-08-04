@@ -4,9 +4,16 @@ from acetele.control.cartesian import (
     CartesianTeleopDiagnostics,
     CartesianTeleopTuning,
 )
+from acetele.control.effort import (
+    EffortControlDiagnostics,
+    EffortControlResult,
+    EffortControlTuning,
+    LeaderEffortController,
+)
 from acetele.control.position import (
     PositionControlDiagnostics,
     PositionControlPipeline,
+    StreamingPositionTuning,
 )
 
 __all__ = [
@@ -14,6 +21,11 @@ __all__ = [
     "CartesianTeleopController",
     "CartesianTeleopDiagnostics",
     "CartesianTeleopTuning",
+    "EffortControlDiagnostics",
+    "EffortControlResult",
+    "EffortControlTuning",
+    "LeaderEffortController",
     "PositionControlDiagnostics",
     "PositionControlPipeline",
+    "StreamingPositionTuning",
 ]

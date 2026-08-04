@@ -2,7 +2,7 @@
 
 from acetele.specification.backend import Backend
 from acetele.specification.bus import BusSpec, BusType, DirectionControl
-from acetele.specification.control import ControlSpec, PositionControlTuning
+from acetele.specification.control import ControlSpec
 from acetele.specification.robot import (
     ArmSpec,
     DexterousHandSpec,
@@ -23,6 +23,5 @@ __all__ = [
     "EndEffectorSpec",
     "JointSpec",
     "ParallelGripperSpec",
-    "PositionControlTuning",
     "RobotSpec",
 ]

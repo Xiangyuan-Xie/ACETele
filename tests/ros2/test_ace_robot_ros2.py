@@ -115,21 +115,6 @@ def test_follower_separates_motion_and_session_timeout_defaults():
     assert 'declare_parameter("session_timeout", 0.5)' in source
 
 
-def test_follower_adaptive_diagnostics_are_rate_limited():
-    parameters = (
-        project_root
-        / "ros2/ace_robot_ros2/config/ace_robot_params.yaml"
-    ).read_text(encoding="utf-8")
-    source = (
-        project_root
-        / "ros2/ace_robot_ros2/ace_robot_ros2/runtime_follower_node.py"
-    ).read_text(encoding="utf-8")
-
-    assert "adaptive_diagnostic_period: 2.0" in parameters
-    assert 'declare_parameter("adaptive_diagnostic_period", 2.0)' in source
-    assert "adaptive_saturated" in source
-
-
 def test_follower_always_holds_measured_position_on_start():
     parameters = (
         project_root

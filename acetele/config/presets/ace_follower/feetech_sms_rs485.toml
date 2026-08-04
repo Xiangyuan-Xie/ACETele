@@ -44,6 +44,3 @@ servo_id = 4
 servo_model = "SM8512BL"
 direction = -1
 home_position_rad = 0.0
-
-[arms.single.control]
-adaptive_position = true

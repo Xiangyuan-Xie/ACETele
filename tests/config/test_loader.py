@@ -90,9 +90,12 @@ def test_packaged_hls_ttl_configs_preserve_physical_topology():
         "HL3915",
     )
     assert tuple(joint.direction for joint in leader.arms[0].joints) == (1, -1, -1, -1)
-    assert leader.arms[0].control.adaptive_position
     assert leader.arms[0].tool_frame == "link_5"
-    assert not leader.arms[0].control.gravity_position
+    assert leader.arms[0].control.gravity_compensation
+    assert leader.arms[0].control.redundancy_posture
+    assert leader.arms[0].control.rest_posture_rad == (0.0, 0.0, 0.0, 0.0)
+    assert not follower.arms[0].control.gravity_compensation
+    assert not follower.arms[0].control.redundancy_posture
     assert isinstance(leader.arms[0].end_effector, ParallelGripperSpec)
     assert leader.arms[0].end_effector.travel_range_rad == pytest.approx(0.7853981633974483)
 
@@ -149,7 +152,7 @@ joint_ids = [1]
     ("line", "path"),
     (
         ("max_utilisation = 0.5", "buses.arm"),
-        ("adaptive_compensaton = true", "arms.single.control"),
+        ("adaptive_position = true", "arms.single.control"),
     ),
 )
 def test_rejects_unknown_fields_in_strict_tables(tmp_path, line, path):

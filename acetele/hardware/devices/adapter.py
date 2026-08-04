@@ -10,13 +10,13 @@ from __future__ import annotations
 
 import time
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from functools import lru_cache
 from types import MappingProxyType
 from typing import Any, Callable, Mapping, Optional, Protocol, Sequence
 
-from acetele.core import JointCommand, JointUnit
+from acetele.core import JointCommand, JointEffortCommand, JointUnit
 from acetele.estimation import StateEstimatorTuning
 from acetele.hardware.buses import BusBudget, BusProtocol, MotionEnvelope
 from acetele.hardware.simulators import (
@@ -106,6 +106,8 @@ class AdapterPlan:
     supports_verified_disable: bool
     supports_verified_identity: bool
     supports_acceleration_limits: bool
+    supports_effort_control: bool = False
+    effort_limits_nm: Mapping[int, float] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "groups", tuple(self.groups))
@@ -114,6 +116,7 @@ class AdapterPlan:
             "expected_models",
             "firmware_versions",
             "device_models",
+            "effort_limits_nm",
         ):
             object.__setattr__(
                 self,
@@ -183,6 +186,30 @@ class BusAdapter(ABC):
         position_references: Mapping[int, float],
     ) -> tuple[MotionEnvelope, ...]:
         """Encode a validated canonical command into actor envelopes."""
+
+    def validate_effort_command(
+        self,
+        plan: AdapterPlan,
+        group: GroupDescription,
+        command: JointEffortCommand,
+    ) -> None:
+        """Reject effort control unless an exact adapter explicitly implements it."""
+
+        raise ValueError(
+            f"bus '{plan.spec.name}' does not support calibrated joint effort control"
+        )
+
+    def encode_effort_group(
+        self,
+        plan: AdapterPlan,
+        group: GroupDescription,
+        command: JointEffortCommand,
+    ) -> tuple[MotionEnvelope, ...]:
+        """Reject effort encoding unless an exact adapter explicitly implements it."""
+
+        raise ValueError(
+            f"bus '{plan.spec.name}' does not support calibrated joint effort control"
+        )
 
     def estimator_tuning(
         self,
@@ -329,7 +356,9 @@ class BusAdapter(ABC):
         """Apply the mock protocol's intentionally small capability surface."""
 
         has_velocity = command.velocity_limits is not None
-        if command.acceleration_limits is not None or command.effort_limits is not None:
+        if command.effort_limits is not None or (
+            command.acceleration_limits is not None and not group.is_arm
+        ):
             raise ValueError(
                 f"joint group '{group.name}' contains limits unsupported by its mock device"
             )
@@ -392,6 +421,23 @@ def motion_envelope(
     )
 
 
+def effort_envelope(
+    device_id: int,
+    payload: Any,
+    command: JointEffortCommand,
+) -> MotionEnvelope:
+    """Create an effort mailbox envelope before attaching the actor generation."""
+
+    return MotionEnvelope(
+        ("effort", device_id),
+        device_id,
+        payload,
+        command.submitted_at_ns,
+        command.deadline_ns,
+        0,
+    )
+
+
 __all__ = [
     "AutomaticFaultAction",
     "AdapterPlan",
@@ -402,5 +448,6 @@ __all__ = [
     "GroupDescription",
     "TransportFactory",
     "default_adapter_registry",
+    "effort_envelope",
     "motion_envelope",
 ]

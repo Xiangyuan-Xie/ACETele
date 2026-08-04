@@ -46,10 +46,6 @@ servo_model = "HL3915"
 direction = -1
 home_position_rad = 0.0
 
-[arms.single.control]
-adaptive_position = true
-gravity_position = false
-
 [arms.single.end_effector]
 kind = "parallel_gripper"
 bus = "arm"

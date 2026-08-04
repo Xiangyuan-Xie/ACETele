@@ -150,24 +150,24 @@ class RobotSpecLoader:
         _reject_unknown(
             control_table,
             {
-                "adaptive_position",
-                "gravity_position",
-                "gravity_compliance_rad_per_nm",
+                "gravity_compensation",
+                "redundancy_posture",
+                "rest_posture_rad",
             },
             f"{path}.control",
         )
         control = ControlSpec(
-            adaptive_position=_boolean_value(
-                control_table.get("adaptive_position", False),
-                f"{path}.control.adaptive_position",
+            gravity_compensation=_boolean_value(
+                control_table.get("gravity_compensation", False),
+                f"{path}.control.gravity_compensation",
             ),
-            gravity_position=_boolean_value(
-                control_table.get("gravity_position", False),
-                f"{path}.control.gravity_position",
+            redundancy_posture=_boolean_value(
+                control_table.get("redundancy_posture", False),
+                f"{path}.control.redundancy_posture",
             ),
-            gravity_compliance_rad_per_nm=_optional_real_sequence(
-                control_table.get("gravity_compliance_rad_per_nm"),
-                f"{path}.control.gravity_compliance_rad_per_nm",
+            rest_posture_rad=_optional_real_sequence(
+                control_table.get("rest_posture_rad"),
+                f"{path}.control.rest_posture_rad",
             ),
         )
         end_effector = self._parse_end_effector(values.get("end_effector"), path)

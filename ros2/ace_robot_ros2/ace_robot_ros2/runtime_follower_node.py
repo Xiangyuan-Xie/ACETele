@@ -111,24 +111,18 @@ class RuntimeFollowerNode(Node):
         """Create QoS-separated data/sync interfaces after the runtime is connected."""
 
         self.declare_parameter("publish_rate", 100.0)
-        self.declare_parameter("adaptive_diagnostic_period", 2.0)
         self.declare_parameter("command_lifespan", 0.05)
         self.declare_parameter("state_lifespan", 0.5)
         publish_rate = float(self.get_parameter("publish_rate").value)
-        diagnostic_period = float(
-            self.get_parameter("adaptive_diagnostic_period").value
-        )
         command_lifespan = float(self.get_parameter("command_lifespan").value)
         state_lifespan = float(self.get_parameter("state_lifespan").value)
         if not np.isfinite(publish_rate) or publish_rate <= 0.0:
             raise ValueError("publish_rate must be finite and positive")
         if any(
             not np.isfinite(value) or value <= 0.0
-            for value in (diagnostic_period, command_lifespan, state_lifespan)
+            for value in (command_lifespan, state_lifespan)
         ):
             raise ValueError("follower timing parameters must be finite and positive")
-        self._adaptive_diagnostic_period_ns = round(diagnostic_period * 1e9)
-        self._last_adaptive_diagnostic_ns: Optional[int] = None
         self._last_runtime_fault_message: Optional[str] = None
 
         # Commands and state are latest-value streams: retransmitting an old sample adds
@@ -246,10 +240,10 @@ class RuntimeFollowerNode(Node):
         )
 
     def _arm_command_callback(self, message: ROSJointState) -> None:
-        """Validate and submit the arm heartbeat directly to the latest-value mailbox."""
+        """Validate and replace the target consumed by the local motion cycle."""
 
-        # Submit in the subscription callback so no 100 Hz timer phase is added between
-        # ROS reception and the actor's latest-value mailbox.
+        # The callback never clocks hardware. This removes network jitter from the bus
+        # watchdog while preserving latest-value semantics and bounded callback time.
         names = tuple(message.name) or self._session.arm_names
         positions = self._finite_positions(message, len(self._session.arm_names), "arm")
         if positions is None:
@@ -312,7 +306,7 @@ class RuntimeFollowerNode(Node):
         self._publish_sync_status()
 
     def _publish_state(self) -> None:
-        """Publish one coherent runtime sample to local ROS and PX4 interfaces."""
+        """Publish the coherent state snapshot maintained by the local motion loop."""
 
         now = self.get_clock().now()
         try:
@@ -321,7 +315,6 @@ class RuntimeFollowerNode(Node):
             self._report_runtime_error("Follower runtime state failed", exc)
             self._publish_sync_status()
             return
-        self._report_adaptive_diagnostics(state, now.nanoseconds)
         # Flatten arm assemblies in RobotSpec order. End effectors remain on their own
         # topic and never consume slots in the PX4 arm-only message.
         arm_states = tuple(state.joints[arm.name] for arm in self._session.runtime.spec.arms)
@@ -361,44 +354,6 @@ class RuntimeFollowerNode(Node):
         # enum is unchanged and emits DDS traffic only for a real transition.
         self._publish_sync_status()
         self._publish_px4(now, arm_positions, arm_velocities)
-
-    def _report_adaptive_diagnostics(self, state, now_ns: int) -> None:
-        """Log bounded controller evidence without adding work to the bus actor."""
-
-        if (
-            self._last_adaptive_diagnostic_ns is not None
-            and now_ns - self._last_adaptive_diagnostic_ns
-            < self._adaptive_diagnostic_period_ns
-        ):
-            return
-        self._last_adaptive_diagnostic_ns = now_ns
-        runtime_diagnostics = self._session.runtime.diagnostics()
-        for arm in self._session.runtime.spec.arms:
-            if not arm.control.adaptive_position:
-                continue
-            diagnostics = runtime_diagnostics.controls[arm.name]
-            finite_error = np.nan_to_num(
-                diagnostics.position_error_rad,
-                nan=0.0,
-            )
-            if not np.any(
-                np.abs(finite_error)
-                > arm.control.position_tuning.adaptive_deadband_rad
-            ):
-                continue
-            measured = state.joints[arm.name]
-            message = (
-                f"Adaptive position {arm.name}: "
-                f"active={diagnostics.adaptive_active.astype(int).tolist()} "
-                f"saturated={diagnostics.adaptive_saturated.astype(int).tolist()} "
-                f"error_rad={np.round(finite_error, 4).tolist()} "
-                f"offset_rad={np.round(diagnostics.adaptive_offset_rad, 4).tolist()} "
-                f"effort_nm={np.round(measured.efforts, 3).tolist()}"
-            )
-            if np.any(diagnostics.adaptive_saturated):
-                self.get_logger().warn(message)
-            else:
-                self.get_logger().info(message)
 
     def _publish_sync_status(self, *, force: bool = False) -> None:
         """Publish only synchronization transitions instead of mirroring state at 100 Hz."""

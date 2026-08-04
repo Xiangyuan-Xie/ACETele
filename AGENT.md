@@ -18,8 +18,8 @@ compensation, and watchdog behavior can move actuators or alter nonvolatile devi
 acetele/core/         Immutable vendor-neutral state, command, pose, and unit contracts.
 acetele/specification/ Immutable bus, control, joint, and robot specifications.
 acetele/config/       Strict TOML loader, packaged presets, and resource catalog.
-acetele/model/        Packaged URDF assets, metadata validation, and optional Pinocchio reduction.
-acetele/control/      Thread-free position conditioning and Cartesian control algorithms.
+acetele/model/        Packaged URDF assets, metadata validation, and Pinocchio kinematics/dynamics.
+acetele/control/      Thread-free position, Cartesian, gravity, and null-space control algorithms.
 acetele/estimation/   Robust low-latency joint state estimation.
 acetele/hardware/     Bus infrastructure, device adapters, operator inputs, and simulators.
 acetele/runtime/      Preflight, lifecycle, safety state machine, and teleop sessions.
@@ -225,8 +225,10 @@ core ACETele package may not. Keep its direct two-port PUB/SUB protocol versione
 MessagePack frame, latest-value only, and strict about names, units, finite values, session IDs, and
 monotonically increasing sequence numbers. Remote wall-clock timestamps are diagnostic only.
 
-The Follower's local receipt time drives the 100 ms heartbeat. New peer sessions call
-`reset_peer()`, invalidate old generations, enter HOLD, and require synchronization again. CURVE
+The Follower's local receipt time drives a 500 ms remote-session lease. Its periodic local state loop
+reissues the latest valid target and owns the shorter bus watchdog, so ordinary network jitter cannot
+cause HOLD/re-enable cycles. New peer sessions call `reset_peer()`, invalidate old generations, enter
+HOLD, and require synchronization again. CURVE
 mode must authenticate the exact configured peer key; plaintext mode is only for trusted wired
 networks. The ZMQ Follower does not use ROS 2, but it must publish measured arm-only state to PX4 via
 the pinned native Agent/sidecar in `zeromq/ace_robot_zmq/xrce/`; that process lifecycle must complete before hardware

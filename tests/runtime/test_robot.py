@@ -17,6 +17,7 @@ from acetele.specification import (
     Backend,
     BusSpec,
     BusType,
+    ControlSpec,
     DexterousHandSpec,
     JointSpec,
     ParallelGripperSpec,
@@ -100,6 +101,78 @@ def test_runtime_constructor_preflights_without_creating_transport():
     assert not calls
     assert runtime.preflight.buses["arm"].budget.feasible
     assert not runtime.preflight.buses["arm"].supports_verified_disable
+
+
+def test_effort_control_preflight_requires_tool_frame_and_supported_hls_bus():
+    base = _spec()
+    controlled_arm = ArmSpec(
+        "single",
+        "arm",
+        base.arms[0].joints,
+        control=ControlSpec(gravity_compensation=True),
+    )
+    with pytest.raises(ValueError, match="requires tool_frame"):
+        RobotRuntime(
+            RobotSpec(
+                base.model,
+                base.buses,
+                (controlled_arm,),
+                backend=base.backend,
+                urdf_path=base.urdf_path,
+            )
+        )
+
+    sms_bus = BusSpec(
+        "arm",
+        BusType.FEETECH_PACKET,
+        "mock://sms",
+        1_000_000,
+        100.0,
+        physical_layer="rs485",
+        family="sms",
+    )
+    sms_arm = ArmSpec(
+        "single",
+        "arm",
+        (JointSpec("joint_1", 1, "SM8512BL", 1, 0.0),),
+        control=ControlSpec(gravity_compensation=True),
+        tool_frame="link_5",
+    )
+    with pytest.raises(ValueError, match="does not support calibrated torque mode"):
+        RobotRuntime(
+            RobotSpec(
+                "ace_follower",
+                (sms_bus,),
+                (sms_arm,),
+                backend=Backend.MOCK,
+                urdf_path=str(urdf_path),
+            )
+        )
+
+
+def test_effort_control_preflight_rejects_rest_posture_outside_urdf_limits():
+    base = _spec()
+    arm = ArmSpec(
+        "single",
+        "arm",
+        base.arms[0].joints,
+        control=ControlSpec(
+            redundancy_posture=True,
+            rest_posture_rad=(9.0,),
+        ),
+        tool_frame="link_5",
+    )
+
+    with pytest.raises(ValueError, match="rest posture exceeds URDF limits"):
+        RobotRuntime(
+            RobotSpec(
+                base.model,
+                base.buses,
+                (arm,),
+                backend=base.backend,
+                urdf_path=base.urdf_path,
+            )
+        )
 
 
 def test_physical_bus_without_verified_disable_requires_external_estop():

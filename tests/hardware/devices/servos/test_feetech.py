@@ -18,11 +18,13 @@ from acetele.hardware.devices.servos.feetech import (
     FeetechModbusMotion,
     FeetechPacketBusProtocol,
     FeetechPacketCodec,
+    FeetechPacketEffort,
     FeetechPacketMotion,
     FeetechPhysicalLayer,
     feetech_modbus_profiles,
     feetech_packet_profiles,
 )
+from acetele.hardware.devices.servos.feetech.adapter import FeetechAdapter
 
 
 def _status(servo_id: int, parameters: bytes = b"", error: int = 0) -> bytes:
@@ -83,6 +85,27 @@ def test_hls_profile_defaults_match_verified_power_on_snapshots():
         sms.default_goal_torque_raw,
         sms.default_velocity_raw,
     ) == (0, None, 110)
+
+
+@pytest.mark.parametrize("direction", (-1, 1))
+@pytest.mark.parametrize("effort_nm", (-0.8, 0.0, 0.8))
+def test_hls_effort_current_conversion_matches_feedback_estimator(
+    direction,
+    effort_nm,
+):
+    profile = feetech_packet_profiles.require("HL3915", context="test")
+    raw = FeetechAdapter._effort_to_raw_current(  # noqa: SLF001
+        profile,
+        effort_nm,
+        direction,
+    )
+    estimated = FeetechAdapter._estimate_effort(  # noqa: SLF001
+        profile,
+        raw * profile.current_unit_a,
+        direction,
+    )
+
+    assert estimated == pytest.approx(effort_nm, abs=0.01)
 
 
 class PacketTransport:
@@ -166,6 +189,93 @@ def _packet_motion(servo_id: int, position_rad: float) -> MotionEnvelope:
         now + 50_000_000,
         0,
     )
+
+
+def _packet_effort(servo_id: int, current_raw: int) -> MotionEnvelope:
+    now = time.monotonic_ns()
+    return MotionEnvelope(
+        ("effort", servo_id),
+        servo_id,
+        FeetechPacketEffort(current_raw),
+        now,
+        now + 50_000_000,
+        0,
+    )
+
+
+def test_hls_effort_mode_switch_and_signed_current_golden_frames():
+    profile = feetech_packet_profiles.require("HL3915", context="test")
+    transport = PacketTransport({1: 100})
+    protocol = FeetechPacketBusProtocol(transport, {1: profile})
+    protocol.connect()
+    protocol.read_fast_state()
+    preload = _packet_effort(1, -123)
+
+    before = len(transport.writes)
+    protocol.execute_safety("activate_effort", (preload,))
+    activation = transport.writes[before:]
+
+    assert [frame[5] for frame in activation] == [40, 33, 44, 40]
+    assert activation[1][8] == 2
+    assert FeetechPacketCodec.decode_signed_magnitude(
+        FeetechPacketCodec.decode_word(activation[2][8:10])
+    ) == -123
+    protocol.write_motion((_packet_effort(1, 321),))
+    assert transport.writes[-1][5] == 44
+    assert FeetechPacketCodec.decode_signed_magnitude(
+        FeetechPacketCodec.decode_word(transport.writes[-1][8:10])
+    ) == 321
+
+    protocol.execute_safety("hold", None)
+    assert [frame[5] for frame in transport.writes[-2:]] == [44, 40]
+    assert transport.writes[-2][8:10] == b"\x00\x00"
+    assert protocol._enabled_ids == set()  # noqa: SLF001
+
+
+def test_hls_emergency_stop_zeros_current_and_restores_position_mode():
+    profile = feetech_packet_profiles.require("HL3915", context="test")
+    transport = PacketTransport({1: 100})
+    protocol = FeetechPacketBusProtocol(transport, {1: profile})
+    protocol.connect()
+    protocol.read_fast_state()
+    protocol.execute_safety("activate_effort", (_packet_effort(1, 100),))
+
+    before = len(transport.writes)
+    protocol.execute_safety("emergency_stop", None)
+    stop_frames = transport.writes[before:]
+
+    assert [frame[5] for frame in stop_frames] == [44, 40, 33]
+    assert stop_frames[0][8:10] == b"\x00\x00"
+    assert stop_frames[-1][8] == 0
+    assert protocol._effort_mode_ids == set()  # noqa: SLF001
+
+
+def test_hls_hold_still_disables_torque_when_zero_current_write_fails():
+    class ZeroWriteFailureTransport(PacketTransport):
+        fail_zero_write = False
+
+        def write(self, frame, *, deadline_ns):
+            if self.fail_zero_write and frame[4] == FeetechInstruction.SYNC_WRITE:
+                self.writes.append(frame)
+                if frame[5] == 44:
+                    self.fail_zero_write = False
+                    raise OSError("injected zero-current write failure")
+            return super().write(frame, deadline_ns=deadline_ns)
+
+    profile = feetech_packet_profiles.require("HL3915", context="test")
+    transport = ZeroWriteFailureTransport({1: 100})
+    protocol = FeetechPacketBusProtocol(transport, {1: profile})
+    protocol.connect()
+    protocol.read_fast_state()
+    protocol.execute_safety("activate_effort", (_packet_effort(1, 100),))
+    transport.fail_zero_write = True
+
+    before = len(transport.writes)
+    with pytest.raises(OSError, match="zero-current"):
+        protocol.execute_safety("hold", None)
+
+    assert [frame[5] for frame in transport.writes[before:]] == [44, 40]
+    assert protocol._enabled_ids == set()  # noqa: SLF001
 
 
 def test_packet_protocol_checks_identity_and_requires_explicit_enable():

@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Mapping, Protocol, runtime_checkable
 
 from acetele.core import RobotCommand, RobotState
+from acetele.runtime.preflight import RuntimePreflight
 from acetele.runtime.robot import JointGroupInfo, RuntimeDiagnostics
 from acetele.specification import RobotSpec
 
@@ -14,6 +15,7 @@ class FollowerRuntime(Protocol):
     """Runtime operations required by a follower, independent of its backend."""
 
     spec: RobotSpec
+    preflight: RuntimePreflight
 
     @property
     def generation(self) -> int: ...
@@ -31,10 +33,6 @@ class FollowerRuntime(Protocol):
     def read(self) -> RobotState: ...
 
     def write(self, command: RobotCommand) -> None: ...
-
-    def write_auxiliary(self, command: RobotCommand) -> None: ...
-
-    def ensure_motion_ready(self) -> None: ...
 
     def hold(self) -> None: ...
 
