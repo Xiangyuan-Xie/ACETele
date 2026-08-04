@@ -60,22 +60,29 @@ def test_packet_profiles_keep_ttl_and_rs485_identity_separate():
     assert sms.model_number == 11272
 
 
-def test_packet_profile_defaults_do_not_exceed_official_model_speeds():
-    expected_velocity = {
-        "HL3960": 81,
-        "HL3950": 102,
-        "HL3930": 61,
-        "HL3915": 136,
-        "SM8512BL": 81,
+def test_hls_profile_defaults_match_verified_power_on_snapshots():
+    expected_defaults = {
+        "HL3960": (0, 400, 100),
+        "HL3950": (0, 1000, 110),
+        "HL3930": (250, 1000, 100),
+        "HL3915": (0, 500, 250),
     }
 
-    for model, raw_velocity in expected_velocity.items():
+    for model, expected in expected_defaults.items():
         profile = feetech_packet_profiles.require(model, context="test")
-        assert profile.default_velocity_raw == raw_velocity
-        assert profile.default_acceleration_raw == 0
-        assert profile.acceleration_unit_rad_s2 == pytest.approx(
-            100.0 * 2.0 * math.pi / 4096.0
-        )
+        assert (
+            profile.default_acceleration_raw,
+            profile.default_goal_torque_raw,
+            profile.default_velocity_raw,
+        ) == expected
+        assert profile.acceleration_unit_rad_s2 == pytest.approx(math.radians(8.7))
+
+    sms = feetech_packet_profiles.require("SM8512BL", context="test")
+    assert (
+        sms.default_acceleration_raw,
+        sms.default_goal_torque_raw,
+        sms.default_velocity_raw,
+    ) == (0, None, 110)
 
 
 class PacketTransport:
@@ -183,6 +190,7 @@ def test_packet_protocol_checks_identity_and_requires_explicit_enable():
         if frame[4] == FeetechInstruction.SYNC_WRITE and frame[5] == 41
     )
     assert sync_motion[9:11] == FeetechPacketCodec.word(1024)
+    assert sync_motion[11:13] == b"\x00\x00"
     assert state.position_rad == pytest.approx(math.pi / 2.0)
     assert state.current_a == pytest.approx(0.13)
 
@@ -207,7 +215,7 @@ def test_packet_protocol_can_enable_arm_without_shared_gripper():
     assert torque_frame[7:-1] == bytes((0, 1))
 
 
-def test_hls_position_transactions_never_treat_goal_torque_as_current_limit():
+def test_hls_position_transactions_apply_profile_goal_torque_while_holding():
     profile = feetech_packet_profiles.require("HL3915", context="test")
     transport = PacketTransport({1: 100})
     protocol = FeetechPacketBusProtocol(transport, {1: profile})
@@ -226,7 +234,10 @@ def test_hls_position_transactions_never_treat_goal_torque_as_current_limit():
     assert len(goal_frames) == 3
     # Sync-write header and device ID occupy bytes 0..7; addresses 44..45 are
     # therefore bytes 11..12 in this one-device frame.
-    assert all(frame[11:13] == b"\x00\x00" for frame in goal_frames)
+    raw_torque = profile.default_goal_torque_raw
+    assert raw_torque is not None
+    expected_torque = FeetechPacketCodec.word(raw_torque)
+    assert all(frame[11:13] == expected_torque for frame in goal_frames)
 
 
 def test_packet_hold_reuses_last_command_instead_of_raw_position_outlier():

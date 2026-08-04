@@ -37,6 +37,7 @@ class FeetechPacketServoProfile:
     current_unit_a: float
     default_velocity_raw: int
     default_acceleration_raw: int
+    default_goal_torque_raw: int | None
     source: ProtocolSource
     torque_constant_kgcm_per_a: float | None = None
     no_load_current_a: float | None = None
@@ -65,6 +66,14 @@ class FeetechPacketServoProfile:
             raise ValueError("FEETECH default velocity is outside the register range")
         if not 0 <= self.default_acceleration_raw <= 0xFF:
             raise ValueError("FEETECH default acceleration is outside the register range")
+        if self.family == FeetechPacketFamily.HLS:
+            if (
+                type(self.default_goal_torque_raw) is not int
+                or not 1 <= self.default_goal_torque_raw <= 0x7FFF
+            ):
+                raise ValueError("FEETECH HLS default goal torque must be positive")
+        elif self.default_goal_torque_raw is not None:
+            raise ValueError("FEETECH SMS profiles cannot define HLS goal torque")
         self._validate_torque_estimator()
 
     def _validate_torque_estimator(self) -> None:
@@ -160,18 +169,15 @@ def _build_profile_registries() -> tuple[
         "70083087980f7c1f889071cb63b1b14bf3a4c2746e6d6d2c6c0617f7e64bd5d4",
     )
     velocity_unit = 0.732 * math.pi / 30.0
-    acceleration_unit = 100.0 * 2.0 * math.pi / 4096.0
+    acceleration_unit = math.radians(8.7)
     current_unit = 0.0065
-
-    def speed_raw(maximum_rpm: float) -> int:
-        """Choose the fastest register value that does not exceed the data sheet."""
-
-        return math.floor(maximum_rpm / 0.732)
 
     def hls_profile(
         model: str,
         *,
-        maximum_speed_rpm: float,
+        velocity: int,
+        acceleration: int,
+        goal_torque: int,
         torque_constant_kgcm_per_a: float,
         no_load_current_a: float,
     ) -> FeetechPacketServoProfile:
@@ -186,10 +192,12 @@ def _build_profile_registries() -> tuple[
             velocity_unit_rad_s=velocity_unit,
             acceleration_unit_rad_s2=acceleration_unit,
             current_unit_a=current_unit,
-            default_velocity_raw=speed_raw(maximum_speed_rpm),
-            # The official position API defaults ACC to zero. A model-specific
-            # acceleration is applied only when the caller supplies an SI limit.
-            default_acceleration_raw=0,
+            # These raw values were captured from clean power-on hardware. They are
+            # deliberately immutable profile data: reading SRAM during startup could
+            # learn values written by the last run.
+            default_velocity_raw=velocity,
+            default_acceleration_raw=acceleration,
+            default_goal_torque_raw=goal_torque,
             source=hls_source,
             torque_constant_kgcm_per_a=torque_constant_kgcm_per_a,
             no_load_current_a=no_load_current_a,
@@ -201,7 +209,9 @@ def _build_profile_registries() -> tuple[
                 "HL3960",
                 hls_profile(
                     "HL3960",
-                    maximum_speed_rpm=60.0,
+                    velocity=100,
+                    acceleration=0,
+                    goal_torque=400,
                     torque_constant_kgcm_per_a=14.84,
                     no_load_current_a=0.300,
                 ),
@@ -210,7 +220,9 @@ def _build_profile_registries() -> tuple[
                 "HL3950",
                 hls_profile(
                     "HL3950",
-                    maximum_speed_rpm=75.0,
+                    velocity=110,
+                    acceleration=0,
+                    goal_torque=1000,
                     torque_constant_kgcm_per_a=20.8,
                     no_load_current_a=0.330,
                 ),
@@ -219,7 +231,9 @@ def _build_profile_registries() -> tuple[
                 "HL3930",
                 hls_profile(
                     "HL3930",
-                    maximum_speed_rpm=45.0,
+                    velocity=100,
+                    acceleration=250,
+                    goal_torque=1000,
                     torque_constant_kgcm_per_a=12.5,
                     no_load_current_a=0.150,
                 ),
@@ -228,7 +242,9 @@ def _build_profile_registries() -> tuple[
                 "HL3915",
                 hls_profile(
                     "HL3915",
-                    maximum_speed_rpm=100.0,
+                    velocity=250,
+                    acceleration=0,
+                    goal_torque=500,
                     torque_constant_kgcm_per_a=9.3,
                     no_load_current_a=0.260,
                 ),
@@ -244,8 +260,9 @@ def _build_profile_registries() -> tuple[
                     velocity_unit_rad_s=velocity_unit,
                     acceleration_unit_rad_s2=acceleration_unit,
                     current_unit_a=current_unit,
-                    default_velocity_raw=speed_raw(60.0),
+                    default_velocity_raw=110,
                     default_acceleration_raw=0,
+                    default_goal_torque_raw=None,
                     source=sms_source,
                 ),
             ),

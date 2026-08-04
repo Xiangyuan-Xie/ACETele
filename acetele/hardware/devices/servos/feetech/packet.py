@@ -19,7 +19,10 @@ from acetele.hardware.devices.servos.feetech.codec import (
     FeetechPacketError,
     FeetechStatusPacket,
 )
-from acetele.hardware.devices.servos.feetech.profile import FeetechPacketServoProfile
+from acetele.hardware.devices.servos.feetech.profile import (
+    FeetechPacketFamily,
+    FeetechPacketServoProfile,
+)
 
 
 def nearest_multiturn_position_target(
@@ -463,11 +466,17 @@ class FeetechPacketBusProtocol:
             raise ValueError("FEETECH velocity exceeds the signed-magnitude register")
         if not 0 <= acceleration <= 0xFF:
             raise ValueError("FEETECH acceleration exceeds the uint8 register")
-        # Addresses 44..45 are HLS GOAL_TORQUE but SMS GOAL_TIME. They are not a
-        # portable current limit: the persistent/SRAM torque-limit register starts at
-        # 48. Match the vendor position APIs by writing zero here and keep force/torque
-        # control out of the position transaction until it has a calibrated contract.
-        auxiliary = b"\x00\x00"
+        # Addresses 44..45 are HLS GOAL_TORQUE but SMS GOAL_TIME. HLS position mode
+        # needs a nonzero torque value to hold a target. The raw value is a frozen
+        # model profile captured before commands can contaminate SRAM; it remains
+        # distinct from an SI effort limit and the torque-limit register at address 48.
+        goal_torque = profile.default_goal_torque_raw
+        if profile.family == FeetechPacketFamily.HLS:
+            if goal_torque is None:
+                raise RuntimeError("FEETECH HLS profile has no goal torque")
+            auxiliary = FeetechPacketCodec.word(goal_torque)
+        else:
+            auxiliary = b"\x00\x00"
         return (
             bytes((acceleration,))
             + FeetechPacketCodec.word(raw_position)
