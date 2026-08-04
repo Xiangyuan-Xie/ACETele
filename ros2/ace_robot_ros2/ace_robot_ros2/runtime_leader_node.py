@@ -139,7 +139,9 @@ class RuntimeLeaderNode(Node):
             depth=1,
             history=HistoryPolicy.KEEP_LAST,
             reliability=ReliabilityPolicy.RELIABLE,
-            durability=DurabilityPolicy.VOLATILE,
+            # Mode is a latest-state control value. Transient-local depth one gives a
+            # newly restarted follower the current mode without a second timer.
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
         )
         self._end_effector_groups = tuple(
             name for name in runtime.joint_groups if name.endswith(".end_effector")
@@ -324,17 +326,22 @@ class RuntimeLeaderNode(Node):
         elif current_mode == LeaderSyncMode.TRACKING:
             message = "Teleoperation started; leader arm torque is released."
         elif current_mode == LeaderSyncMode.HOLD:
-            if self._session.torque_released:
-                message = (
-                    "Teleoperation is holding the follower; leader torque is released. "
-                    "Release then close the gripper to request a fresh synchronization."
-                )
-            else:
+            if not self._session.torque_released:
                 self.get_logger().error(
                     "Teleoperation entered HOLD, but leader torque release could not be "
                     "confirmed. Use the hardware emergency stop before handling the arm."
                 )
                 return
+            if self._session.follower_status == FollowerSyncStatus.LOST:
+                self.get_logger().warn(
+                    "Follower reported a sustained arm-command timeout and is holding "
+                    "position; fresh synchronization is required."
+                )
+                return
+            message = (
+                "Teleoperation is holding the follower; leader torque is released. "
+                "Release then close the gripper to request a fresh synchronization."
+            )
         elif current_mode == LeaderSyncMode.STOP:
             self.get_logger().error("Teleoperation stopped by a safety fault.")
             return

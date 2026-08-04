@@ -36,7 +36,8 @@ urdf_path = (
 
 def _session(
     *,
-    heartbeat_timeout_ns: int = 100_000_000,
+    motion_timeout_ns: int = 100_000_000,
+    session_timeout_ns: int = 500_000_000,
 ) -> FollowerTeleopSession:
     spec = RobotSpec(
         "ace_follower",
@@ -70,10 +71,10 @@ def _session(
         backend=Backend.MOCK,
         urdf_path=str(urdf_path),
     )
-    runtime = RobotRuntime(spec, command_timeout_ns=heartbeat_timeout_ns)
+    runtime = RobotRuntime(spec, command_timeout_ns=motion_timeout_ns)
     return FollowerTeleopSession(
         runtime,
-        heartbeat_timeout_ns=heartbeat_timeout_ns,
+        session_timeout_ns=session_timeout_ns,
     )
 
 
@@ -235,7 +236,7 @@ def test_follower_session_rejects_wrong_joint_order_without_heartbeat():
         session.close()
 
 
-def test_follower_session_heartbeat_timeout_holds_runtime():
+def test_follower_session_loss_timeout_holds_runtime():
     session = _session()
     session.connect()
     try:
@@ -245,7 +246,71 @@ def test_follower_session_heartbeat_timeout_holds_runtime():
         now_ns = time.monotonic_ns()
         session.write_arm(("joint_1",), (0.1,), now_ns=now_ns)
 
-        assert session.update(now_ns=now_ns + 100_000_001) == FollowerSyncStatus.LOST
+        accepted_ns = session._sync.last_command_ns  # noqa: SLF001
+        assert accepted_ns is not None
+        assert session.update(now_ns=accepted_ns + 500_000_001) == FollowerSyncStatus.LOST
+        assert session.runtime.diagnostics().safety.state == RuntimeSafetyState.HOLD
+    finally:
+        session.close()
+
+
+def test_follower_recovers_a_brief_motion_hold_from_the_next_valid_arm_frame():
+    session = _session(motion_timeout_ns=30_000_000)
+    session.connect()
+    try:
+        _read_until_available(session)
+        session.set_mode(LeaderSyncMode.SYNC_REQUEST)
+        session.set_mode(LeaderSyncMode.TRACKING)
+        assert session.write_arm(
+            ("joint_1",),
+            (0.1,),
+            now_ns=time.monotonic_ns(),
+        )
+
+        actor = session.runtime._actors["arm"]  # noqa: SLF001
+        deadline = time.monotonic() + 1.0
+        while not actor.motion_watchdog_tripped:
+            if time.monotonic() >= deadline:
+                pytest.fail("actor motion watchdog did not hold before session loss")
+            time.sleep(0.001)
+
+        # The actor has already held hardware, while RobotRuntime has not necessarily
+        # observed that asynchronous transition. The next valid frame performs both
+        # synchronization and recovery before publishing its new generation.
+        assert session.status == FollowerSyncStatus.TRACKING
+        assert session.write_arm(
+            ("joint_1",),
+            (0.2,),
+            now_ns=time.monotonic_ns(),
+        )
+        assert session.runtime.diagnostics().safety.state == RuntimeSafetyState.ACTIVE
+        assert not actor.motion_watchdog_tripped
+        assert session.status == FollowerSyncStatus.TRACKING
+    finally:
+        session.close()
+
+
+def test_invalid_arm_frame_cannot_reenable_a_brief_motion_hold():
+    session = _session()
+    session.connect()
+    try:
+        _read_until_available(session)
+        session.set_mode(LeaderSyncMode.SYNC_REQUEST)
+        session.set_mode(LeaderSyncMode.TRACKING)
+        assert session.write_arm(
+            ("joint_1",),
+            (0.1,),
+            now_ns=time.monotonic_ns(),
+        )
+        session.runtime.hold()
+
+        with pytest.raises(ValueError, match="joint order"):
+            session.write_arm(
+                ("wrong",),
+                (0.2,),
+                now_ns=time.monotonic_ns(),
+            )
+
         assert session.runtime.diagnostics().safety.state == RuntimeSafetyState.HOLD
     finally:
         session.close()
@@ -289,14 +354,16 @@ def test_end_effector_commands_cannot_extend_the_arm_heartbeat():
             now_ns=started_ns + 50_000_000,
         )
         assert session._sync.last_command_ns == heartbeat_ns  # noqa: SLF001
+        accepted_ns = session._sync.last_command_ns  # noqa: SLF001
+        assert accepted_ns is not None
         assert not session.write_end_effector(
             group_name,
             ("joint_5",),
             (0.6,),
-            now_ns=started_ns + 100_000_001,
+            now_ns=accepted_ns + 100_000_001,
         )
-        assert session.status == FollowerSyncStatus.LOST
-        assert session.runtime.diagnostics().safety.state == RuntimeSafetyState.HOLD
+        assert session.status == FollowerSyncStatus.TRACKING
+        assert session.update(now_ns=accepted_ns + 500_000_001) == FollowerSyncStatus.LOST
     finally:
         session.close()
 
@@ -328,20 +395,13 @@ def test_follower_peer_reset_holds_and_requires_a_new_sync_cycle():
         session.close()
 
 
-def test_follower_session_uses_the_same_timeout_as_runtime_safety():
-    session = _session(heartbeat_timeout_ns=1_000_000_000)
+def test_follower_session_uses_actor_motion_timeout_and_separate_session_timeout():
+    session = _session(
+        motion_timeout_ns=100_000_000,
+        session_timeout_ns=500_000_000,
+    )
 
-    assert session.runtime.command_timeout_ns == 1_000_000_000
-
-
-def test_follower_session_rejects_a_timeout_that_differs_from_runtime():
-    session = _session()
-
-    with pytest.raises(ValueError, match="must match"):
-        FollowerTeleopSession(
-            session.runtime,
-            heartbeat_timeout_ns=1_000_000_000,
-        )
+    assert session.runtime.command_timeout_ns == 100_000_000
 
 
 def test_follower_session_reports_latched_runtime_fault():
@@ -442,7 +502,9 @@ def test_cartesian_follower_accepts_pose_only_after_tracking_and_resets_on_loss(
         assert session.status == FollowerSyncStatus.TRACKING
         assert session.cartesian_diagnostics() is not None
 
-        session.update(now_ns=now_ns + 100_000_001)
+        accepted_ns = session._sync.last_command_ns  # noqa: SLF001
+        assert accepted_ns is not None
+        session.update(now_ns=accepted_ns + 500_000_001)
         assert session.status == FollowerSyncStatus.LOST
         assert session.cartesian_diagnostics() is None
     finally:

@@ -99,7 +99,7 @@ def test_robot_launch_defaults_to_packaged_leader_hls_ttl_spec():
     assert 'packaged_robot_spec("ace_leader", "feetech_hls_ttl.toml")' in source
 
 
-def test_follower_heartbeat_timeout_defaults_to_one_hundred_milliseconds():
+def test_follower_separates_motion_and_session_timeout_defaults():
     parameters = (
         project_root
         / "ros2/ace_robot_ros2/config/ace_robot_params.yaml"
@@ -109,8 +109,10 @@ def test_follower_heartbeat_timeout_defaults_to_one_hundred_milliseconds():
         / "ros2/ace_robot_ros2/ace_robot_ros2/runtime_follower_node.py"
     ).read_text(encoding="utf-8")
 
-    assert "heartbeat_timeout: 0.1" in parameters
-    assert 'declare_parameter("heartbeat_timeout", 0.1)' in source
+    assert "motion_timeout: 0.1" in parameters
+    assert "session_timeout: 0.5" in parameters
+    assert 'declare_parameter("motion_timeout", 0.1)' in source
+    assert 'declare_parameter("session_timeout", 0.5)' in source
 
 
 def test_follower_adaptive_diagnostics_are_rate_limited():

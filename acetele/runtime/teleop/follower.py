@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import time
+from dataclasses import replace
 from pathlib import Path
 from types import MappingProxyType
-from typing import Mapping, Optional, Sequence
+from typing import Callable, Mapping, Optional, Sequence
 
 from acetele.control import (
     CartesianTeleopController,
@@ -30,32 +32,32 @@ class FollowerTeleopSession:
         self,
         runtime: FollowerRuntime,
         *,
-        heartbeat_timeout_ns: int = 100_000_000,
+        session_timeout_ns: int = 500_000_000,
         command_deadline_ns: int = 50_000_000,
         teleop_mode: TeleopMode = TeleopMode.JOINT,
         translation_scale: float = 2.0,
         rotation_scale: float = 1.0,
         cartesian_tuning: CartesianTeleopTuning = CartesianTeleopTuning(),
         cartesian_controller: Optional[CartesianTeleopController] = None,
+        clock_ns: Callable[[], int] = time.monotonic_ns,
     ) -> None:
         if not isinstance(runtime, FollowerRuntime):
             raise ValueError("follower session requires a FollowerRuntime")
         for name, value in (
-            ("heartbeat_timeout_ns", heartbeat_timeout_ns),
+            ("session_timeout_ns", session_timeout_ns),
             ("command_deadline_ns", command_deadline_ns),
         ):
             if type(value) is not int or value <= 0:
                 raise ValueError(f"{name} must be a positive integer")
-        if heartbeat_timeout_ns != runtime.command_timeout_ns:
-            raise ValueError(
-                "follower heartbeat timeout must match the runtime command timeout"
-            )
         self.runtime = runtime
+        if not callable(clock_ns):
+            raise ValueError("follower session clock_ns must be callable")
+        self._clock_ns = clock_ns
         try:
             self.teleop_mode = TeleopMode(teleop_mode)
         except ValueError as exc:
             raise ValueError("teleop_mode must be 'joint' or 'ee_pose'") from exc
-        self._sync = FollowerSyncController(heartbeat_timeout_ns)
+        self._sync = FollowerSyncController(session_timeout_ns)
         # Freeze routing metadata at construction. Runtime commands can then be
         # validated and partitioned without consulting mutable ROS messages.
         self._arm_groups = tuple(arm.name for arm in runtime.spec.arms)
@@ -303,9 +305,24 @@ class FollowerTeleopSession:
                     now_ns=now_ns,
                 )
             )
+        # Validation and Cartesian solving above are side-effect free. Only a valid frame
+        # may recover the short hardware watchdog HOLD; FAULT and expired sessions remain
+        # closed. Rebuild timestamps and generation after that bounded safety transaction.
+        self.runtime.ensure_motion_ready()
+        accepted_ns = self._local_time()
+        generation = self.runtime.generation
+        commands = {
+            group_name: replace(
+                command,
+                submitted_at_ns=accepted_ns,
+                deadline_ns=accepted_ns + self._command_lifetimes_ns[group_name],
+                generation=generation,
+            )
+            for group_name, command in commands.items()
+        }
         self.runtime.write(RobotCommand(commands))
         # Refresh synchronization only after the complete frame is staged successfully.
-        self._sync.accept_command(now_ns)
+        self._sync.accept_command(accepted_ns)
         return True
 
     def end_effector_pose(
@@ -343,10 +360,14 @@ class FollowerTeleopSession:
     ) -> bool:
         """Submit end-effector motion only after this cycle has an arm heartbeat."""
 
-        if not self._sync.heartbeat_current(now_ns):
-            # Enforce timeout synchronously in the command callback. A busy executor or
-            # end-effector flood must not postpone the periodic timeout check.
-            self.update(now_ns=now_ns)
+        last_arm_command_ns = self._sync.last_command_ns
+        if (
+            self._sync.status != FollowerSyncStatus.TRACKING
+            or last_arm_command_ns is None
+            or now_ns - last_arm_command_ns > self.runtime.command_timeout_ns
+        ):
+            # Auxiliary traffic never refreshes the arm lease. This side-effect-free
+            # admission check closes the tiny interval before the actor executes HOLD.
             return False
         try:
             expected = self._end_effector_names[group_name]
@@ -463,6 +484,14 @@ class FollowerTeleopSession:
 
         if self._cartesian_controller is not None:
             self._cartesian_controller.reset()
+
+    def _local_time(self) -> int:
+        """Read and validate the local monotonic clock used for safety leases."""
+
+        value = self._clock_ns()
+        if type(value) is not int or value < 0:
+            raise RuntimeError("follower session clock returned an invalid timestamp")
+        return value
 
 
 __all__ = ["FollowerTeleopSession"]

@@ -29,12 +29,14 @@ class FollowerSyncStatus(str, Enum):
 
 
 class FollowerSyncController:
-    """Transport-independent follower synchronization and command heartbeat."""
+    """Transport-independent peer synchronization and session heartbeat."""
 
-    def __init__(self, heartbeat_timeout_ns: int):
-        if heartbeat_timeout_ns <= 0:
-            raise ValueError("heartbeat timeout must be positive")
-        self._heartbeat_timeout_ns = int(heartbeat_timeout_ns)
+    def __init__(self, session_timeout_ns: int):
+        if type(session_timeout_ns) is not int or session_timeout_ns <= 0:
+            raise ValueError("session_timeout_ns must be a positive integer")
+        # The bus actor independently owns the short actuator watchdog. This controller
+        # only decides when the remote peer has been absent long enough to require sync.
+        self._session_timeout_ns = session_timeout_ns
         self.mode = LeaderSyncMode.IDLE
         self.status = FollowerSyncStatus.IDLE
         self.last_command_ns: int | None = None
@@ -75,22 +77,11 @@ class FollowerSyncController:
         self.status = FollowerSyncStatus.TRACKING
         return True
 
-    def heartbeat_current(self, now_ns: int) -> bool:
-        """Return whether an admitted arm frame still owns the motion session."""
-
-        if type(now_ns) is not int or now_ns < 0:
-            raise ValueError("heartbeat time must be a non-negative integer")
-        return (
-            self.status == FollowerSyncStatus.TRACKING
-            and self.last_command_ns is not None
-            and now_ns - self.last_command_ns <= self._heartbeat_timeout_ns
-        )
-
     def update(self, now_ns: int) -> FollowerSyncStatus:
         if (
             self.status == FollowerSyncStatus.TRACKING
             and self.last_command_ns is not None
-            and int(now_ns) - self.last_command_ns > self._heartbeat_timeout_ns
+            and int(now_ns) - self.last_command_ns > self._session_timeout_ns
         ):
             self.status = FollowerSyncStatus.LOST
         return self.status

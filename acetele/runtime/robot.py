@@ -53,7 +53,6 @@ from acetele.runtime.safety import (
     RuntimeSafetyController,
     RuntimeSafetyState,
     SafetySnapshot,
-    SafetyTransition,
 )
 from acetele.specification import Backend, RobotSpec
 
@@ -115,14 +114,16 @@ class RobotRuntime:
     ) -> None:
         if not isinstance(spec, RobotSpec):
             raise ValueError("RobotRuntime requires a RobotSpec")
+        if type(command_timeout_ns) is not int or command_timeout_ns <= 0:
+            raise ValueError("command_timeout_ns must be a positive integer")
         self.spec = spec
         self._clock_ns = clock_ns
         self._transport_factory = transport_factory
         self._operation_lock = RLock()
-        self._safety = RuntimeSafetyController(command_timeout_ns=command_timeout_ns)
+        self._safety = RuntimeSafetyController()
+        self._command_timeout_ns = command_timeout_ns
         self._actors: dict[str, BusActor] = {}
         self._sequence: dict[str, int] = {}
-        self._last_state_ns: Optional[int] = None
         self._fault_action: Optional[AutomaticFaultAction] = None
         plan = build_runtime_plan(spec, adapter_registry=adapter_registry)
         self.preflight = plan.preflight
@@ -171,9 +172,9 @@ class RobotRuntime:
 
     @property
     def command_timeout_ns(self) -> int:
-        """Return the active-motion heartbeat timeout."""
+        """Return the actor-owned active-motion watchdog timeout."""
 
-        return self._safety.command_timeout_ns
+        return self._command_timeout_ns
 
     @property
     def joint_groups(self) -> Mapping[str, JointGroupInfo]:
@@ -226,7 +227,7 @@ class RobotRuntime:
                 actor = BusActor(
                     protocol,
                     cycle_hz=bus.cycle_hz,
-                    motion_watchdog_ns=self._safety.command_timeout_ns,
+                    motion_watchdog_ns=self._command_timeout_ns,
                     state_timeout_ns=self._state_timeout_ns[bus.name],
                 )
                 actor.connect()
@@ -324,7 +325,6 @@ class RobotRuntime:
             )
             raise RuntimeError(reason)
         joint_states: dict[str, JointState] = {}
-        timestamps: list[int] = []
         safety_state = self._safety.snapshot().state
         for name, group in self._groups.items():
             state = self._read_group(group, snapshots[group.bus])
@@ -334,23 +334,8 @@ class RobotRuntime:
                 pipeline.update_feedback(state)
                 if safety_state != RuntimeSafetyState.ACTIVE:
                     pipeline.rebase_to_feedback()
-            timestamps.append(state.timestamp_ns)
-        if not timestamps:
+        if not joint_states:
             raise RuntimeError("robot runtime has no joint state groups")
-        self._last_state_ns = min(timestamps)
-        now_ns = self._clock_ns()
-        transition = self._safety.update(
-            now_ns,
-            state_stale=self._hardware_state_is_stale(now_ns),
-        )
-        if transition == SafetyTransition.HOLD:
-            self._rebase_position_pipelines()
-            self._submit_all_safety("hold", None, wait=False)
-        elif transition == SafetyTransition.FAULT:
-            if self._fault_action is None:
-                self._fault_action = AutomaticFaultAction.HOLD
-            self._best_effort_fault_hold()
-            raise RuntimeError("robot runtime hardware state is stale")
         sensor_states = self._sensor_states(slow_snapshots)
         return RobotState(joint_states, sensor_states)
 
@@ -366,6 +351,26 @@ class RobotRuntime:
 
         self._write(command, refresh_heartbeat=False)
 
+    @_serialized_operation
+    def ensure_motion_ready(self) -> None:
+        """Recover an automatic HOLD without weakening FAULT or disabled boundaries.
+
+        The bus actor may hold after a short command gap before the transport session is
+        considered lost. A later valid frame calls this method after input validation;
+        it clears that watchdog latch and enters READY without admitting motion itself.
+        """
+
+        self._require_connected()
+        state = self._safety.snapshot().state
+        if state in (RuntimeSafetyState.READY, RuntimeSafetyState.ACTIVE):
+            return
+        if state != RuntimeSafetyState.HOLD:
+            raise RuntimeError(f"cannot resume motion from {state.value}")
+        self._refresh_position_pipeline_feedback()
+        self._rebase_position_pipelines()
+        self._submit_set_enabled(True)
+        self._safety.ready()
+
     def _write(self, command: RobotCommand, *, refresh_heartbeat: bool) -> None:
         """Condition, stage, and atomically expose one logical robot command.
 
@@ -378,19 +383,6 @@ class RobotRuntime:
         if not isinstance(command, RobotCommand) or not command.joints:
             raise ValueError("robot write requires a non-empty RobotCommand")
         now_ns = self._clock_ns()
-        transition = self._safety.update(
-            now_ns,
-            state_stale=self._hardware_state_is_stale(now_ns),
-        )
-        if transition != SafetyTransition.NONE:
-            if transition == SafetyTransition.HOLD:
-                self._rebase_position_pipelines()
-                self._submit_all_safety("hold", None, wait=False)
-            else:
-                if self._fault_action is None:
-                    self._fault_action = AutomaticFaultAction.HOLD
-                self._best_effort_fault_hold()
-            raise RuntimeError(f"robot runtime rejected motion after {transition.value}")
         snapshot = self._safety.snapshot()
         if snapshot.state not in (
             RuntimeSafetyState.READY,
@@ -821,18 +813,6 @@ class RobotRuntime:
             command,
             self._position_references[group.bus],
         )
-
-    def _hardware_state_is_stale(self, now_ns: int) -> bool:
-        """Return whether any bus missed its cycle-derived freshness deadline."""
-
-        for bus_name, actor in self._actors.items():
-            last_state_ns = actor.diagnostics().last_state_ns
-            if (
-                last_state_ns is None
-                or now_ns - last_state_ns > self._state_timeout_ns[bus_name]
-            ):
-                return True
-        return False
 
     def _refresh_position_pipeline_feedback(self) -> None:
         """Seed controller memory from current hardware before enabling motion."""

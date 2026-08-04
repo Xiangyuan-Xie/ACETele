@@ -19,15 +19,6 @@ class RuntimeSafetyState(str, Enum):
     FAULT = "fault"
 
 
-class SafetyTransition(str, Enum):
-    """Hardware side effect requested by a state-machine update."""
-
-    NONE = "none"
-    HOLD = "hold"
-    FAULT = "fault"
-    EMERGENCY_STOP = "emergency_stop"
-
-
 @dataclass(frozen=True)
 class SafetySnapshot:
     """Immutable state-machine snapshot safe to share with adapters."""
@@ -39,25 +30,14 @@ class SafetySnapshot:
 
 
 class RuntimeSafetyController:
-    """Thread-safe authority for motion permission, timeout, and fault latching."""
+    """Thread-safe authority for lifecycle, command generations, and fault latching.
 
-    def __init__(
-        self,
-        *,
-        command_timeout_ns: int = 100_000_000,
-        state_timeout_ns: int = 50_000_000,
-        command_deadline_ns: int = 50_000_000,
-    ) -> None:
-        for name, value in (
-            ("command_timeout_ns", command_timeout_ns),
-            ("state_timeout_ns", state_timeout_ns),
-            ("command_deadline_ns", command_deadline_ns),
-        ):
-            if type(value) is not int or value <= 0:
-                raise ValueError(f"{name} must be a positive integer")
-        self.command_timeout_ns = command_timeout_ns
-        self.state_timeout_ns = state_timeout_ns
-        self.command_deadline_ns = command_deadline_ns
+    Timing belongs to the component that can enforce it: a bus actor owns actuator and
+    feedback deadlines, while a transport session owns peer loss. Keeping timers out of
+    this state machine prevents one scheduler delay from being interpreted three times.
+    """
+
+    def __init__(self) -> None:
         self._lock = RLock()
         self._state = RuntimeSafetyState.DISCONNECTED
         self._generation = 0
@@ -145,54 +125,15 @@ class RuntimeSafetyController:
             self._last_command_ns = now_ns
             return True
 
-    def update(
-        self,
-        now_ns: int,
-        *,
-        latest_state_ns: Optional[int] = None,
-        state_stale: Optional[bool] = None,
-    ) -> SafetyTransition:
-        """Evaluate state freshness and heartbeat without performing hardware I/O."""
-
-        self._validate_time(now_ns)
-        if state_stale is not None and type(state_stale) is not bool:
-            raise ValueError("state_stale must be a boolean or None")
-        with self._lock:
-            if self._state in (RuntimeSafetyState.DISCONNECTED, RuntimeSafetyState.FAULT):
-                return SafetyTransition.NONE
-            stale = (
-                latest_state_ns is None
-                or now_ns - latest_state_ns > self.state_timeout_ns
-            )
-            if state_stale is not None:
-                stale = state_stale
-            if stale:
-                # State loss latches FAULT and closes command admission. Hardware
-                # policy remains a holding action; torque release is reserved for an
-                # explicit emergency stop.
-                self._enter_fault_locked("hardware state is stale")
-                return SafetyTransition.FAULT
-            if (
-                self._state == RuntimeSafetyState.ACTIVE
-                and self._last_command_ns is not None
-                and now_ns - self._last_command_ns > self.command_timeout_ns
-            ):
-                self._generation += 1
-                self._state = RuntimeSafetyState.HOLD
-                self._last_command_ns = None
-                return SafetyTransition.HOLD
-            return SafetyTransition.NONE
-
-    def fault(self, reason: str) -> SafetyTransition:
+    def fault(self, reason: str) -> None:
         """Latch a fault and invalidate all queued motion generations."""
 
         if not isinstance(reason, str) or not reason.strip():
             raise ValueError("fault reason must be a non-empty string")
         with self._lock:
             self._enter_fault_locked(reason)
-        return SafetyTransition.FAULT
 
-    def emergency_stop(self, reason: str = "emergency stop requested") -> SafetyTransition:
+    def emergency_stop(self, reason: str = "emergency stop requested") -> None:
         """Latch emergency FAULT until an explicit reset."""
 
         with self._lock:
@@ -200,7 +141,6 @@ class RuntimeSafetyController:
             self._state = RuntimeSafetyState.FAULT
             self._last_command_ns = None
             self._fault_reason = reason
-        return SafetyTransition.EMERGENCY_STOP
 
     def disconnected(self) -> None:
         """Invalidate old commands and return to DISCONNECTED."""
@@ -229,5 +169,4 @@ __all__ = [
     "RuntimeSafetyController",
     "RuntimeSafetyState",
     "SafetySnapshot",
-    "SafetyTransition",
 ]

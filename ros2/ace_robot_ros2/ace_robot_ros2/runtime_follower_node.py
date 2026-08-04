@@ -48,14 +48,22 @@ class RuntimeFollowerNode(Node):
         try:
             super().__init__("ace_follower_robot")
             node_initialized = True
-            self.declare_parameter("heartbeat_timeout", 0.1)
+            self.declare_parameter("motion_timeout", 0.1)
+            self.declare_parameter("session_timeout", 0.5)
             self.declare_parameter("teleop_mode", TeleopMode.JOINT.value)
             self.declare_parameter("translation_scale", 2.0)
             self.declare_parameter("rotation_scale", 1.0)
-            heartbeat_timeout = float(self.get_parameter("heartbeat_timeout").value)
-            if not np.isfinite(heartbeat_timeout) or heartbeat_timeout <= 0.0:
-                raise ValueError("heartbeat_timeout must be finite and positive")
-            heartbeat_timeout_ns = round(heartbeat_timeout * 1e9)
+            motion_timeout = float(self.get_parameter("motion_timeout").value)
+            session_timeout = float(self.get_parameter("session_timeout").value)
+            if any(
+                not np.isfinite(value) or value <= 0.0
+                for value in (motion_timeout, session_timeout)
+            ):
+                raise ValueError("follower timeouts must be finite and positive")
+            if session_timeout < motion_timeout:
+                raise ValueError("session_timeout must not be shorter than motion_timeout")
+            motion_timeout_ns = round(motion_timeout * 1e9)
+            session_timeout_ns = round(session_timeout * 1e9)
             try:
                 teleop_mode = TeleopMode(str(self.get_parameter("teleop_mode").value))
             except ValueError as exc:
@@ -69,11 +77,11 @@ class RuntimeFollowerNode(Node):
                 raise ValueError("Cartesian teleop scales must be finite and positive")
             runtime = RobotRuntime(
                 spec,
-                command_timeout_ns=heartbeat_timeout_ns,
+                command_timeout_ns=motion_timeout_ns,
             )
             self._session = FollowerTeleopSession(
                 runtime,
-                heartbeat_timeout_ns=heartbeat_timeout_ns,
+                session_timeout_ns=session_timeout_ns,
                 teleop_mode=teleop_mode,
                 translation_scale=translation_scale,
                 rotation_scale=rotation_scale,
@@ -149,7 +157,9 @@ class RuntimeFollowerNode(Node):
             depth=1,
             history=HistoryPolicy.KEEP_LAST,
             reliability=ReliabilityPolicy.RELIABLE,
-            durability=DurabilityPolicy.VOLATILE,
+            # Sync topics carry current state, not an event log. Transient-local depth
+            # one lets a restarted peer receive that state without periodic republishing.
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
         )
         self._end_effector_groups = tuple(self._session.end_effector_names)
         uses_dexterous_hand = any(
@@ -396,6 +406,14 @@ class RuntimeFollowerNode(Node):
         current = self._session.status
         if not force and self._last_published_sync_status == current:
             return
+        if (
+            current == FollowerSyncStatus.LOST
+            and self._last_published_sync_status != FollowerSyncStatus.LOST
+        ):
+            self.get_logger().warn(
+                "No valid arm command arrived before the session timeout; the follower "
+                "remains powered in HOLD and requires synchronization before motion resumes."
+            )
         status = String()
         status.data = current.value
         self._sync_status_pub.publish(status)

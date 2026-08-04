@@ -11,7 +11,6 @@ from acetele.runtime.safety import (
     RuntimeSafetyController,
     RuntimeSafetyState,
     SafetySnapshot,
-    SafetyTransition,
 )
 from acetele.runtime.teleop.follower import FollowerTeleopSession
 from acetele.runtime.teleop.leader import LeaderTeleopSession
@@ -33,7 +32,6 @@ __all__ = [
     "RuntimeSafetyController",
     "RuntimeSafetyState",
     "SafetySnapshot",
-    "SafetyTransition",
     "BusPreflight",
     "ProgressCallback",
     "RobotRuntime",

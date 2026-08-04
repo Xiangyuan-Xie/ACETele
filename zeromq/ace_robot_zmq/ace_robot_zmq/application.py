@@ -334,10 +334,13 @@ class FollowerApplication:
         runtime = runtime_factory(spec, command_timeout_ns=options.heartbeat_timeout_ns)
         self.session = FollowerTeleopSession(
             runtime,
-            heartbeat_timeout_ns=options.heartbeat_timeout_ns,
+            # ZMQ already owns peer admission and reset at this deadline, so preserve
+            # its existing single-timeout behavior while ROS uses a longer session grace.
+            session_timeout_ns=options.heartbeat_timeout_ns,
             teleop_mode=teleop_mode,
             translation_scale=translation_scale,
             rotation_scale=rotation_scale,
+            clock_ns=clock_ns,
         )
         self.options = options
         self.peer = peer or ZmqPeer(options)

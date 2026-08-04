@@ -601,7 +601,7 @@ def test_feetech_overcurrent_status_has_actionable_fault_diagnostics():
     assert fault.action == AutomaticFaultAction.DISABLE
 
 
-def test_stale_hardware_state_faults_without_returning_the_old_snapshot():
+def test_runtime_does_not_duplicate_actor_state_freshness_policy():
     class StaleActor:
         connected = True
 
@@ -636,13 +636,13 @@ def test_stale_hardware_state_faults_without_returning_the_old_snapshot():
     runtime._actors = {"arm": actor}  # noqa: SLF001
     runtime._safety.connected()  # noqa: SLF001
 
-    with pytest.raises(RuntimeError, match="state is stale"):
-        runtime.read()
+    state = runtime.read()
 
     safety = runtime._safety.snapshot()  # noqa: SLF001
-    assert safety.state == RuntimeSafetyState.FAULT
-    assert safety.fault_reason == "hardware state is stale"
-    assert actor.calls == [("hold", None, False, True)]
+    assert state.joints["single"].timestamp_ns == 1
+    assert safety.state == RuntimeSafetyState.SAFE_DISABLED
+    assert safety.fault_reason is None
+    assert actor.calls == []
 
 
 def test_gripper_normalized_motion_limits_are_converted_to_radians():

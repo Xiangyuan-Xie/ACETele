@@ -3,7 +3,8 @@ ace_robot_node:
     control_rate: 100.0
     publish_rate: 100.0
     adaptive_diagnostic_period: 2.0
-    heartbeat_timeout: 0.1
+    motion_timeout: 0.1
+    session_timeout: 0.5
     command_lifespan: 0.05
     state_lifespan: 0.5
     teleop_mode: joint
