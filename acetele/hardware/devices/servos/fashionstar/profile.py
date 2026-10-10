@@ -53,6 +53,7 @@ def _build_profiles() -> ProfileRegistry[FashionStarServoProfile]:
         "HX8-R50W-M",
         "HX8-R51H-M",
         "HX8-R51W-M",
+        "RX8-R501W-M",
         "RX18-R100H-M",
         "RX18-R100W-M",
         "RX18-R101H-M",

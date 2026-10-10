@@ -73,7 +73,7 @@ class FashionStarPacketCodec:
     response_header = b"\x05\x1c"
     max_parameters = 0xFF
     response_switch_data_id = 33
-    firmware_version_data_id = 6
+    firmware_version_data_id = 7
 
     @classmethod
     def validate_servo_id(cls, servo_id: int) -> None:
