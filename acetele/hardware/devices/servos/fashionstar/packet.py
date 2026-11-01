@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import math
 import time
 from dataclasses import dataclass, replace
@@ -24,12 +25,16 @@ from acetele.hardware.devices.servos.fashionstar.codec import (
 from acetele.hardware.devices.servos.fashionstar.profile import FashionStarServoProfile
 
 
+_LOGGER = logging.getLogger(__name__)
+
+
 @dataclass(frozen=True)
 class FashionStarMotion:
     """Multi-turn SI target and bounded vendor motion parameters."""
 
     position_rad: float
-    interval_ms: int = 10
+    # The default advanced profile covers both 20 ms ramp phases.
+    interval_ms: int = 40
     acceleration_ms: int = 20
     deceleration_ms: int = 20
     power_mw: int = 0
@@ -87,6 +92,7 @@ class FashionStarBusProtocol:
         self._enabled_ids: set[int] = set()
         self._sync_capable = False
         self._last_states: dict[int, FashionStarMonitorState] = {}
+        self._monitor_needs_resync = False
 
     @property
     def operation_timeout_ns(self) -> int:
@@ -108,6 +114,7 @@ class FashionStarBusProtocol:
         self._last_command_ns = None
         self._enabled_ids.clear()
         self._sync_capable = False
+        self._monitor_needs_resync = False
         self._transport.connect()
         try:
             # Ping, response mode, and firmware are negotiated before enable. In
@@ -293,9 +300,16 @@ class FashionStarBusProtocol:
     ) -> Mapping[int, FashionStarMonitorState]:
         """Read monitor state through the negotiated or compatibility path."""
 
+        started_ns = self._clock_ns()
+        synchronized = self.synchronized and len(self._devices) > 1
+        awaiting_id: int | None = None
         states: dict[int, FashionStarMonitorState] = {}
         try:
-            if self.synchronized and len(self._devices) > 1:
+            if self._monitor_needs_resync:
+                self._resync_monitor_input(self._deadline(deadline_ns))
+            # Request time conservatively bounds sample age when USB delivery is late.
+            sample_ns = self._clock_ns()
+            if synchronized:
                 # Responses arrive one packet per servo in unspecified order; collect
                 # by ID and reject duplicate or foreign packets.
                 self._send(
@@ -313,6 +327,7 @@ class FashionStarBusProtocol:
                     states[state.servo_id] = state
             else:
                 for servo_id in self._devices:
+                    awaiting_id = servo_id
                     packet = self._request_response(
                         FashionStarPacketCodec.encode_query_monitor(servo_id),
                         expected_command=FashionStarCommand.QUERY_MONITOR,
@@ -325,14 +340,54 @@ class FashionStarBusProtocol:
                         )
                     states[servo_id] = state
         except (FashionStarProtocolError, TimeoutError, OSError, ValueError) as exc:
-            raise RecoverableBusError("FashionStar monitor read failed") from exc
-        timestamp_ns = self._clock_ns()
+            self._monitor_needs_resync = True
+            elapsed_ms = max(0, self._clock_ns() - started_ns) / 1e6
+            budget_ms = (
+                "per-packet"
+                if deadline_ns is None
+                else f"{max(0, min(self._operation_timeout_ns, deadline_ns - started_ns)) / 1e6:.1f}"
+            )
+            # Missing IDs have no complete valid sample in this round; in unicast
+            # mode this also includes devices not queried before the failure.
+            detail = (
+                "FashionStar monitor read failed: "
+                f"mode={'sync' if synchronized else 'unicast'} "
+                f"received_ids={sorted(states)} "
+                f"missing_ids={sorted(set(self._devices) - set(states))} "
+                f"awaiting_id={awaiting_id} elapsed_ms={elapsed_ms:.1f} "
+                f"budget_ms={budget_ms} "
+                f"packet_timeout_ms={self._operation_timeout_ns / 1e6:.1f}"
+            )
+            _LOGGER.warning("%s; cause=%s", detail, exc)
+            raise RecoverableBusError(detail) from exc
         states = {
-            servo_id: replace(state, timestamp_ns=timestamp_ns)
+            servo_id: replace(state, timestamp_ns=sample_ns)
             for servo_id, state in states.items()
         }
         self._last_states = states
         return states
+
+    def _resync_monitor_input(self, deadline_ns: int) -> None:
+        """Discard late frames and require a bounded quiet interval before retrying.
+
+        The wire protocol has no transaction sequence number. A 10 ms quiet
+        interval reduces cross-cycle contamination; it cannot identify an
+        arbitrarily delayed old packet arriving after the interval.
+        """
+        self._transport.discard_input()
+        quiet_since = time.monotonic()
+        stop_at = quiet_since + 0.05
+        while time.monotonic() < stop_at:
+            if self._clock_ns() >= deadline_ns:
+                raise TimeoutError("monitor resynchronization exceeded read budget")
+            if self._transport.read_available():
+                quiet_since = time.monotonic()
+            elif time.monotonic() - quiet_since >= 0.01:
+                self._transport.discard_input()
+                self._monitor_needs_resync = False
+                return
+            time.sleep(0.002)
+        raise TimeoutError("monitor input did not become quiet before retry")
 
     def read_slow_state(
         self,

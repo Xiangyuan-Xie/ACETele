@@ -42,6 +42,8 @@ setup(
         "acetele.config": [
             "presets/ace_leader/*.toml",
             "presets/ace_follower/*.toml",
+            "presets/eaa_leader/*.toml",
+            "presets/eaa_follower/*.toml",
         ],
         "acetele.model.robots.ace_follower": [
             "description/*.urdf",
@@ -50,6 +52,14 @@ setup(
         "acetele.model.robots.ace_leader": [
             "description/*.urdf",
             "description/*.xml",
+            "description/meshes/*.STL",
+        ],
+        "acetele.model.robots.eaa_leader": [
+            "description/*.urdf",
+            "description/meshes/*.STL",
+        ],
+        "acetele.model.robots.eaa_follower": [
+            "description/*.urdf",
             "description/meshes/*.STL",
         ],
     },

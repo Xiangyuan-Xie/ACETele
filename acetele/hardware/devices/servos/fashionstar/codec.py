@@ -202,6 +202,11 @@ class FashionStarPacketCodec:
             cls._uint16(acceleration_ms, "acceleration_ms")
             cls._uint16(deceleration_ms, "deceleration_ms")
             cls._uint16(power_mw, "power_mw")
+            if interval_ms < acceleration_ms + deceleration_ms:
+                raise ValueError(
+                    "sync interval_ms must cover acceleration_ms and "
+                    "deceleration_ms"
+                )
             encoded.append(
                 struct.pack(
                     "<BiIHHH",

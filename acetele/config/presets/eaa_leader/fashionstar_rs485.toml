@@ -1,0 +1,49 @@
+[basic]
+model = "eaa_leader"
+backend = "physical"
+urdf_path = "../../../model/robots/eaa_leader/description/eaa_leader.urdf"
+
+[buses.arm]
+type = "fashionstar_rs485"
+port = "/dev/ttyUSB0"
+baudrate = 115200
+cycle_hz = 25
+direction_control = "auto"
+external_estop = true
+allow_unverified_identity = true
+
+[arms.single]
+bus = "arm"
+tool_frame = "Link_4"
+
+[[arms.single.joints]]
+name = "Joint_1"
+servo_id = 6
+servo_model = "RX18-R100W-M"
+firmware_version = 2051
+direction = 1
+home_position_rad = 0.0
+
+[[arms.single.joints]]
+name = "Joint_2"
+servo_id = 7
+servo_model = "RX8-R501W-M"
+firmware_version = 2052
+direction = 1
+home_position_rad = 0.0
+
+[[arms.single.joints]]
+name = "Joint_3"
+servo_id = 8
+servo_model = "RX8-R501W-M"
+firmware_version = 2052
+direction = 1
+home_position_rad = 0.0
+
+[[arms.single.joints]]
+name = "Joint_4"
+servo_id = 9
+servo_model = "RX8-R501W-M"
+firmware_version = 2052
+direction = 1
+home_position_rad = 0.0

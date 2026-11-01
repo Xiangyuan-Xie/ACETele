@@ -1,0 +1,1 @@
+"""EAAFollower model assets."""

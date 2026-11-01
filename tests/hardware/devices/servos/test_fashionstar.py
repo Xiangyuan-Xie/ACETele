@@ -144,6 +144,11 @@ class FashionStarTransport:
     def discard_input(self):
         self.responses.clear()
 
+    def read_available(self, *, maximum=4096):
+        value = bytes(self.responses[:maximum])
+        del self.responses[:maximum]
+        return value
+
 
 def _motion(servo_id: int, position: float, generation: int = 0) -> MotionEnvelope:
     now = time.monotonic_ns()
@@ -272,6 +277,58 @@ def test_v316_devices_use_one_sync_frame_and_sync_monitor():
     assert states[1].timestamp_ns == states[2].timestamp_ns
 
 
+@pytest.mark.parametrize(
+    "synchronized, received_ids, missing_ids, awaiting_id",
+    [
+        (True, [1, 3], [2], None),
+        (False, [1], [2, 3], 2),
+    ],
+)
+def test_monitor_timeout_identifies_incomplete_devices(
+    synchronized, received_ids, missing_ids, awaiting_id, caplog
+):
+    """A lost reply identifies incomplete samples without publishing a partial state."""
+
+    class MissingReplyTransport(FashionStarTransport):
+        drop_reply = False
+
+        def write(self, frame, *, deadline_ns):
+            super().write(frame, deadline_ns=deadline_ns)
+            if not self.drop_reply:
+                return
+            pending = self.responses
+            self.responses = bytearray()
+            while pending:
+                length = pending[3] + 5
+                reply = bytes(pending[:length])
+                del pending[:length]
+                if not (
+                    reply[2] == FashionStarCommand.QUERY_MONITOR and reply[4] == 2
+                ):
+                    self.responses.extend(reply)
+
+    transport = MissingReplyTransport(supports_sync=synchronized)
+    protocol = FashionStarBusProtocol(
+        transport, {servo_id: _profile() for servo_id in (1, 2, 3)}
+    )
+    protocol.connect()
+    # First establish a complete snapshot, then lose only device 2's response.
+    assert set(protocol.read_fast_state()) == {1, 2, 3}
+    transport.drop_reply = True
+    with pytest.raises(RecoverableBusError) as failure:
+        protocol.read_fast_state(deadline_ns=time.monotonic_ns() + 50_000_000)
+
+    assert isinstance(failure.value.__cause__, TimeoutError)
+    assert f"mode={'sync' if synchronized else 'unicast'}" in str(failure.value)
+    assert f"received_ids={received_ids}" in str(failure.value)
+    assert f"missing_ids={missing_ids}" in str(failure.value)
+    assert f"awaiting_id={awaiting_id}" in str(failure.value)
+    assert "elapsed_ms=" in caplog.text
+    assert "budget_ms=" in caplog.text
+    assert "cause=no response" in caplog.text
+    assert set(protocol.read_slow_state()) == {1, 2, 3}
+
+
 def test_emergency_stop_latches_software_disable_until_explicit_enable():
     transport = FashionStarTransport()
     protocol = FashionStarBusProtocol(transport, {1: _profile()})
@@ -283,6 +340,129 @@ def test_emergency_stop_latches_software_disable_until_explicit_enable():
 
     protocol.execute_safety("set_enabled", True)
     protocol.write_motion((_motion(1, 0.1),))
+
+
+@pytest.mark.parametrize("timeout_s, succeeds", [(0.05, False), (0.15, True)])
+def test_delayed_monitor_uses_io_budget_and_conservative_sample_time(timeout_s, succeeds):
+    """A 121 ms reply fits the EAA budget without being timestamped as brand-new."""
+    clock = [1_000_000_000]
+
+    class DelayedTransport(FashionStarTransport):
+        delay_ns = 0
+        available_ns = 0
+
+        def write(self, frame, *, deadline_ns):
+            super().write(frame, deadline_ns=deadline_ns)
+            if frame[2] == FashionStarCommand.QUERY_MONITOR:
+                self.available_ns = clock[0] + self.delay_ns
+
+        def read_exact(self, count, *, deadline_ns):
+            if self.available_ns > clock[0]:
+                if self.available_ns >= deadline_ns:
+                    clock[0] = deadline_ns
+                    raise TimeoutError("delayed monitor")
+                clock[0] = self.available_ns
+            return super().read_exact(count, deadline_ns=deadline_ns)
+
+    transport = DelayedTransport()
+    protocol = FashionStarBusProtocol(
+        transport, {1: _profile()}, operation_timeout_s=timeout_s,
+        clock_ns=lambda: clock[0],
+    )
+    protocol.connect()
+    transport.delay_ns = 121_000_000
+    start = clock[0]
+    if succeeds:
+        states = protocol.read_fast_state(deadline_ns=start + round(timeout_s * 1e9))
+        assert states[1].timestamp_ns == start
+        assert clock[0] - states[1].timestamp_ns == 121_000_000
+    else:
+        with pytest.raises(RecoverableBusError, match="monitor read failed"):
+            protocol.read_fast_state(deadline_ns=start + round(timeout_s * 1e9))
+
+
+def test_monitor_retry_discards_late_frame_before_new_query():
+    """A valid old packet arriving during recovery cannot replace a new sample."""
+
+    class LateTransport(FashionStarTransport):
+        omit_reply = False
+        delayed_frame = b""
+
+        def write(self, frame, *, deadline_ns):
+            super().write(frame, deadline_ns=deadline_ns)
+            if self.omit_reply and frame[2] == FashionStarCommand.QUERY_MONITOR:
+                self.responses.clear()
+
+        def read_available(self, *, maximum=4096):
+            if self.delayed_frame:
+                value, self.delayed_frame = self.delayed_frame, b""
+                return value
+            return super().read_available(maximum=maximum)
+
+    transport = LateTransport()
+    protocol = FashionStarBusProtocol(transport, {1: _profile()}, operation_timeout_s=0.15)
+    protocol.connect()
+    transport.omit_reply = True
+    with pytest.raises(RecoverableBusError):
+        protocol.read_fast_state()
+    transport.omit_reply = False
+    transport.delayed_frame = _response(
+        FashionStarCommand.QUERY_MONITOR,
+        struct.pack("<BHHHHBih", 1, 24000, 100, 200, 1000, 0, 900, 0),
+    )
+    transport.writes.clear()
+    states = protocol.read_fast_state(deadline_ns=time.monotonic_ns() + 150_000_000)
+    assert states[1].position_rad == 0.0
+    assert transport.delayed_frame == b""
+    assert [frame[2] for frame in transport.writes] == [FashionStarCommand.QUERY_MONITOR]
+
+
+def test_adapter_applies_custom_io_timeout_only_to_its_protocol():
+    """A scoped adapter can change EAA timing without changing default protocols."""
+    from types import SimpleNamespace
+    from acetele.hardware.devices.servos.fashionstar.adapter import FashionStarAdapter
+    from acetele.specification import Backend, DirectionControl
+
+    plan = SimpleNamespace(
+        backend=Backend.PHYSICAL,
+        spec=SimpleNamespace(port="fake", baudrate=115200, direction_control=DirectionControl.AUTO),
+        profiles={1: _profile()}, firmware_versions={1: 316},
+    )
+    factory = lambda *args: FashionStarTransport()
+    default = FashionStarAdapter().create_protocol(plan, factory)
+    tuned = FashionStarAdapter(operation_timeout_s=0.15).create_protocol(plan, factory)
+    assert default.operation_timeout_ns == 50_000_000
+    assert tuned.operation_timeout_ns == 150_000_000
+
+
+def test_continuously_noisy_input_cannot_start_a_new_monitor_query():
+    """Recovery remains bounded and sends no query while old input is arriving."""
+
+    class NoisyTransport(FashionStarTransport):
+        noisy = False
+
+        def read_available(self, *, maximum=4096):
+            if self.noisy:
+                return b"old bytes"
+            return super().read_available(maximum=maximum)
+
+    transport = NoisyTransport()
+    protocol = FashionStarBusProtocol(transport, {1: _profile()}, operation_timeout_s=0.15)
+    protocol.connect()
+    # Fail one complete transaction and then model a stream of delayed bytes.
+    original_read = transport.read_exact
+    transport.read_exact = lambda *args, **kwargs: (_ for _ in ()).throw(TimeoutError("lost reply"))
+    with pytest.raises(RecoverableBusError):
+        protocol.read_fast_state()
+    transport.read_exact = original_read
+    transport.noisy = True
+    transport.writes.clear()
+    started = time.monotonic()
+    with pytest.raises(RecoverableBusError) as failure:
+        protocol.read_fast_state(deadline_ns=time.monotonic_ns() + 150_000_000)
+    assert "did not become quiet" in str(failure.value.__cause__)
+    assert time.monotonic() - started < 0.5
+    assert not transport.writes
 
 
 def test_enable_establishes_hardware_hold_before_opening_motion_path():

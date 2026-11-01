@@ -1,0 +1,18 @@
+eaa_robot_node:
+  ros__parameters:
+    control_rate: 100.0
+    publish_rate: 100.0
+    motion_timeout: 0.1
+    session_timeout: 0.5
+    command_lifespan: 0.05
+    state_lifespan: 0.5
+    teleop_mode: joint
+    translation_scale: 2.0
+    rotation_scale: 1.0
+    follower_state_timeout: 0.5
+    sync_position_tolerance: 0.03
+    sync_stable_duration: 0.2
+    sync_profile_velocity: 2.0
+    sync_profile_acceleration: 3.0
+    end_effector_publish_threshold: 0.001
+    end_effector_keepalive: 0.1

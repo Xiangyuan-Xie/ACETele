@@ -1,0 +1,1 @@
+"""EAALeader model assets."""

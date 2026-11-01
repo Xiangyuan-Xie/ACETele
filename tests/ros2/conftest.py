@@ -7,3 +7,5 @@ from pathlib import Path
 
 project_root = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(project_root / "ros2" / "ace_robot_ros2"))
+
+sys.path.insert(0, str(project_root / "ros2" / "eaa_robot_ros2"))

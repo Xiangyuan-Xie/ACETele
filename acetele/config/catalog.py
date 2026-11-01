@@ -20,7 +20,7 @@ def packaged_robot_specs() -> tuple[RobotSpecResource, ...]:
 
     root = files("acetele.config").joinpath("presets")
     resources: list[RobotSpecResource] = []
-    for model_directory in ("ace_leader", "ace_follower"):
+    for model_directory in ("ace_leader", "ace_follower", "eaa_leader", "eaa_follower"):
         directory = root.joinpath(model_directory)
         for resource in sorted(directory.iterdir(), key=lambda entry: entry.name):
             if resource.is_file() and resource.name.endswith(".toml"):

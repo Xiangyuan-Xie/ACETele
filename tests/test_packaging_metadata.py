@@ -4,6 +4,9 @@ import subprocess
 import sys
 import zipfile
 from pathlib import Path
+from xml.etree import ElementTree
+
+from acetele import config
 
 project_root = Path(__file__).resolve().parents[1]
 
@@ -45,6 +48,11 @@ def test_legacy_setup_py_exposes_project_metadata():
 
 
 def _copy_isolated_wheel_source(destination: Path) -> None:
+    """Copies build sources and real EAA meshes into an isolated tree.
+
+    Args:
+        destination: New source directory used only for wheel validation.
+    """
     destination.mkdir()
     for filename in ("LICENSE", "README.md", "pyproject.toml", "setup.py"):
         shutil.copy2(project_root / filename, destination / filename)
@@ -73,6 +81,19 @@ def _copy_isolated_wheel_source(destination: Path) -> None:
         mesh.parent.mkdir(parents=True, exist_ok=True)
         mesh.write_bytes(b"isolated wheel test mesh")
 
+    for model_name in ("eaa_leader", "eaa_follower"):
+        mesh_root = (
+            source_package / "model/robots" / model_name / "description/meshes"
+        )
+        for source_mesh in mesh_root.rglob("*"):
+            if not source_mesh.is_file():
+                continue
+            destination_mesh = (
+                destination_package / source_mesh.relative_to(source_package)
+            )
+            destination_mesh.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source_mesh, destination_mesh)
+
     excluded_sentinels = (
         destination / "ros2" / "sentinel.py",
         destination / "third_party" / "px4_msgs" / "sentinel.py",
@@ -89,7 +110,54 @@ def _copy_isolated_wheel_source(destination: Path) -> None:
         sentinel.write_text("SHOULD_NOT_BE_PACKAGED = True\n")
 
 
-def test_isolated_wheel_contains_runtime_files_without_excluded_sources(tmp_path):
+def _assert_eaa_wheel_resources(
+    installed_root: Path, wheel_files: set[str]
+) -> None:
+    """Validates EAA presets and every referenced mesh after wheel extraction.
+
+    Args:
+        installed_root: Directory containing the extracted wheel contents.
+        wheel_files: Archive member names from the built wheel.
+    """
+    installed_root = installed_root.resolve()
+    for model_name in ("eaa_leader", "eaa_follower"):
+        preset = (
+            installed_root
+            / "acetele/config/presets"
+            / model_name
+            / "fashionstar_rs485.toml"
+        )
+        assert preset.relative_to(installed_root).as_posix() in wheel_files
+        spec = config.load_robot_spec(preset)
+        assert spec.model == model_name
+        assert spec.urdf_path is not None
+
+        model_root = installed_root / "acetele/model/robots" / model_name
+        urdf_path = Path(spec.urdf_path).resolve()
+        assert urdf_path == model_root / "description" / f"{model_name}.urdf"
+        assert urdf_path.relative_to(installed_root).as_posix() in wheel_files
+        assert urdf_path.is_file()
+        mesh_names = {
+            mesh.attrib["filename"]
+            for mesh in ElementTree.parse(urdf_path).iter("mesh")
+        }
+        assert mesh_names, "Packaged EAA models must reference display meshes"
+        for mesh_name in sorted(mesh_names):
+            mesh_path = (urdf_path.parent / mesh_name).resolve()
+            assert mesh_path.is_relative_to(model_root)
+            assert mesh_path.relative_to(installed_root).as_posix() in wheel_files
+            assert mesh_path.is_file(), f"Missing packaged mesh: {mesh_path}"
+            assert mesh_path.stat().st_size > 0
+
+
+def test_isolated_wheel_contains_runtime_files_without_excluded_sources(
+    tmp_path: Path,
+) -> None:
+    """Checks installed resources while excluding deployment sources.
+
+    Args:
+        tmp_path: Isolated directory supplied by pytest.
+    """
     source_root = tmp_path / "source"
     wheel_directory = tmp_path / "wheel"
     _copy_isolated_wheel_source(source_root)
@@ -115,8 +183,12 @@ def test_isolated_wheel_contains_runtime_files_without_excluded_sources(tmp_path
     )
 
     wheel_path = next(wheel_directory.glob("acetele-*.whl"))
+    installed_root = tmp_path / "installed"
     with zipfile.ZipFile(wheel_path) as wheel:
         files = set(wheel.namelist())
+        wheel.extractall(installed_root)
+
+    _assert_eaa_wheel_resources(installed_root, files)
 
     assert {
         "acetele/config/presets/ace_follower/feetech_sms_rs485.toml",

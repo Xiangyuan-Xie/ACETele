@@ -41,6 +41,11 @@ class FashionStarAdapter(BusAdapter):
 
     bus_types = (BusType.FASHIONSTAR_RS485,)
 
+    def __init__(self, *, operation_timeout_s: float = 0.15) -> None:
+        if not math.isfinite(operation_timeout_s) or operation_timeout_s <= 0:
+            raise ValueError("FashionStar operation timeout must be finite and positive")
+        self._operation_timeout_s = operation_timeout_s
+
     def preflight(
         self,
         bus: BusSpec,
@@ -103,6 +108,7 @@ class FashionStarAdapter(BusAdapter):
             transport,
             plan.profiles,
             firmware_versions=plan.firmware_versions,
+            operation_timeout_s=self._operation_timeout_s,
             clock_ns=clock_ns,
         )
 
